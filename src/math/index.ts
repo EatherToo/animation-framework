@@ -1,3 +1,7 @@
+/**
+ * 01 数学：Vec2 / Vec3 / Mat3 / 角度。
+ * 写出结果的函数把 `out` 放第一参数。
+ */
 export type { Vec2 } from './vec2'
 export {
   createVec2,
