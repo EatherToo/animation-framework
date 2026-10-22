@@ -3,3 +3,4 @@
  * 运行时模块按自底向上的顺序接入。
  */
 export * from './math'
+export * from './space'
