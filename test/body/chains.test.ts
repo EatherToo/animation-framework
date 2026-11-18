@@ -69,6 +69,6 @@ describe('chains', () => {
     expectClose(ARM_ROM_MIN, -2.443)
     expectClose(ARM_ROM_MAX, 0.175)
     expect(LEG_BEND_SIGN).toBe(1)
-    expect(ARM_BEND_SIGN).toBe(1)
+    expect(ARM_BEND_SIGN).toBe(-1)
   })
 })
