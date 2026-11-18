@@ -5,3 +5,4 @@
 export * from './math'
 export * from './space'
 export * from './skeleton'
+export * from './body'
