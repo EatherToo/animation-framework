@@ -27,8 +27,8 @@ export type TwoBoneChainSpec = {
 /** 腿链默认弯曲符号。 */
 export const LEG_BEND_SIGN: 1 = 1
 
-/** 臂链默认弯曲符号。 */
-export const ARM_BEND_SIGN: 1 = 1
+/** 臂链默认弯曲符号。手在肩下时，肘在身后，叉积为负。 */
+export const ARM_BEND_SIGN: -1 = -1
 
 /** 膝 pose 旋转下限（弧度，≈ −150°）。 */
 export const LEG_ROM_MIN = -2.618
