@@ -107,6 +107,7 @@ const upperArmR = findBone(solver.pose.skeleton, 'upperArmR')
 const footBoneL = findBone(solver.pose.skeleton, 'footL')
 const footBoneR = findBone(solver.pose.skeleton, 'footR')
 const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
+const lateral = new Float32Array(solver.compiled.skeleton.boneCount)
 const photo = new Image()
 photo.src = './spider-man.png'
 
@@ -178,7 +179,7 @@ function setIntent(speed: number): void {
 }
 
 function frame(now: number): void {
-  const elapsed = Math.min(0.05, (now - last) / 1000)
+  const elapsed = Math.max(0, Math.min(0.05, (now - last) / 1000))
   last = now
   if (playing) {
     accumulator += elapsed
@@ -231,7 +232,7 @@ function draw(): void {
 
   const alpha = Math.min(1, accumulator / DT)
   const sampled = sampleRender(solver.compiled, before, after, alpha)
-  evaluateFk(fk, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount)
+  evaluateFk(fk, lateral, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount)
   const pelvisX = fk[6]!
   const viewHeight = 2.35
   const viewWidth = viewHeight * (width / height)

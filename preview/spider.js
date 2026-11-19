@@ -26,6 +26,7 @@
       parent: [],
       translationX: [],
       translationY: [],
+      translationZ: [],
       rotation: [],
       length: []
     };
@@ -43,14 +44,15 @@
     } else if (!Number.isInteger(spec.parent) || spec.parent < 0 || spec.parent >= index) {
       throw new Error("parent");
     }
-    const { translationX: tx, translationY: ty, rotation, length: length2 } = spec;
-    if (!Number.isFinite(tx) || !Number.isFinite(ty) || !Number.isFinite(rotation) || !Number.isFinite(length2) || length2 < 0) {
+    const { translationX: tx, translationY: ty, translationZ: tz, rotation, length: length2 } = spec;
+    if (!Number.isFinite(tx) || !Number.isFinite(ty) || !Number.isFinite(tz) || !Number.isFinite(rotation) || !Number.isFinite(length2) || length2 < 0) {
       throw new Error("bind");
     }
     builder.names.push(spec.name);
     builder.parent.push(spec.parent);
     builder.translationX.push(tx);
     builder.translationY.push(ty);
+    builder.translationZ.push(tz);
     builder.rotation.push(normalizeAngle(rotation));
     builder.length.push(length2 === 0 ? 0 : length2);
     builder.count = index + 1;
@@ -63,12 +65,14 @@
     const name = builder.names.slice();
     const parent = new Int16Array(boneCount);
     const bindTranslation2 = new Float32Array(boneCount * 2);
+    const bindLateral = new Float32Array(boneCount);
     const bindRotation2 = new Float32Array(boneCount);
     const bindLength2 = new Float32Array(boneCount);
     for (let i = 0; i < boneCount; i += 1) {
       parent[i] = builder.parent[i];
       bindTranslation2[i * 2] = builder.translationX[i];
       bindTranslation2[i * 2 + 1] = builder.translationY[i];
+      bindLateral[i] = builder.translationZ[i];
       bindRotation2[i] = builder.rotation[i];
       bindLength2[i] = builder.length[i];
     }
@@ -78,6 +82,7 @@
       name,
       parent,
       bindTranslation: bindTranslation2,
+      bindLateral,
       bindRotation: bindRotation2,
       bindLength: bindLength2
     };
@@ -174,8 +179,8 @@
       shinRadius: 0.032 * H,
       footRadius: 0.028 * H,
       stanceWidth,
-      hipOffsetX: stanceWidth / 2,
-      shoulderOffsetX: 0.08 * H,
+      hipOffsetZ: stanceWidth / 2,
+      shoulderOffsetZ: 0.08 * H,
       hipDropY: hipHeight - thighLength - shinLength - ankleHeight,
       shoulderDropY: 0.02 * H,
       reachMargin: REACH_MARGIN
@@ -194,6 +199,7 @@
       parent: PARENT_NONE,
       translationX: 0,
       translationY: p.hipHeight,
+      translationZ: 0,
       rotation: 0,
       length: p.pelvisLength
     });
@@ -202,6 +208,7 @@
       parent: pelvis,
       translationX: 0,
       translationY: 0,
+      translationZ: 0,
       rotation: halfPi,
       length: p.spineLength
     });
@@ -210,6 +217,7 @@
       parent: spine,
       translationX: p.spineLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.chestLength
     });
@@ -218,6 +226,7 @@
       parent: chest,
       translationX: p.chestLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.neckLength
     });
@@ -226,15 +235,17 @@
       parent: neck,
       translationX: p.neckLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.headLength
     });
     const upperArmL2 = addBone(builder, {
       name: "upperArmL",
       parent: chest,
-      translationX: -p.shoulderOffsetX,
-      translationY: -p.shoulderDropY,
-      rotation: -halfPi,
+      translationX: -p.shoulderDropY,
+      translationY: 0,
+      translationZ: p.shoulderOffsetZ,
+      rotation: Math.PI,
       length: p.upperArmLength
     });
     const lowerArmL = addBone(builder, {
@@ -242,6 +253,7 @@
       parent: upperArmL2,
       translationX: p.upperArmLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.lowerArmLength
     });
@@ -250,15 +262,17 @@
       parent: lowerArmL,
       translationX: p.lowerArmLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.handLength
     });
     const upperArmR2 = addBone(builder, {
       name: "upperArmR",
       parent: chest,
-      translationX: p.shoulderOffsetX,
-      translationY: -p.shoulderDropY,
-      rotation: -halfPi,
+      translationX: -p.shoulderDropY,
+      translationY: 0,
+      translationZ: -p.shoulderOffsetZ,
+      rotation: Math.PI,
       length: p.upperArmLength
     });
     const lowerArmR = addBone(builder, {
@@ -266,6 +280,7 @@
       parent: upperArmR2,
       translationX: p.upperArmLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.lowerArmLength
     });
@@ -274,14 +289,16 @@
       parent: lowerArmR,
       translationX: p.lowerArmLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.handLength
     });
     const thighL = addBone(builder, {
       name: "thighL",
       parent: pelvis,
-      translationX: -p.hipOffsetX,
+      translationX: 0,
       translationY: -p.hipDropY,
+      translationZ: p.hipOffsetZ,
       rotation: -halfPi,
       length: p.thighLength
     });
@@ -290,6 +307,7 @@
       parent: thighL,
       translationX: p.thighLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.shinLength
     });
@@ -298,14 +316,16 @@
       parent: shinL,
       translationX: p.shinLength,
       translationY: 0,
+      translationZ: 0,
       rotation: halfPi,
       length: p.footLength
     });
     const thighR = addBone(builder, {
       name: "thighR",
       parent: pelvis,
-      translationX: p.hipOffsetX,
+      translationX: 0,
       translationY: -p.hipDropY,
+      translationZ: -p.hipOffsetZ,
       rotation: -halfPi,
       length: p.thighLength
     });
@@ -314,6 +334,7 @@
       parent: thighR,
       translationX: p.thighLength,
       translationY: 0,
+      translationZ: 0,
       rotation: 0,
       length: p.shinLength
     });
@@ -322,6 +343,7 @@
       parent: shinR,
       translationX: p.shinLength,
       translationY: 0,
+      translationZ: 0,
       rotation: halfPi,
       length: p.footLength
     });
@@ -1224,11 +1246,12 @@
   }
 
   // src/fk/evaluate.ts
-  function evaluateFk(out, compiled, pose, count) {
+  function evaluateFk(out, lateral2, compiled, pose, count) {
     if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
     const boneCount = compiled.skeleton.boneCount;
     if (!Number.isInteger(count) || count < 1 || count > boneCount) throw new Error("count");
     if (out.length !== count * 9) throw new Error("out");
+    if (lateral2.length !== count) throw new Error("lateral");
     const local = createMat3();
     const parent = createMat3();
     const combined = createMat3();
@@ -1238,6 +1261,8 @@
       const source = parentIndex < 0 ? local : combine(combined, parent, out, parentIndex, local);
       const dst = bone2 * 9;
       for (let k = 0; k < 9; k += 1) out[dst + k] = source[k];
+      const own = compiled.skeleton.bindLateral[bone2];
+      lateral2[bone2] = parentIndex < 0 ? own : lateral2[parentIndex] + own;
     }
   }
   function combine(combined, parent, rig, parentIndex, local) {
@@ -1430,7 +1455,7 @@
     );
     setPoseRotation(pose, chain3.root, solved.root);
     setPoseRotation(pose, chain3.mid, solved.mid);
-    evaluateFk(fk2, compiled, pose, skeleton.boneCount);
+    evaluateFk(fk2, new Float32Array(skeleton.boneCount), compiled, pose, skeleton.boneCount);
     const end = chain3.end * 9;
     const error = Math.hypot(fk2[end + 6] - targetX, fk2[end + 7] - targetY);
     return { reached: error <= HIT };
@@ -1449,7 +1474,7 @@
       return identity2;
     }
     const view = fk2.subarray(0, (parent + 1) * 9);
-    evaluateFk(view, compiled, pose, parent + 1);
+    evaluateFk(view, new Float32Array(parent + 1), compiled, pose, parent + 1);
     return view.subarray(parent * 9, parent * 9 + 9);
   }
   function choose(chain3, distance2, targetAngle, length1, length2, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
@@ -1649,7 +1674,7 @@
   }
   function chainRoot(compiled, pose, chain3) {
     const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
-    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
+    evaluateFk(fk2, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount);
     const index = chain3.root * 9;
     return { x: fk2[index + 6], y: fk2[index + 7] };
   }
@@ -1783,53 +1808,58 @@
   }
 
   // src/skin/skin.ts
-  function skinMesh(out, compiled, fk2, meshIndex) {
+  function skinMesh(out, compiled, fk2, lateral2, meshIndex) {
     const mesh = compiled.meshes.meshes[meshIndex];
     if (mesh === void 0) throw new Error("mesh");
     if (fk2.length !== compiled.skeleton.boneCount * 9) throw new Error("fk");
+    if (lateral2.length !== compiled.skeleton.boneCount) throw new Error("lateral");
     if (out.length !== mesh.positions.length) throw new Error("out");
     const corrected = new Float32Array(mesh.positions.length);
     applyCorrection(corrected, mesh.positions, compiled.correction);
     const part = compiled.parts.parts[meshIndex];
-    if (part.kind === "skinned") skinSkinned(out, compiled, fk2, corrected, part);
-    else skinRigid(out, fk2, corrected, part);
+    if (part.kind === "skinned") skinSkinned(out, compiled, fk2, lateral2, corrected, part);
+    else skinRigid(out, fk2, lateral2, corrected, part);
   }
-  function skinSkinned(out, compiled, fk2, positions, part) {
+  function skinSkinned(out, compiled, fk2, lateral2, positions, part) {
     const found = compiled.weights.weights.find((item) => item.partId === part.id);
     if (found === void 0) throw new Error("weight");
-    const vertexCount = positions.length / 2;
+    const inverse2 = compiled.inverseBind;
+    const lateralBind = compiled.lateralBind;
+    const vertexCount = positions.length / 3;
     for (let v = 0; v < vertexCount; v += 1) {
-      const x = positions[v * 2];
-      const y = positions[v * 2 + 1];
+      const x = positions[v * 3];
+      const y = positions[v * 3 + 1];
+      const z = positions[v * 3 + 2];
       let sx = 0;
       let sy = 0;
+      let sz = 0;
       for (let i = 0; i < part.bones.length; i += 1) {
         const weight = found.weights[v * found.influences + i];
         if (weight === 0) continue;
         const bone2 = part.bones[i];
-        const local = apply(compiled.inverseBind, bone2, x, y);
-        const current = apply(fk2, bone2, local.x, local.y);
-        sx += weight * current.x;
-        sy += weight * current.y;
+        const base = bone2 * 9;
+        const lx = inverse2[base] * x + inverse2[base + 3] * y + inverse2[base + 6];
+        const ly = inverse2[base + 1] * x + inverse2[base + 4] * y + inverse2[base + 7];
+        sx += weight * (fk2[base] * lx + fk2[base + 3] * ly + fk2[base + 6]);
+        sy += weight * (fk2[base + 1] * lx + fk2[base + 4] * ly + fk2[base + 7]);
+        sz += weight * (lateral2[bone2] + (z - lateralBind[bone2]));
       }
-      out[v * 2] = sx;
-      out[v * 2 + 1] = sy;
+      out[v * 3] = sx;
+      out[v * 3 + 1] = sy;
+      out[v * 3 + 2] = sz;
     }
   }
-  function skinRigid(out, fk2, positions, part) {
-    const vertexCount = positions.length / 2;
+  function skinRigid(out, fk2, lateral2, positions, part) {
+    const base = part.bone * 9;
+    const offset = lateral2[part.bone];
+    const vertexCount = positions.length / 3;
     for (let v = 0; v < vertexCount; v += 1) {
-      const current = apply(fk2, part.bone, positions[v * 2], positions[v * 2 + 1]);
-      out[v * 2] = current.x;
-      out[v * 2 + 1] = current.y;
+      const x = positions[v * 3];
+      const y = positions[v * 3 + 1];
+      out[v * 3] = fk2[base] * x + fk2[base + 3] * y + fk2[base + 6];
+      out[v * 3 + 1] = fk2[base + 1] * x + fk2[base + 4] * y + fk2[base + 7];
+      out[v * 3 + 2] = offset + positions[v * 3 + 2];
     }
-  }
-  function apply(matrices, bone2, x, y) {
-    const base = bone2 * 9;
-    return {
-      x: matrices[base] * x + matrices[base + 3] * y + matrices[base + 6],
-      y: matrices[base + 1] * x + matrices[base + 4] * y + matrices[base + 7]
-    };
   }
 
   // src/slot/slot.ts
@@ -2080,10 +2110,11 @@
   }
   function present(compiled, pose, facing, snapped) {
     const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
-    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
+    const lateral2 = new Float32Array(compiled.skeleton.boneCount);
+    evaluateFk(fk2, lateral2, compiled, pose, compiled.skeleton.boneCount);
     const parts = compiled.meshes.meshes.map((mesh, index) => {
       const positions = new Float32Array(mesh.positions.length);
-      skinMesh(positions, compiled, fk2, index);
+      skinMesh(positions, compiled, fk2, lateral2, index);
       return { partId: mesh.partId, positions, indices: mesh.indices };
     });
     const order = drawOrder(new Array(compiled.slots.slots.length), compiled.slots, facing);
@@ -2105,41 +2136,147 @@
   }
 
   // src/mesh/strip.ts
+  var TUBE_SIDES = 8;
+  var S = Math.SQRT1_2;
+  var RING_SIDE = [1, S, 0, -S, -1, -S, 0, S];
+  var RING_LATERAL = [0, S, 1, S, 0, -S, -1, -S];
   function meshFromStrip(partId, space, segments) {
     if (segments.length === 0) throw new Error("segments");
     const stations = segments.length + 1;
-    const positions = new Float32Array(stations * 4);
-    writeStation(positions, 0, segments[0].x0, segments[0].y0, segments[0]);
-    for (let i = 0; i < segments.length; i += 1) {
-      const seg = segments[i];
-      writeStation(positions, i + 1, seg.x1, seg.y1, seg);
-    }
-    const indices = new Uint16Array(segments.length * 6);
-    for (let i = 0; i < segments.length; i += 1) {
-      const a = i * 2;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
-      const t = i * 6;
-      indices[t] = a;
-      indices[t + 1] = d;
-      indices[t + 2] = c;
-      indices[t + 3] = a;
-      indices[t + 4] = b;
-      indices[t + 5] = d;
+    const positions = new Float32Array(stations * TUBE_SIDES * 3);
+    const indices = new Uint16Array(segments.length * TUBE_SIDES * 6);
+    writeTube(positions, indices, segments);
+    return { partId, space, positions, indices };
+  }
+  function meshFromCappedTube(partId, space, segments) {
+    if (segments.length === 0) throw new Error("segments");
+    const stations = segments.length + 1;
+    const ring = stations * TUBE_SIDES;
+    const positions = new Float32Array((ring + 2) * 3);
+    const sides = segments.length * TUBE_SIDES * 6;
+    const indices = new Uint16Array(sides + TUBE_SIDES * 6);
+    writeTube(positions, indices, segments);
+    const first = segments[0];
+    const last2 = segments[segments.length - 1];
+    const start = ring;
+    const end = ring + 1;
+    positions[start * 3] = first.x0;
+    positions[start * 3 + 1] = first.y0;
+    positions[start * 3 + 2] = first.z0;
+    positions[end * 3] = last2.x1;
+    positions[end * 3 + 1] = last2.y1;
+    positions[end * 3 + 2] = last2.z1;
+    const tail = (stations - 1) * TUBE_SIDES;
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      const next = (j + 1) % TUBE_SIDES;
+      const t = sides + j * 6;
+      indices[t] = start;
+      indices[t + 1] = next;
+      indices[t + 2] = j;
+      indices[t + 3] = end;
+      indices[t + 4] = tail + j;
+      indices[t + 5] = tail + next;
     }
     return { partId, space, positions, indices };
   }
-  function writeStation(positions, station, x, y, seg) {
-    const plus = station * 2;
-    positions[plus * 2] = x + seg.px * seg.radius;
-    positions[plus * 2 + 1] = y + seg.py * seg.radius;
-    positions[(plus + 1) * 2] = x - seg.px * seg.radius;
-    positions[(plus + 1) * 2 + 1] = y - seg.py * seg.radius;
+  function writeTube(positions, indices, segments) {
+    const first = segments[0];
+    writeStation(positions, 0, first.x0, first.y0, first.z0, first);
+    for (let i = 0; i < segments.length; i += 1) {
+      const seg = segments[i];
+      writeStation(positions, i + 1, seg.x1, seg.y1, seg.z1, seg);
+    }
+    for (let i = 0; i < segments.length; i += 1) {
+      const near = i * TUBE_SIDES;
+      const far = near + TUBE_SIDES;
+      for (let j = 0; j < TUBE_SIDES; j += 1) {
+        const next = (j + 1) % TUBE_SIDES;
+        const t = (i * TUBE_SIDES + j) * 6;
+        indices[t] = near + j;
+        indices[t + 1] = near + next;
+        indices[t + 2] = far + j;
+        indices[t + 3] = near + next;
+        indices[t + 4] = far + next;
+        indices[t + 5] = far + j;
+      }
+    }
   }
-  function meshFromRectangle(partId, x0, x1, yTop, yBottom) {
-    const positions = new Float32Array([x0, yTop, x0, yBottom, x1, yTop, x1, yBottom]);
-    const indices = new Uint16Array([0, 3, 2, 0, 1, 3]);
+  function writeStation(positions, station, x, y, z, seg) {
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      const side = seg.radius * RING_SIDE[j];
+      const base = (station * TUBE_SIDES + j) * 3;
+      positions[base] = x + seg.px * side;
+      positions[base + 1] = y + seg.py * side;
+      positions[base + 2] = z + seg.radius * RING_LATERAL[j];
+    }
+  }
+  function meshFromRectangle(partId, x0, x1, yTop, yBottom, halfWidth) {
+    const near = -halfWidth;
+    const far = halfWidth;
+    const positions = new Float32Array([
+      x0,
+      yTop,
+      near,
+      x0,
+      yBottom,
+      near,
+      x1,
+      yTop,
+      near,
+      x1,
+      yBottom,
+      near,
+      x0,
+      yTop,
+      far,
+      x0,
+      yBottom,
+      far,
+      x1,
+      yTop,
+      far,
+      x1,
+      yBottom,
+      far
+    ]);
+    const indices = new Uint16Array([
+      0,
+      2,
+      3,
+      0,
+      3,
+      1,
+      4,
+      5,
+      7,
+      4,
+      7,
+      6,
+      0,
+      1,
+      5,
+      0,
+      5,
+      4,
+      2,
+      6,
+      7,
+      2,
+      7,
+      3,
+      0,
+      4,
+      6,
+      0,
+      6,
+      2,
+      1,
+      3,
+      7,
+      1,
+      7,
+      5
+    ]);
     return { partId, space: "part", positions, indices };
   }
 
@@ -2149,18 +2286,19 @@
   function createHumanoidMeshes(humanoid, parts) {
     if (parts.skeleton !== humanoid.skeleton) throw new Error("skeleton");
     const rig = writeBindRig(humanoid.skeleton);
+    const lateral2 = writeBindLateral(humanoid.skeleton);
     const meshes = [];
     for (let i = 0; i < parts.parts.length; i += 1) {
       const part = parts.parts[i];
       if (part.kind === "skinned") {
-        meshes.push(skinMesh2(part, humanoid.skeleton, humanoid.proportions, rig));
+        meshes.push(tubeMesh(part, humanoid.skeleton, humanoid.proportions, rig, lateral2));
       } else {
         meshes.push(rigidMesh(part.id, part.bone, humanoid.skeleton, humanoid.proportions));
       }
     }
     return { meshes };
   }
-  function skinMesh2(part, skeleton, proportions, rig) {
+  function tubeMesh(part, skeleton, proportions, rig, lateral2) {
     const segments = [];
     for (let i = 0; i < part.bones.length; i += 1) {
       const bone2 = part.bones[i];
@@ -2183,27 +2321,35 @@
         const dy = ny - y1;
         if (dx * dx + dy * dy > JOIN_DISTANCE_SQ) continue;
       }
-      segments.push(segment(ox, oy, x1, y1, radius));
+      const z = lateral2[bone2];
+      segments.push(segment(ox, oy, z, x1, y1, z, radius));
     }
     return meshFromStrip(part.id, "character", segments);
   }
-  function segment(x0, y0, x1, y1, radius) {
+  function segment(x0, y0, z0, x1, y1, z1, radius) {
     const dx = x1 - x0;
     const dy = y1 - y0;
     const len2 = Math.hypot(dx, dy);
-    return { x0, y0, x1, y1, px: -dy / len2, py: dx / len2, radius };
+    return { x0, y0, z0, x1, y1, z1, px: -dy / len2, py: dx / len2, radius };
   }
   function rigidMesh(partId, bone2, skeleton, proportions) {
     const length2 = bindLength(skeleton, bone2);
     const name = boneName(skeleton, bone2);
     if (name === "head") {
-      return meshFromRectangle(partId, 0, length2, proportions.headRadius, -proportions.headRadius);
+      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.headRadius)]);
     }
     if (name === "handL" || name === "handR") {
-      return meshFromRectangle(partId, 0, length2, proportions.handRadius, -proportions.handRadius);
+      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.handRadius)]);
     }
     if (name === "footL" || name === "footR") {
-      return meshFromRectangle(partId, 0, length2, proportions.footRadius, -proportions.ankleHeight);
+      return meshFromRectangle(
+        partId,
+        0,
+        length2,
+        proportions.footRadius,
+        -proportions.ankleHeight,
+        proportions.footRadius
+      );
     }
     throw new Error("part");
   }
@@ -2245,6 +2391,15 @@
       for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k];
     }
     return rig;
+  }
+  function writeBindLateral(skeleton) {
+    const lateral2 = new Float32Array(skeleton.boneCount);
+    for (let bone2 = 0; bone2 < skeleton.boneCount; bone2 += 1) {
+      const parentIndex = skeleton.parent[bone2];
+      const own = skeleton.bindLateral[bone2];
+      lateral2[bone2] = parentIndex < 0 ? own : lateral2[parentIndex] + own;
+    }
+    return lateral2;
   }
   function combine2(combined, parent, rig, parentIndex, local) {
     const src = parentIndex * 9;
@@ -2457,9 +2612,9 @@
   function validateMesh(mesh) {
     const positions = mesh.positions;
     const indices = mesh.indices;
-    if (positions.length < 6 || positions.length % 2 !== 0) throw new Error("mesh");
+    if (positions.length < 9 || positions.length % 3 !== 0) throw new Error("mesh");
     if (indices.length < 3 || indices.length % 3 !== 0) throw new Error("mesh");
-    const vertexCount = positions.length / 2;
+    const vertexCount = positions.length / 3;
     for (let i = 0; i < indices.length; i += 1) {
       const index = indices[i];
       if (!Number.isInteger(index) || index < 0 || index >= vertexCount) {
@@ -2468,9 +2623,7 @@
     }
     const triangleCount = indices.length / 3;
     for (let t = 0; t < triangleCount; t += 1) {
-      const signed = signedArea(positions, indices, t);
-      if (Math.abs(signed) <= AREA_EPSILON) throw new Error("degenerate");
-      if (signed < 0) throw new Error("winding");
+      if (crossLength(positions, indices, t) <= AREA_EPSILON) throw new Error("degenerate");
     }
     const edges = /* @__PURE__ */ new Map();
     for (let t = 0; t < triangleCount; t += 1) {
@@ -2481,11 +2634,6 @@
       addEdge(edges, b, c);
       addEdge(edges, c, a);
     }
-    let boundary = 0;
-    for (const edge of edges.values()) {
-      if (edge.count === 1) boundary += 1;
-    }
-    if (boundary === 0) throw new Error("boundary");
     const neighbors = Array.from({ length: triangleCount }, () => []);
     const used = /* @__PURE__ */ new Map();
     for (let t = 0; t < triangleCount; t += 1) {
@@ -2513,17 +2661,17 @@
     }
     if (visited !== triangleCount) throw new Error("connectivity");
   }
-  function signedArea(positions, indices, triangle) {
-    const i0 = indices[triangle * 3];
-    const i1 = indices[triangle * 3 + 1];
-    const i2 = indices[triangle * 3 + 2];
-    const ax = positions[i0 * 2];
-    const ay = positions[i0 * 2 + 1];
-    const bx = positions[i1 * 2];
-    const by = positions[i1 * 2 + 1];
-    const cx = positions[i2 * 2];
-    const cy = positions[i2 * 2 + 1];
-    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+  function crossLength(positions, indices, triangle) {
+    const i0 = indices[triangle * 3] * 3;
+    const i1 = indices[triangle * 3 + 1] * 3;
+    const i2 = indices[triangle * 3 + 2] * 3;
+    const ux = positions[i1] - positions[i0];
+    const uy = positions[i1 + 1] - positions[i0 + 1];
+    const uz = positions[i1 + 2] - positions[i0 + 2];
+    const vx = positions[i2] - positions[i0];
+    const vy = positions[i2 + 1] - positions[i0 + 1];
+    const vz = positions[i2 + 2] - positions[i0 + 2];
+    return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
   }
   function addEdge(edges, from, to) {
     const lo = from < to ? from : to;
@@ -2586,11 +2734,11 @@
       });
     }
     const influences = part.bones.length;
-    const vertexCount = positions.length / 2;
+    const vertexCount = positions.length / 3;
     const weights = new Float32Array(vertexCount * influences);
     for (let v = 0; v < vertexCount; v += 1) {
-      const x = positions[v * 2];
-      const y = positions[v * 2 + 1];
+      const x = positions[v * 3];
+      const y = positions[v * 3 + 1];
       let best = 0;
       let bestDist = Number.POSITIVE_INFINITY;
       let bestT = 0;
@@ -2700,7 +2848,8 @@
       weights,
       correction,
       bindRig,
-      inverseBind
+      inverseBind,
+      lateralBind: writeLateralBind(humanoid.skeleton)
     };
   }
   function assertSlots(parts, slots) {
@@ -2726,7 +2875,7 @@
         continue;
       }
       const mesh = meshes.meshes[i];
-      const vertexCount = mesh.positions.length / 2;
+      const vertexCount = mesh.positions.length / 3;
       if (found === void 0 || found.influences !== part.bones.length || found.weights.length !== vertexCount * part.bones.length) {
         throw new Error("weight");
       }
@@ -2765,6 +2914,15 @@
       for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k];
     }
     return rig;
+  }
+  function writeLateralBind(skeleton) {
+    const lateral2 = new Float32Array(skeleton.boneCount);
+    for (let bone2 = 0; bone2 < skeleton.boneCount; bone2 += 1) {
+      const parentIndex = skeleton.parent[bone2];
+      const own = skeleton.bindLateral[bone2];
+      lateral2[bone2] = parentIndex < 0 ? own : lateral2[parentIndex] + own;
+    }
+    return lateral2;
   }
   function combine4(combined, parent, rig, parentIndex, local) {
     const src = parentIndex * 9;
@@ -2988,7 +3146,7 @@
   // src/solve/solve.ts
   function footWorld(compiled, pose, bone2) {
     const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
-    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
+    evaluateFk(fk2, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount);
     return {
       x: fk2[bone2 * 9 + 6],
       y: fk2[bone2 * 9 + 7] - compiled.foot.ankleHeight
@@ -3170,13 +3328,13 @@
     const phase = Math.PI * 2 * time / step.duration;
     copyPose(solver2.scratch, solver2.pose);
     placePelvis(solver2, solver2.scratch, (swing.ankleX + stance.ankleX) / 2, phase);
-    evaluateFk(new Float32Array(9), solver2.compiled, solver2.scratch, 1);
+    evaluateFk(new Float32Array(9), new Float32Array(1), solver2.compiled, solver2.scratch, 1);
     if (!reached(solver2, solver2.scratch, step.foot, swing.ankleX, swing.ankleY)) return false;
     if (!reached(solver2, solver2.scratch, stanceFoot, stance.ankleX, stance.ankleY)) return false;
     setPoseRotation(solver2.scratch, chain2(solver2, step.foot).end, swing.pitch);
     setPoseRotation(solver2.scratch, chain2(solver2, stanceFoot).end, stance.pitch);
     const full = new Float32Array(solver2.compiled.skeleton.boneCount * 9);
-    evaluateFk(full, solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
+    evaluateFk(full, new Float32Array(solver2.compiled.skeleton.boneCount), solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
     writeUpper(
       solver2.scratch,
       solver2.params.current.armSwing,
@@ -3195,14 +3353,14 @@
     const stance = plantedAnkle(solver2, stancePlant.x, stancePlant.y);
     copyPose(solver2.scratch, solver2.pose);
     placePelvis(solver2, solver2.scratch, (swing.ankleX + stance.ankleX) / 2, 0);
-    evaluateFk(new Float32Array(9), solver2.compiled, solver2.scratch, 1);
+    evaluateFk(new Float32Array(9), new Float32Array(1), solver2.compiled, solver2.scratch, 1);
     const swingOk = reached(solver2, solver2.scratch, solver2.recovery.foot, swing.ankleX, swing.ankleY);
     const stanceOk = reached(solver2, solver2.scratch, stanceFoot, stance.ankleX, stance.ankleY);
     if (!swingOk || !stanceOk) return;
     setPoseRotation(solver2.scratch, chain2(solver2, solver2.recovery.foot).end, swing.pitch);
     setPoseRotation(solver2.scratch, chain2(solver2, stanceFoot).end, 0);
     const full = new Float32Array(solver2.compiled.skeleton.boneCount * 9);
-    evaluateFk(full, solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
+    evaluateFk(full, new Float32Array(solver2.compiled.skeleton.boneCount), solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
     writeUpper(solver2.scratch, solver2.params.current.armSwing, solver2.params.current.spineBend, solver2.params.current.breath, 0);
     copyPose(solver2.pose, solver2.scratch);
     solver2.recoveryTime = time;
@@ -3349,6 +3507,7 @@
   var footBoneL = findBone(solver.pose.skeleton, "footL");
   var footBoneR = findBone(solver.pose.skeleton, "footR");
   var fk = new Float32Array(solver.compiled.skeleton.boneCount * 9);
+  var lateral = new Float32Array(solver.compiled.skeleton.boneCount);
   var photo = new Image();
   photo.src = "./spider-man.png";
   var ready = false;
@@ -3412,7 +3571,7 @@
     }
   }
   function frame(now) {
-    const elapsed = Math.min(0.05, (now - last) / 1e3);
+    const elapsed = Math.max(0, Math.min(0.05, (now - last) / 1e3));
     last = now;
     if (playing) {
       accumulator += elapsed;
@@ -3461,7 +3620,7 @@
     if (!ready) return;
     const alpha = Math.min(1, accumulator / DT);
     const sampled = sampleRender(solver.compiled, before, after, alpha);
-    evaluateFk(fk, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount);
+    evaluateFk(fk, lateral, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount);
     const pelvisX = fk[6];
     const viewHeight = 2.35;
     const viewWidth = viewHeight * (width / height);

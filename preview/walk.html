@@ -79,13 +79,24 @@
         margin-left: 8px;
         font-size: 13px;
       }
+      label.view {
+        display: grid;
+        grid-template-columns: 3em minmax(0, 1fr) 3em;
+        align-items: center;
+        gap: 8px;
+        flex: 1 1 240px;
+        min-width: 0;
+        max-width: 460px;
+        font-size: 13px;
+      }
+      label.view input { width: 100%; min-width: 0; }
       output { font-variant-numeric: tabular-nums; color: var(--muted); }
     </style>
   </head>
   <body>
     <main>
       <h1>能计划并走出一步</h1>
-      <p class="lead">身高 1.70 米。每个画面按 1/60 秒调用一次姿态求解。实心点是已经钉住的世界落点，空心点是这一步要落地的位置。镜头跟着骨盆走。</p>
+      <p class="lead">身高 1.70 米。每个画面按 1/60 秒调用一次姿态求解。实心点是已经钉住的世界落点，空心点是这一步要落地的位置。镜头跟着骨盆走。视角绕着身体转一圈共 360 档，只换画面，不重解姿态。</p>
       <figure>
         <canvas id="stage" width="1200" height="680"></canvas>
       </figure>
@@ -99,6 +110,16 @@
         <label class="crouch">蹲伏
           <input id="crouch" type="range" min="0" max="1" step="0.01" value="0" />
           <output id="crouch-out">0.00</output>
+        </label>
+      </div>
+      <div class="actions">
+        <button type="button" data-view="0" aria-pressed="true">右侧 0°</button>
+        <button type="button" data-view="90" aria-pressed="false">正面 90°</button>
+        <button type="button" data-view="180" aria-pressed="false">左侧 180°</button>
+        <button type="button" data-view="270" aria-pressed="false">背面 270°</button>
+        <label class="view">视角
+          <input id="view" type="range" min="0" max="359" step="1" value="0" />
+          <output id="view-out">0°</output>
         </label>
       </div>
     </main>
