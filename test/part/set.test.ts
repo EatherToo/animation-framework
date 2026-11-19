@@ -30,6 +30,7 @@ function oneBone(): Skeleton {
     parent: PARENT_NONE,
     translationX: 0,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })

@@ -3,12 +3,11 @@ import { createBinding, createMemoryLayer, updateBinding } from '@/bind/bind'
 import { createHumanoid } from '@/body/assemble'
 import { pullContacts } from '@/event/event'
 import { createEngine, destroyEngine, diagnoseEngine, presentEngine, resetEngine, restoreEngine, captureEngine, stepEngine } from '@/engine/engine'
-import { fillPose } from '@/fill/fill'
 import { setSpeed, stepParams } from '@/params/params'
 import { createPose, setPoseTranslation } from '@/skeleton/pose'
 import { findBone } from '@/skeleton/skeleton'
-import { drawOrder } from '@/slot/slot'
 import { strokeContours } from '@/stroke/stroke'
+import { presentPose } from '../view/present'
 
 const DT = 1 / 60
 
@@ -22,7 +21,7 @@ describe('engine', () => {
     const pose = Array.from(engine.solver.pose.data)
     const stepTime = engine.solver.stepTime
     const pending = engine.log.pending.length
-    presentEngine(engine, 0.5)
+    presentEngine(engine, 0.5, 0)
     expect(layer.objects).toHaveLength(engine.solver.compiled.meshes.meshes.length * 2)
     const identity = layer.objects.slice()
     expect(Array.from(engine.solver.pose.data)).toEqual(pose)
@@ -31,6 +30,56 @@ describe('engine', () => {
     stepEngine(engine, DT)
     expect(layer.objects).toHaveLength(identity.length)
     for (let i = 0; i < identity.length; i += 1) expect(layer.objects[i]).toBe(identity[i])
+  })
+
+  it('视角只在呈现时生效：换一档不改姿态，非法下标不写绑定', () => {
+    const layer = createMemoryLayer()
+    const engine = createEngine(createHumanoid(1.7), layer)
+    setSpeed(engine.solver.params, 1.2)
+    for (let i = 0; i < 40; i += 1) stepEngine(engine, DT)
+    const sequence = () =>
+      layer.objects
+        .filter((object) => object.kind === 'fill')
+        .sort((a, b) => a.order - b.order)
+        .map((object) => object.partId)
+    const shown = () => layer.objects.map((object) => Array.from(object.positions))
+
+    presentEngine(engine, 0.5, 0)
+    const pose = Array.from(engine.solver.pose.data)
+    const before = Array.from(engine.pair.before.pose.data)
+    const after = Array.from(engine.pair.after.pose.data)
+    const side = shown()
+    const sideOrder = sequence()
+    expect(sideOrder.indexOf('legL')).toBeLessThan(sideOrder.indexOf('torso'))
+    expect(sideOrder.indexOf('torso')).toBeLessThan(sideOrder.indexOf('legR'))
+    const torso = layer.objects.find((object) => object.kind === 'fill' && object.partId === 'torso')!
+    expect(torso.positions.length).toBe(64)
+
+    presentEngine(engine, 0.5, 180)
+    expect(Array.from(engine.solver.pose.data)).toEqual(pose)
+    expect(Array.from(engine.pair.before.pose.data)).toEqual(before)
+    expect(Array.from(engine.pair.after.pose.data)).toEqual(after)
+    const other = shown()
+    const otherOrder = sequence()
+    expect(other).not.toEqual(side)
+    expect(otherOrder.indexOf('legR')).toBeLessThan(otherOrder.indexOf('torso'))
+    expect(otherOrder.indexOf('torso')).toBeLessThan(otherOrder.indexOf('legL'))
+
+    for (const view of [360, 1.5, -1, Number.NaN]) {
+      expect(() => presentEngine(engine, 0.5, view)).toThrow(/^view$/)
+      expect(shown()).toEqual(other)
+      expect(sequence()).toEqual(otherOrder)
+    }
+    expect(Array.from(engine.solver.pose.data)).toEqual(pose)
+
+    const facing = engine.solver.params.current.facing
+    const generation = engine.solver.placement.generation
+    presentEngine(engine, 0.5, 0)
+    expect(shown()).toEqual(side)
+    expect(sequence()).toEqual(sideOrder)
+    expect(engine.solver.params.current.facing).toBe(facing)
+    expect(engine.solver.placement.generation).toBe(generation)
+    expect(JSON.stringify(Object.keys(captureEngine(engine)))).not.toMatch(/view/i)
   })
 
   it('提交的离地可以在步进之后拉取', () => {
@@ -71,10 +120,9 @@ describe('engine', () => {
   it('销毁只释放自己的对象', () => {
     const layer = createMemoryLayer()
     const engine = createEngine(createHumanoid(1.7), layer)
-    presentEngine(engine, 1)
+    presentEngine(engine, 1, 0)
     const other = createBinding(layer)
-    const filled = fillPose(engine.solver.compiled, engine.solver.pose)
-    const order = drawOrder(new Array<string>(engine.solver.compiled.slots.slots.length), engine.solver.compiled.slots, 1)
+    const { filled, order } = presentPose(engine.solver.compiled, engine.solver.pose, 0)
     updateBinding(other, filled, strokeContours(filled, false), order)
     const foreign = other.objects[0]
     destroyEngine(engine)

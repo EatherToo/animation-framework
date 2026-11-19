@@ -1,6 +1,7 @@
 export {
   debugView,
   readDiagnostics,
+  type DebugBone,
   type DebugMark,
   type DebugSegment,
   type DebugView,

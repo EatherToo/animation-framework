@@ -28,6 +28,8 @@ export type CompiledRig = {
   readonly correction: Correction
   readonly bindRig: Float32Array
   readonly inverseBind: Float32Array
+  /** 各骨在绑定姿态下的角色空间横向位置：`bindLateral` 沿父链加总。 */
+  readonly lateralBind: Float32Array
 }
 
 /** `compileRig` 的源数据。 */
@@ -84,6 +86,7 @@ export function compileRig(input: CompileInput): CompiledRig {
     correction,
     bindRig,
     inverseBind,
+    lateralBind: writeLateralBind(humanoid.skeleton),
   }
 }
 
@@ -112,7 +115,7 @@ function assertWeights(parts: PartSet, meshes: MeshSet, weights: WeightSet): voi
       continue
     }
     const mesh = meshes.meshes[i]!
-    const vertexCount = mesh.positions.length / 2
+    const vertexCount = mesh.positions.length / 3
     if (
       found === undefined ||
       found.influences !== part.bones.length ||
@@ -161,6 +164,16 @@ function writeBindRig(skeleton: Skeleton): Float32Array {
     for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k]!
   }
   return rig
+}
+
+function writeLateralBind(skeleton: Skeleton): Float32Array {
+  const lateral = new Float32Array(skeleton.boneCount)
+  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+    const parentIndex = skeleton.parent[bone]!
+    const own = skeleton.bindLateral[bone]!
+    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
+  }
+  return lateral
 }
 
 function combine(

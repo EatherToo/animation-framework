@@ -12,6 +12,7 @@ export {
   boneName,
   findBone,
   bindTranslation,
+  bindLateral,
   bindRotation,
   bindLength,
 } from './skeleton'

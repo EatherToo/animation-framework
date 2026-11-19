@@ -4,7 +4,7 @@ import { createBinding, destroyBinding, updateBinding } from '../bind/bind'
 import { readDiagnostics, type DiagnosticReadout } from '../diag/diag'
 import { recordContacts, type ContactLog, createContactLog } from '../event/event'
 import { evaluateFk } from '../fk/evaluate'
-import { fillPose } from '../fill/fill'
+import { fillProjected } from '../fill/fill'
 import { createParams } from '../params/params'
 import { clearRecovery } from '../recover/recover'
 import { reachStance } from '../reach/reach'
@@ -14,6 +14,7 @@ import { createSolver, stepSolver, type Solver } from '../solve/solve'
 import { copyPose, poseRotation, type Pose } from '../skeleton/pose'
 import { strokeContours } from '../stroke/stroke'
 import { createVec2 } from '../math/vec2'
+import { depthOrder, projectParts, type ViewIndex } from '../view/project'
 import { createWorldPoint, rigToWorldPoint } from '../space/world-point'
 
 export type Engine = {
@@ -44,21 +45,24 @@ export function stepEngine(engine: Engine, dt: number): void {
   engine.pair.after = captureRenderFrame(engine.solver)
 }
 
-export function presentEngine(engine: Engine, alpha: number): void {
+/**
+ * 取样并按一档视角上屏。视角是画面帧参数：不进固定步，也不进快照。
+ * 非法下标抛出 `view`，绑定保持上一次成功呈现的值。
+ * @param engine 实例
+ * @param alpha 两个固定步之间的比例
+ * @param view 视角下标，`0..359`
+ */
+export function presentEngine(engine: Engine, alpha: number, view: ViewIndex): void {
   live(engine)
-  const sampled = sampleRender(engine.solver.compiled, engine.pair.before, engine.pair.after, alpha)
-  const colors = fillPose(engine.solver.compiled, sampled.pose)
-  updateBinding(
-    engine.binding,
-    sampled.parts.map((part) => ({
-      partId: part.partId,
-      positions: part.positions,
-      indices: part.indices,
-      fill: colors.find((item) => item.partId === part.partId)!.fill,
-    })),
-    strokeContours(sampled.parts, true),
-    sampled.order,
+  const compiled = engine.solver.compiled
+  const sampled = sampleRender(compiled, engine.pair.before, engine.pair.after, alpha)
+  const projected = projectParts(sampled.parts, view)
+  const filled = fillProjected(
+    projected,
+    compiled.parts.parts.map((part) => part.fill),
   )
+  const order = depthOrder(new Array<string>(projected.length), projected, sampled.order)
+  updateBinding(engine.binding, filled, strokeContours(filled, true), order)
 }
 
 export function resetEngine(engine: Engine, stand: Pose): void {
@@ -124,7 +128,7 @@ function live(engine: Engine): void {
 function stanceHolds(solver: Solver, stand: Pose): boolean {
   if (stand.skeleton !== solver.pose.skeleton) throw new Error('pose')
   const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, solver.compiled, stand, solver.compiled.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, stand, solver.compiled.skeleton.boneCount)
   const left = characterSole(solver, fk, solver.legL.end)
   const right = characterSole(solver, fk, solver.legR.end)
   const pelvis = joint(fk, 0)
@@ -147,7 +151,7 @@ function stanceHolds(solver: Solver, stand: Pose): boolean {
 
 function rig(solver: Solver): Float32Array {
   const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
   return fk
 }
 

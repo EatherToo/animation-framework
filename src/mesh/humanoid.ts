@@ -4,7 +4,14 @@ import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
 import type { PartSet, SkinnedPart } from '../part/set'
 import { bindLength, boneName, type Skeleton } from '../skeleton/skeleton'
 import { setBindParentFromBone } from '../skeleton/parent-from-bone'
-import { meshFromRectangle, meshFromStrip, type Mesh, type MeshSet, type StripSegment } from './strip'
+import {
+  meshFromCappedTube,
+  meshFromRectangle,
+  meshFromStrip,
+  type Mesh,
+  type MeshSet,
+  type StripSegment,
+} from './strip'
 
 export type { Mesh } from './strip'
 
@@ -19,11 +26,12 @@ const JOIN_DISTANCE_SQ = 1e-8
 export function createHumanoidMeshes(humanoid: Humanoid, parts: PartSet): MeshSet {
   if (parts.skeleton !== humanoid.skeleton) throw new Error('skeleton')
   const rig = writeBindRig(humanoid.skeleton)
+  const lateral = writeBindLateral(humanoid.skeleton)
   const meshes: Mesh[] = []
   for (let i = 0; i < parts.parts.length; i += 1) {
     const part = parts.parts[i]!
     if (part.kind === 'skinned') {
-      meshes.push(skinMesh(part, humanoid.skeleton, humanoid.proportions, rig))
+      meshes.push(tubeMesh(part, humanoid.skeleton, humanoid.proportions, rig, lateral))
     } else {
       meshes.push(rigidMesh(part.id, part.bone, humanoid.skeleton, humanoid.proportions))
     }
@@ -31,11 +39,12 @@ export function createHumanoidMeshes(humanoid: Humanoid, parts: PartSet): MeshSe
   return { meshes }
 }
 
-function skinMesh(
+function tubeMesh(
   part: SkinnedPart,
   skeleton: Skeleton,
   proportions: BodyProportions,
   rig: Float32Array,
+  lateral: Float32Array,
 ): Mesh {
   const segments: StripSegment[] = []
   for (let i = 0; i < part.bones.length; i += 1) {
@@ -59,16 +68,25 @@ function skinMesh(
       const dy = ny - y1
       if (dx * dx + dy * dy > JOIN_DISTANCE_SQ) continue
     }
-    segments.push(segment(ox, oy, x1, y1, radius))
+    const z = lateral[bone]!
+    segments.push(segment(ox, oy, z, x1, y1, z, radius))
   }
   return meshFromStrip(part.id, 'character', segments)
 }
 
-function segment(x0: number, y0: number, x1: number, y1: number, radius: number): StripSegment {
+function segment(
+  x0: number,
+  y0: number,
+  z0: number,
+  x1: number,
+  y1: number,
+  z1: number,
+  radius: number,
+): StripSegment {
   const dx = x1 - x0
   const dy = y1 - y0
   const len = Math.hypot(dx, dy)
-  return { x0, y0, x1, y1, px: -dy / len, py: dx / len, radius }
+  return { x0, y0, z0, x1, y1, z1, px: -dy / len, py: dx / len, radius }
 }
 
 function rigidMesh(
@@ -80,13 +98,20 @@ function rigidMesh(
   const length = bindLength(skeleton, bone)
   const name = boneName(skeleton, bone)
   if (name === 'head') {
-    return meshFromRectangle(partId, 0, length, proportions.headRadius, -proportions.headRadius)
+    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.headRadius)])
   }
   if (name === 'handL' || name === 'handR') {
-    return meshFromRectangle(partId, 0, length, proportions.handRadius, -proportions.handRadius)
+    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.handRadius)])
   }
   if (name === 'footL' || name === 'footR') {
-    return meshFromRectangle(partId, 0, length, proportions.footRadius, -proportions.ankleHeight)
+    return meshFromRectangle(
+      partId,
+      0,
+      length,
+      proportions.footRadius,
+      -proportions.ankleHeight,
+      proportions.footRadius,
+    )
   }
   throw new Error('part')
 }
@@ -130,6 +155,16 @@ function writeBindRig(skeleton: Skeleton): Float32Array {
     for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k]!
   }
   return rig
+}
+
+function writeBindLateral(skeleton: Skeleton): Float32Array {
+  const lateral = new Float32Array(skeleton.boneCount)
+  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+    const parentIndex = skeleton.parent[bone]!
+    const own = skeleton.bindLateral[bone]!
+    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
+  }
+  return lateral
 }
 
 function combine(

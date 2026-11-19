@@ -84,7 +84,7 @@ export function solveTwoBone(
   setPoseRotation(pose, chain.root, solved.root)
   setPoseRotation(pose, chain.mid, solved.mid)
 
-  evaluateFk(fk, compiled, pose, skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(skeleton.boneCount), compiled, pose, skeleton.boneCount)
   const end = chain.end * 9
   const error = Math.hypot(fk[end + 6]! - targetX, fk[end + 7]! - targetY)
   return { reached: error <= HIT }
@@ -125,7 +125,7 @@ function parentMatrixOf(
     return identity
   }
   const view = fk.subarray(0, (parent + 1) * 9)
-  evaluateFk(view, compiled, pose, parent + 1)
+  evaluateFk(view, new Float32Array(parent + 1), compiled, pose, parent + 1)
   return view.subarray(parent * 9, parent * 9 + 9)
 }
 

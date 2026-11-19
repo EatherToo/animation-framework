@@ -38,6 +38,7 @@ function singleBone(
     parent: PARENT_NONE,
     translationX: tx,
     translationY: ty,
+    translationZ: 0,
     rotation,
     length,
   })
@@ -51,6 +52,7 @@ function exampleChain(): Skeleton {
     parent: PARENT_NONE,
     translationX: 0,
     translationY: 1,
+    translationZ: 0,
     rotation: 0,
     length: 0.2,
   })
@@ -59,6 +61,7 @@ function exampleChain(): Skeleton {
     parent: 0,
     translationX: 0,
     translationY: -0.05,
+    translationZ: 0,
     rotation: -Math.PI / 2,
     length: 0.45,
   })
@@ -67,6 +70,7 @@ function exampleChain(): Skeleton {
     parent: 1,
     translationX: 0.45,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 0.45,
   })

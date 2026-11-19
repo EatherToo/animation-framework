@@ -21,6 +21,7 @@ function skeleton() {
     parent: PARENT_NONE,
     translationX: 0,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })
@@ -29,6 +30,7 @@ function skeleton() {
     parent: 0,
     translationX: 1,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })

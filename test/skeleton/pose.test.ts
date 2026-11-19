@@ -29,6 +29,7 @@ function twoBoneSkeleton() {
     parent: PARENT_NONE,
     translationX: 0.1,
     translationY: 0.2,
+    translationZ: 0,
     rotation: 0.3,
     length: 0.4,
   })
@@ -37,6 +38,7 @@ function twoBoneSkeleton() {
     parent: 0,
     translationX: 0.5,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 0.5,
   })

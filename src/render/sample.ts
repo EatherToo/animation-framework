@@ -55,6 +55,7 @@ export type RenderFrame = {
   readonly legR: IkChain
 }
 
+/** 一个部件在当前姿态下的角色空间顶点。`positions` 步长 3：`x, y, z`。 */
 export type SampledPart = {
   readonly partId: string
   readonly positions: Float32Array
@@ -207,10 +208,11 @@ function reSolve(compiled: CompiledRig, before: RenderFrame, after: RenderFrame,
 
 function present(compiled: CompiledRig, pose: Pose, facing: Facing, snapped: boolean): SampledView {
   const fk = new Float32Array(compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  const lateral = new Float32Array(compiled.skeleton.boneCount)
+  evaluateFk(fk, lateral, compiled, pose, compiled.skeleton.boneCount)
   const parts = compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, compiled, fk, index)
+    skinMesh(positions, compiled, fk, lateral, index)
     return { partId: mesh.partId, positions, indices: mesh.indices }
   })
   const order = drawOrder(new Array<string>(compiled.slots.slots.length), compiled.slots, facing)

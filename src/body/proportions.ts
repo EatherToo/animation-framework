@@ -28,12 +28,12 @@ export type BodyProportions = {
   readonly thighRadius: number
   readonly shinRadius: number
   readonly footRadius: number
-  /** 左右踝绑定位置在角色 +X 上的间距，米 */
+  /** 左右踝绑定位置在角色 z 上的间距，米 */
   readonly stanceWidth: number
-  /** 半髋宽：髋相对骨盆中线沿角色 +X 的偏移绝对值，米 */
-  readonly hipOffsetX: number
-  /** 肩相对胸中线沿角色 +X 的偏移绝对值，米 */
-  readonly shoulderOffsetX: number
+  /** 半髋宽：髋相对骨盆中线沿角色 z 的偏移绝对值，米。左侧为正 */
+  readonly hipOffsetZ: number
+  /** 肩相对胸中线沿角色 z 的偏移绝对值，米。左侧为正 */
+  readonly shoulderOffsetZ: number
   /**
    * 髋相对骨盆原点沿 −Y 的偏移，米（字段值为非负；绑定写 `−hipDropY`）。
    * 派生：`hipHeight − thighLength − shinLength − ankleHeight`。
@@ -93,8 +93,8 @@ export function createProportions(height: number): BodyProportions {
     shinRadius: 0.032 * H,
     footRadius: 0.028 * H,
     stanceWidth,
-    hipOffsetX: stanceWidth / 2,
-    shoulderOffsetX: 0.08 * H,
+    hipOffsetZ: stanceWidth / 2,
+    shoulderOffsetZ: 0.08 * H,
     hipDropY: hipHeight - thighLength - shinLength - ankleHeight,
     shoulderDropY: 0.02 * H,
     reachMargin: REACH_MARGIN,

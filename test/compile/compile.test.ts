@@ -18,9 +18,16 @@ describe('compile', () => {
     expect(compiled.bindRig.length).toBe(humanoid.skeleton.boneCount * 9)
     expect(compiled.inverseBind.length).toBe(compiled.bindRig.length)
     expect(compiled.correction.enabled).toBe(false)
+    expect(compiled.lateralBind.length).toBe(humanoid.skeleton.boneCount)
+    expect(compiled.lateralBind[humanoid.boneIndex.footL]).toBeCloseTo(humanoid.proportions.hipOffsetZ, 6)
+    expect(compiled.lateralBind[humanoid.boneIndex.handR]).toBeCloseTo(
+      -humanoid.proportions.shoulderOffsetZ,
+      6,
+    )
+    expect(compiled.lateralBind[humanoid.boneIndex.head]).toBe(0)
   })
 
-  it('骨架、槽位或绕向不一致时整份拒绝', () => {
+  it('骨架、槽位不一致或网格不合法时整份拒绝', () => {
     const humanoid = createHumanoid(1.7)
     const other = createHumanoid(1.7)
     const parts = createHumanoidParts(humanoid.skeleton)
@@ -37,10 +44,15 @@ describe('compile', () => {
     const missing = createSlotSetWithoutHead()
     expect(() => compileRig({ ...base, slots: missing })).toThrow(/^slot$/)
 
-    const clockwise = meshes.meshes.map((mesh, index) =>
-      index === 0 ? clockwiseMesh(mesh.partId) : mesh,
+    const collinear = meshes.meshes.map((mesh, index) =>
+      index === 0 ? collinearMesh(mesh.partId) : mesh,
     )
-    expect(() => compileRig({ ...base, meshes: { meshes: clockwise } })).toThrow(/^winding$/)
+    expect(() => compileRig({ ...base, meshes: { meshes: collinear } })).toThrow(/^degenerate$/)
+
+    const planar = meshes.meshes.map((mesh, index) =>
+      index === 0 ? { ...mesh, positions: new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]) } : mesh,
+    )
+    expect(() => compileRig({ ...base, meshes: { meshes: planar } })).toThrow(/^mesh$/)
   })
 })
 
@@ -49,11 +61,11 @@ function createSlotSetWithoutHead() {
   return { slots: set.slots.filter((slot) => slot.partId !== 'head') }
 }
 
-function clockwiseMesh(partId: string): Mesh {
+function collinearMesh(partId: string): Mesh {
   return {
     partId,
     space: 'character',
-    positions: new Float32Array([0, 0, 1, 0, 0, 1]),
-    indices: new Uint16Array([0, 2, 1]),
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
+    indices: new Uint16Array([0, 1, 2]),
   }
 }

@@ -1,5 +1,5 @@
 /**
- * 28 填充：按部件纯色交出蒙皮后的三角形。
+ * 28 填充：给投影后的平面三角形配上部件纯色。
  */
-export { fillPose } from './fill'
+export { fillProjected } from './fill'
 export type { FilledPart } from './fill'

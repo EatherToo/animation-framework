@@ -3,16 +3,17 @@ import type { Mesh } from '../mesh/strip'
 const AREA_EPSILON = 1e-8
 
 /**
- * 验收三角形、绕向、边界和连通性。失败时抛出，不改网格。
+ * 验收三角形、退化、边的使用次数和连通性。失败时抛出，不改网格。
+ * 外向绕向由网格生成保证；屏幕上的绕向在投影之后调整。
  * @param mesh 待验收的网格
  */
 export function validateMesh(mesh: Mesh): void {
   const positions = mesh.positions
   const indices = mesh.indices
-  if (positions.length < 6 || positions.length % 2 !== 0) throw new Error('mesh')
+  if (positions.length < 9 || positions.length % 3 !== 0) throw new Error('mesh')
   if (indices.length < 3 || indices.length % 3 !== 0) throw new Error('mesh')
 
-  const vertexCount = positions.length / 2
+  const vertexCount = positions.length / 3
   for (let i = 0; i < indices.length; i += 1) {
     const index = indices[i]!
     if (!Number.isInteger(index) || index < 0 || index >= vertexCount) {
@@ -22,9 +23,7 @@ export function validateMesh(mesh: Mesh): void {
 
   const triangleCount = indices.length / 3
   for (let t = 0; t < triangleCount; t += 1) {
-    const signed = signedArea(positions, indices, t)
-    if (Math.abs(signed) <= AREA_EPSILON) throw new Error('degenerate')
-    if (signed < 0) throw new Error('winding')
+    if (crossLength(positions, indices, t) <= AREA_EPSILON) throw new Error('degenerate')
   }
 
   const edges = new Map<string, { count: number; dir: number }>()
@@ -36,12 +35,6 @@ export function validateMesh(mesh: Mesh): void {
     addEdge(edges, b, c)
     addEdge(edges, c, a)
   }
-
-  let boundary = 0
-  for (const edge of edges.values()) {
-    if (edge.count === 1) boundary += 1
-  }
-  if (boundary === 0) throw new Error('boundary')
 
   const neighbors: number[][] = Array.from({ length: triangleCount }, () => [])
   const used = new Map<string, number>()
@@ -71,17 +64,17 @@ export function validateMesh(mesh: Mesh): void {
   if (visited !== triangleCount) throw new Error('connectivity')
 }
 
-function signedArea(positions: Float32Array, indices: Uint16Array, triangle: number): number {
-  const i0 = indices[triangle * 3]!
-  const i1 = indices[triangle * 3 + 1]!
-  const i2 = indices[triangle * 3 + 2]!
-  const ax = positions[i0 * 2]!
-  const ay = positions[i0 * 2 + 1]!
-  const bx = positions[i1 * 2]!
-  const by = positions[i1 * 2 + 1]!
-  const cx = positions[i2 * 2]!
-  const cy = positions[i2 * 2 + 1]!
-  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+function crossLength(positions: Float32Array, indices: Uint16Array, triangle: number): number {
+  const i0 = indices[triangle * 3]! * 3
+  const i1 = indices[triangle * 3 + 1]! * 3
+  const i2 = indices[triangle * 3 + 2]! * 3
+  const ux = positions[i1]! - positions[i0]!
+  const uy = positions[i1 + 1]! - positions[i0 + 1]!
+  const uz = positions[i1 + 2]! - positions[i0 + 2]!
+  const vx = positions[i2]! - positions[i0]!
+  const vy = positions[i2 + 1]! - positions[i0 + 1]!
+  const vz = positions[i2 + 2]! - positions[i0 + 2]!
+  return Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx)
 }
 
 function addEdge(

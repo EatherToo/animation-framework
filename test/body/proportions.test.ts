@@ -30,8 +30,8 @@ const LENGTH_KEYS: Array<keyof BodyProportions> = [
   'shinRadius',
   'footRadius',
   'stanceWidth',
-  'hipOffsetX',
-  'shoulderOffsetX',
+  'hipOffsetZ',
+  'shoulderOffsetZ',
   'hipDropY',
   'shoulderDropY',
 ]
@@ -71,13 +71,16 @@ describe('proportions', () => {
   it('派生量与默认表闭合', () => {
     for (const H of [1, 1.7]) {
       const p = createProportions(H)
-      expectClose(p.hipOffsetX, p.stanceWidth / 2)
+      expectClose(p.hipOffsetZ, p.stanceWidth / 2)
       expectClose(p.legLength, p.thighLength + p.shinLength)
       expectClose(
         p.hipDropY,
         p.hipHeight - p.thighLength - p.shinLength - p.ankleHeight,
       )
       expect(Math.abs(p.hipDropY)).toBeLessThanOrEqual(1e-6 * H)
+      expectClose(p.shoulderOffsetZ, 0.08 * H)
+      expect('hipOffsetX' in p).toBe(false)
+      expect('shoulderOffsetX' in p).toBe(false)
     }
   })
 

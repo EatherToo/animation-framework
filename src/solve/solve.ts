@@ -62,7 +62,7 @@ export type Solver = {
 
 function footWorld(compiled: CompiledRig, pose: Pose, bone: number): { x: number; y: number } {
   const fk = new Float32Array(compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount)
   return {
     x: fk[bone * 9 + 6]!,
     y: fk[bone * 9 + 7]! - compiled.foot.ankleHeight,
@@ -268,13 +268,13 @@ function poseFeet(solver: Solver, step: LatchedStep, time: number): boolean {
   const phase = (Math.PI * 2 * time) / step.duration
   copyPose(solver.scratch, solver.pose)
   placePelvis(solver, solver.scratch, (swing.ankleX + stance.ankleX) / 2, phase)
-  evaluateFk(new Float32Array(9), solver.compiled, solver.scratch, 1)
+  evaluateFk(new Float32Array(9), new Float32Array(1), solver.compiled, solver.scratch, 1)
   if (!reached(solver, solver.scratch, step.foot, swing.ankleX, swing.ankleY)) return false
   if (!reached(solver, solver.scratch, stanceFoot, stance.ankleX, stance.ankleY)) return false
   setPoseRotation(solver.scratch, chain(solver, step.foot).end, swing.pitch)
   setPoseRotation(solver.scratch, chain(solver, stanceFoot).end, stance.pitch)
   const full = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(full, solver.compiled, solver.scratch, solver.compiled.skeleton.boneCount)
+  evaluateFk(full, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.scratch, solver.compiled.skeleton.boneCount)
   writeUpper(
     solver.scratch,
     solver.params.current.armSwing,
@@ -294,14 +294,14 @@ function recoverTick(solver: Solver, dt: number, candidate: SpeedCandidate): voi
   const stance = plantedAnkle(solver, stancePlant.x, stancePlant.y)
   copyPose(solver.scratch, solver.pose)
   placePelvis(solver, solver.scratch, (swing.ankleX + stance.ankleX) / 2, 0)
-  evaluateFk(new Float32Array(9), solver.compiled, solver.scratch, 1)
+  evaluateFk(new Float32Array(9), new Float32Array(1), solver.compiled, solver.scratch, 1)
   const swingOk = reached(solver, solver.scratch, solver.recovery.foot, swing.ankleX, swing.ankleY)
   const stanceOk = reached(solver, solver.scratch, stanceFoot, stance.ankleX, stance.ankleY)
   if (!swingOk || !stanceOk) return
   setPoseRotation(solver.scratch, chain(solver, solver.recovery.foot).end, swing.pitch)
   setPoseRotation(solver.scratch, chain(solver, stanceFoot).end, 0)
   const full = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(full, solver.compiled, solver.scratch, solver.compiled.skeleton.boneCount)
+  evaluateFk(full, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.scratch, solver.compiled.skeleton.boneCount)
   writeUpper(solver.scratch, solver.params.current.armSwing, solver.params.current.spineBend, solver.params.current.breath, 0)
   copyPose(solver.pose, solver.scratch)
   solver.recoveryTime = time

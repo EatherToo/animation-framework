@@ -77,11 +77,11 @@ function weightPart(
     })
   }
   const influences = part.bones.length
-  const vertexCount = positions.length / 2
+  const vertexCount = positions.length / 3
   const weights = new Float32Array(vertexCount * influences)
   for (let v = 0; v < vertexCount; v += 1) {
-    const x = positions[v * 2]!
-    const y = positions[v * 2 + 1]!
+    const x = positions[v * 3]!
+    const y = positions[v * 3 + 1]!
     let best = 0
     let bestDist = Number.POSITIVE_INFINITY
     let bestT = 0
