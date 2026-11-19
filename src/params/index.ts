@@ -1,0 +1,15 @@
+export {
+  applyPreset,
+  createParams,
+  setArmSwing,
+  setBreath,
+  setCadenceStyle,
+  setCrouch,
+  setFacing,
+  setLean,
+  setSpeed,
+  setSpineBend,
+  stepParams,
+  type Params,
+  type ParamValues,
+} from './params'
