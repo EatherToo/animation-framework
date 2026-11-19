@@ -53,7 +53,7 @@ describe('engine', () => {
     expect(sideOrder.indexOf('legL')).toBeLessThan(sideOrder.indexOf('torso'))
     expect(sideOrder.indexOf('torso')).toBeLessThan(sideOrder.indexOf('legR'))
     const torso = layer.objects.find((object) => object.kind === 'fill' && object.partId === 'torso')!
-    expect(torso.positions.length).toBe(64)
+    expect(torso.positions.length).toBe(800)
 
     presentEngine(engine, 0.5, 180)
     expect(Array.from(engine.solver.pose.data)).toEqual(pose)
