@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>蜘蛛侠 · 引擎蒙皮</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1c2430;
+        --muted: #5c6b7a;
+        --line: #d5dde6;
+        --paper: #f4f7fb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 "Iowan Old Style", Palatino, "Songti SC", serif;
+        color: var(--ink);
+        background: var(--paper);
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 28px 24px 48px;
+      }
+      h1 { margin: 0 0 6px; font-size: 28px; font-weight: 600; }
+      p.lead { margin: 0 0 18px; color: var(--muted); }
+      figure {
+        margin: 0;
+        background: #10141c;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background:
+          radial-gradient(ellipse at 50% 18%, #243044 0%, #10141c 58%);
+      }
+      .readout { margin: 14px 0 0; color: var(--muted); }
+      .readout strong { color: var(--ink); font-weight: 600; }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 16px;
+        align-items: center;
+      }
+      button {
+        font: inherit;
+        border: 1px solid var(--line);
+        background: white;
+        border-radius: 999px;
+        padding: 6px 14px;
+        cursor: pointer;
+      }
+      button[aria-pressed="true"] {
+        background: var(--ink);
+        color: white;
+        border-color: var(--ink);
+      }
+      label.crouch {
+        display: grid;
+        grid-template-columns: 3em 140px 3em;
+        align-items: center;
+        gap: 8px;
+        margin-left: 8px;
+        font-size: 13px;
+      }
+      output { font-variant-numeric: tabular-nums; color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>蜘蛛侠</h1>
+      <p class="lead">同一套姿态求解在走。这张正面图按骨骼蒙皮，步态抬起哪只脚，对应的腿就弯。</p>
+      <figure>
+        <canvas id="stage" width="1200" height="680"></canvas>
+      </figure>
+      <p class="readout" id="readout">正在准备贴图…</p>
+      <div class="actions">
+        <button type="button" id="stand">站立</button>
+        <button type="button" id="walk" aria-pressed="true">行走</button>
+        <button type="button" id="run">跑步</button>
+        <button type="button" id="back">倒退</button>
+        <button type="button" id="pause" aria-pressed="false">暂停</button>
+        <label class="crouch">蹲伏
+          <input id="crouch" type="range" min="0" max="1" step="0.01" value="0" />
+          <output id="crouch-out">0.00</output>
+        </label>
+      </div>
+    </main>
+    <script src="./spider.js"></script>
+  </body>
+</html>
