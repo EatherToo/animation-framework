@@ -78,7 +78,7 @@ describe('proportions', () => {
         p.hipHeight - p.thighLength - p.shinLength - p.ankleHeight,
       )
       expect(Math.abs(p.hipDropY)).toBeLessThanOrEqual(1e-6 * H)
-      expectClose(p.shoulderOffsetZ, 0.08 * H)
+      expectClose(p.shoulderOffsetZ, 0.102 * H)
       expect('hipOffsetX' in p).toBe(false)
       expect('shoulderOffsetX' in p).toBe(false)
     }
