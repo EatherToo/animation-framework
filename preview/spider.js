@@ -239,7 +239,7 @@
       rotation: 0,
       length: p.headLength
     });
-    const upperArmL2 = addBone(builder, {
+    const upperArmL = addBone(builder, {
       name: "upperArmL",
       parent: chest,
       translationX: -p.shoulderDropY,
@@ -250,7 +250,7 @@
     });
     const lowerArmL = addBone(builder, {
       name: "lowerArmL",
-      parent: upperArmL2,
+      parent: upperArmL,
       translationX: p.upperArmLength,
       translationY: 0,
       translationZ: 0,
@@ -266,7 +266,7 @@
       rotation: 0,
       length: p.handLength
     });
-    const upperArmR2 = addBone(builder, {
+    const upperArmR = addBone(builder, {
       name: "upperArmR",
       parent: chest,
       translationX: -p.shoulderDropY,
@@ -277,7 +277,7 @@
     });
     const lowerArmR = addBone(builder, {
       name: "lowerArmR",
-      parent: upperArmR2,
+      parent: upperArmR,
       translationX: p.upperArmLength,
       translationY: 0,
       translationZ: 0,
@@ -348,16 +348,16 @@
       length: p.footLength
     });
     const skeleton = finishSkeleton(builder);
-    const boneIndex = {
+    const boneIndex2 = {
       pelvis,
       spine,
       chest,
       neck,
       head,
-      upperArmL: upperArmL2,
+      upperArmL,
       lowerArmL,
       handL,
-      upperArmR: upperArmR2,
+      upperArmR,
       lowerArmR,
       handR,
       thighL,
@@ -371,7 +371,7 @@
       height: p.height,
       proportions: p,
       skeleton,
-      boneIndex,
+      boneIndex: boneIndex2,
       chains: {
         legL: makeTwoBoneChain({
           root: thighL,
@@ -390,7 +390,7 @@
           romMax: LEG_ROM_MAX
         }),
         armL: makeTwoBoneChain({
-          root: upperArmL2,
+          root: upperArmL,
           mid: lowerArmL,
           end: handL,
           bendSign: ARM_BEND_SIGN,
@@ -398,7 +398,7 @@
           romMax: ARM_ROM_MAX
         }),
         armR: makeTwoBoneChain({
-          root: upperArmR2,
+          root: upperArmR,
           mid: lowerArmR,
           end: handR,
           bendSign: ARM_BEND_SIGN,
@@ -1109,7 +1109,7 @@
   var sqrLen = squaredLength;
   var forEach = (function() {
     var vec = create2();
-    return function(a, stride, offset, count, fn, arg) {
+    return function(a, stride, offset, count2, fn, arg) {
       var i, l;
       if (!stride) {
         stride = 2;
@@ -1117,8 +1117,8 @@
       if (!offset) {
         offset = 0;
       }
-      if (count) {
-        l = Math.min(count * stride + offset, a.length);
+      if (count2) {
+        l = Math.min(count2 * stride + offset, a.length);
       } else {
         l = a.length;
       }
@@ -1193,9 +1193,6 @@
     out[1] = pose.data[i + 1];
     return out;
   }
-  function poseRotation(pose, bone2) {
-    return pose.data[bone2 * POSE_STRIDE + 2];
-  }
   function copyPose(out, src) {
     out.data.set(src.data);
     return out;
@@ -1246,16 +1243,16 @@
   }
 
   // src/fk/evaluate.ts
-  function evaluateFk(out, lateral2, compiled, pose, count) {
+  function evaluateFk(out, lateral2, compiled, pose, count2) {
     if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
     const boneCount = compiled.skeleton.boneCount;
-    if (!Number.isInteger(count) || count < 1 || count > boneCount) throw new Error("count");
-    if (out.length !== count * 9) throw new Error("out");
-    if (lateral2.length !== count) throw new Error("lateral");
+    if (!Number.isInteger(count2) || count2 < 1 || count2 > boneCount) throw new Error("count");
+    if (out.length !== count2 * 9) throw new Error("out");
+    if (lateral2.length !== count2) throw new Error("lateral");
     const local = createMat3();
     const parent = createMat3();
     const combined = createMat3();
-    for (let bone2 = 0; bone2 < count; bone2 += 1) {
+    for (let bone2 = 0; bone2 < count2; bone2 += 1) {
       setParentFromBone(local, compiled.skeleton, pose, bone2);
       const parentIndex = compiled.skeleton.parent[bone2];
       const source = parentIndex < 0 ? local : combine(combined, parent, out, parentIndex, local);
@@ -1306,33 +1303,33 @@
     finite(name, value);
     if (value < 0 || value > 1) throw new Error(name);
   }
-  function setSpeed(params, speed) {
+  function setSpeed(params2, speed) {
     finite("speed", speed);
-    params.target.speed = speed;
+    params2.target.speed = speed;
   }
-  function setCrouch(params, crouch2) {
+  function setCrouch(params2, crouch2) {
     unit("crouch", crouch2);
-    params.target.crouch = crouch2;
+    params2.target.crouch = crouch2;
   }
-  function setArmSwing(params, amount) {
+  function setArmSwing(params2, amount) {
     unit("armSwing", amount);
-    params.target.armSwing = amount;
+    params2.target.armSwing = amount;
   }
-  function setSpineBend(params, amount) {
+  function setSpineBend(params2, amount) {
     unit("spineBend", amount);
-    params.target.spineBend = amount;
+    params2.target.spineBend = amount;
   }
-  function setBreath(params, amount) {
+  function setBreath(params2, amount) {
     unit("breath", amount);
-    params.target.breath = amount;
+    params2.target.breath = amount;
   }
-  function stepParams(params, dt) {
+  function stepParams(params2, dt) {
     finite("dt", dt);
     if (dt <= 0) throw new Error("dt");
     const k = 1 - Math.exp(-dt / TAU2);
     const keys = ["speed", "cadenceStyle", "crouch", "lean", "armSwing", "spineBend", "breath"];
     for (const key of keys) {
-      params.current[key] += (params.target[key] - params.current[key]) * k;
+      params2.current[key] += (params2.target[key] - params2.current[key]) * k;
     }
   }
 
@@ -1360,12 +1357,12 @@
     const qy = Math.fround(soleY2);
     return writeRotated(out, qx, qy, pitch, 0, 0, 1);
   }
-  function writeRotated(out, qx, qy, pitch, originX2, originY, sign) {
+  function writeRotated(out, qx, qy, pitch, originX, originY, sign) {
     const c = Math.cos(pitch);
     const s = Math.sin(pitch);
     const rx = c * qx - s * qy;
     const ry = s * qx + c * qy;
-    return setVec2(out, originX2 + sign * rx, originY + sign * ry);
+    return setVec2(out, originX + sign * rx, originY + sign * ry);
   }
   function assertPitch(pitch) {
     if (!Number.isFinite(pitch)) throw new Error("pitch");
@@ -1461,8 +1458,8 @@
     return { reached: error <= HIT };
   }
   function assertChain(skeleton, chain3) {
-    const count = skeleton.boneCount;
-    const valid = Number.isInteger(chain3.root) && Number.isInteger(chain3.mid) && Number.isInteger(chain3.end) && chain3.root >= 0 && chain3.mid >= 0 && chain3.end >= 0 && chain3.root < count && chain3.mid < count && chain3.end < count && parentOf(skeleton, chain3.mid) === chain3.root && parentOf(skeleton, chain3.end) === chain3.mid && (chain3.bendSign === 1 || chain3.bendSign === -1) && Number.isFinite(chain3.romMin) && Number.isFinite(chain3.romMax) && chain3.romMin < chain3.romMax;
+    const count2 = skeleton.boneCount;
+    const valid = Number.isInteger(chain3.root) && Number.isInteger(chain3.mid) && Number.isInteger(chain3.end) && chain3.root >= 0 && chain3.mid >= 0 && chain3.end >= 0 && chain3.root < count2 && chain3.mid < count2 && chain3.end < count2 && parentOf(skeleton, chain3.mid) === chain3.root && parentOf(skeleton, chain3.end) === chain3.mid && (chain3.bendSign === 1 || chain3.bendSign === -1) && Number.isFinite(chain3.romMin) && Number.isFinite(chain3.romMax) && chain3.romMin < chain3.romMax;
     if (!valid) throw new Error("chain");
   }
   function parentMatrixOf(fk2, compiled, pose, parent) {
@@ -1473,9 +1470,9 @@
       identity2[8] = 1;
       return identity2;
     }
-    const view = fk2.subarray(0, (parent + 1) * 9);
-    evaluateFk(view, new Float32Array(parent + 1), compiled, pose, parent + 1);
-    return view.subarray(parent * 9, parent * 9 + 9);
+    const view2 = fk2.subarray(0, (parent + 1) * 9);
+    evaluateFk(view2, new Float32Array(parent + 1), compiled, pose, parent + 1);
+    return view2.subarray(parent * 9, parent * 9 + 9);
   }
   function choose(chain3, distance2, targetAngle, length1, length2, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
     const minDistance = Math.abs(length1 - length2);
@@ -1629,14 +1626,14 @@
   function finite2(name, value) {
     if (!Number.isFinite(value)) throw new Error(name);
   }
-  function setPlacement(placement, originX2, originY, groundY, generation) {
-    finite2("originX", originX2);
+  function setPlacement(placement, originX, originY, groundY, generation) {
+    finite2("originX", originX);
     finite2("originY", originY);
     finite2("groundY", groundY);
     if (!Number.isInteger(generation) || generation < placement.generation) {
       throw new Error("generation");
     }
-    setWorldPoint(placement.origin, originX2, originY);
+    setWorldPoint(placement.origin, originX, originY);
     placement.groundY = groundY;
     placement.generation = generation;
   }
@@ -1900,14 +1897,14 @@
   }
   function drawOrder(out, set3, facing) {
     if (!isFacing(facing)) throw new Error("facing");
-    const count = set3.slots.length;
-    if (out.length !== count) throw new Error("order");
-    const order = new Array(count);
-    for (let i = 0; i < count; i += 1) order[i] = i;
+    const count2 = set3.slots.length;
+    if (out.length !== count2) throw new Error("order");
+    const order = new Array(count2);
+    for (let i = 0; i < count2; i += 1) order[i] = i;
     const near = nearSide(facing);
     const far = farSide(facing);
     order.sort((a, b) => compareSlot(set3, a, b, near, far));
-    for (let i = 0; i < count; i += 1) out[i] = set3.slots[order[i]].partId;
+    for (let i = 0; i < count2; i += 1) out[i] = set3.slots[order[i]].partId;
     return out;
   }
   function compareSlot(set3, a, b, near, far) {
@@ -3080,8 +3077,8 @@
     const length2 = Math.hypot(dx, dy);
     let foundX = Number.NaN;
     let foundY = Number.NaN;
-    const count = length2 === 0 ? 1 : Math.ceil(length2 / RECOVER_STEP);
-    for (let i = 1; i <= count; i += 1) {
+    const count2 = length2 === 0 ? 1 : Math.ceil(length2 / RECOVER_STEP);
+    for (let i = 1; i <= count2; i += 1) {
       const t = length2 === 0 ? 1 : Math.min(1, i * RECOVER_STEP / length2);
       const x = failedX + dx * t;
       const y = failedY + dy * t;
@@ -3436,8 +3433,32 @@
     solver2.stepTime = nextTime;
   }
 
+  // src/view/project.ts
+  var VIEW_COUNT = 360;
+  var VIEW_STEP_DEG = 1;
+  var QUARTER = VIEW_COUNT / 4;
+  var HALF = VIEW_COUNT / 2;
+  var SIN = new Float64Array(VIEW_COUNT);
+  var COS = new Float64Array(VIEW_COUNT);
+  for (let k = 0; k < VIEW_COUNT; k += 1) {
+    SIN[k] = sineOf(k);
+    COS[k] = sineOf((k + QUARTER) % VIEW_COUNT);
+  }
+  function sineOf(k) {
+    const half = k % HALF;
+    const base = half <= QUARTER ? half : HALF - half;
+    if (base === 0) return 0;
+    const value = base === QUARTER ? 1 : Math.sin(base * VIEW_STEP_DEG * Math.PI / 180);
+    return k < HALF ? value : -value;
+  }
+  function isViewIndex(view2) {
+    return typeof view2 === "number" && Number.isInteger(view2) && view2 >= 0 && view2 < VIEW_COUNT;
+  }
+
   // preview/spider.ts
   var DT = 1 / 60;
+  var BODY = 1.7;
+  var SPIN_DEG_PER_SEC = 20;
   var MODE = {
     stand: "\u7AD9\u7ACB",
     start: "\u8D77\u6B65",
@@ -3446,93 +3467,97 @@
     stop: "\u505C\u6B62",
     recover: "\u6062\u590D"
   };
-  var REST = {
-    head: { x: 280, y: 18 },
-    neck: { x: 287, y: 158 },
-    waist: { x: 287, y: 530 },
-    shoulderL: { x: 392, y: 214 },
-    elbowL: { x: 424, y: 348 },
-    wristL: { x: 458, y: 468 },
-    handL: { x: 466, y: 520 },
-    shoulderR: { x: 176, y: 214 },
-    elbowR: { x: 164, y: 348 },
-    wristR: { x: 118, y: 470 },
-    handR: { x: 112, y: 522 },
-    hipL: { x: 348, y: 548 },
-    kneeL: { x: 372, y: 748 },
-    ankleL: { x: 398, y: 918 },
-    footL: { x: 428, y: 992 },
-    hipR: { x: 226, y: 548 },
-    kneeR: { x: 206, y: 748 },
-    ankleR: { x: 186, y: 918 },
-    footR: { x: 148, y: 992 }
+  var VIEW_NAME = {
+    0: "\u53F3\u4FA7",
+    45: "\u53F3\u524D",
+    90: "\u6B63\u9762",
+    135: "\u5DE6\u524D",
+    180: "\u5DE6\u4FA7",
+    225: "\u5DE6\u540E",
+    270: "\u80CC\u9762",
+    315: "\u53F3\u540E"
   };
-  var BONES = [
-    { name: "thighL", a: "hipL", b: "kneeL", layer: 0 },
-    { name: "shinL", a: "kneeL", b: "ankleL", layer: 0 },
-    { name: "footL", a: "ankleL", b: "footL", layer: 0 },
-    { name: "thighR", a: "hipR", b: "kneeR", layer: 0 },
-    { name: "shinR", a: "kneeR", b: "ankleR", layer: 0 },
-    { name: "footR", a: "ankleR", b: "footR", layer: 0 },
-    { name: "torso", a: "neck", b: "waist", layer: 1 },
-    { name: "head", a: "neck", b: "head", layer: 3 },
-    { name: "upperArmL", a: "shoulderL", b: "elbowL", layer: 2 },
-    { name: "lowerArmL", a: "elbowL", b: "wristL", layer: 2 },
-    { name: "handL", a: "wristL", b: "handL", layer: 2 },
-    { name: "upperArmR", a: "shoulderR", b: "elbowR", layer: 2 },
-    { name: "lowerArmR", a: "elbowR", b: "wristR", layer: 2 },
-    { name: "handR", a: "wristR", b: "handR", layer: 2 }
-  ];
-  var HALF = {
-    thighL: 54,
-    thighR: 54,
-    shinL: 42,
-    shinR: 42,
-    footL: 48,
-    footR: 48,
-    torso: 118,
-    head: 64,
-    upperArmL: 42,
-    upperArmR: 42,
-    lowerArmL: 36,
-    lowerArmR: 36,
-    handL: 32,
-    handR: 32
+  var JOINT_BONE = {
+    head: { bone: "head", end: true },
+    neck: { bone: "head", end: false },
+    waist: { bone: "pelvis", end: false },
+    shoulderL: { bone: "upperArmL", end: false },
+    elbowL: { bone: "lowerArmL", end: false },
+    wristL: { bone: "handL", end: false },
+    handL: { bone: "handL", end: true },
+    shoulderR: { bone: "upperArmR", end: false },
+    elbowR: { bone: "lowerArmR", end: false },
+    wristR: { bone: "handR", end: false },
+    handR: { bone: "handR", end: true },
+    hipL: { bone: "thighL", end: false },
+    kneeL: { bone: "shinL", end: false },
+    ankleL: { bone: "footL", end: false },
+    footL: { bone: "footL", end: true },
+    hipR: { bone: "thighR", end: false },
+    kneeR: { bone: "shinR", end: false },
+    ankleR: { bone: "footR", end: false },
+    footR: { bone: "footR", end: true }
   };
-  var solver = createSolver(createHumanoid(1.7));
+  var DEPTH_BIAS = {
+    thighL: 0.05,
+    shinL: 0.05,
+    footL: 0.04,
+    thighR: 0.05,
+    shinR: 0.05,
+    footR: 0.04,
+    torso: 0,
+    upperArmL: -0.03,
+    lowerArmL: -0.04,
+    handL: -0.05,
+    upperArmR: -0.03,
+    lowerArmR: -0.04,
+    handR: -0.05,
+    head: -0.07
+  };
+  var solver = createSolver(createHumanoid(BODY));
   var canvas = document.querySelector("#stage");
   var readout = document.querySelector("#readout");
-  var upperArmL = findBone(solver.pose.skeleton, "upperArmL");
-  var upperArmR = findBone(solver.pose.skeleton, "upperArmR");
-  var footBoneL = findBone(solver.pose.skeleton, "footL");
-  var footBoneR = findBone(solver.pose.skeleton, "footR");
-  var fk = new Float32Array(solver.compiled.skeleton.boneCount * 9);
-  var lateral = new Float32Array(solver.compiled.skeleton.boneCount);
-  var photo = new Image();
-  photo.src = "./spider-man.png";
+  var count = solver.compiled.skeleton.boneCount;
+  var fk = new Float32Array(count * 9);
+  var lateral = new Float32Array(count);
+  var boneIndex = /* @__PURE__ */ new Map();
+  for (const spec of Object.values(JOINT_BONE)) {
+    if (!boneIndex.has(spec.bone)) boneIndex.set(spec.bone, findBone(solver.pose.skeleton, spec.bone));
+  }
+  var params = new URLSearchParams(location.search);
+  var queryView = Number(params.get("view") ?? 90);
+  var shots = [];
   var ready = false;
-  var originX = 287;
-  var footY = 1008;
-  var ppm = 992 / 1.7;
-  var playing = true;
+  var view = isViewIndex(queryView) ? queryView : 90;
+  var spinning = params.get("spin") !== "0";
+  var dragging = false;
+  var playing = params.get("t") == null;
+  if (!playing) {
+    const pause = document.querySelector("#pause");
+    pause.setAttribute("aria-pressed", "true");
+    pause.textContent = "\u7EE7\u7EED";
+  }
   var accumulator = 0;
   var last = performance.now();
-  var plants = [];
-  var lastStance = Number.NaN;
-  setIntent(1.2);
-  var jump = Number(new URLSearchParams(location.search).get("t") ?? 0);
+  evaluateFk(fk, lateral, solver.compiled, solver.pose, count);
+  var bindPose = snapshotJoints();
+  setIntent(params.get("gait") === "walk" ? 1.2 : params.get("gait") === "run" ? 3 : 0, false);
+  var jump = Number(params.get("t") ?? 0);
   if (jump > 0) {
-    for (let i = 0; i < Math.round(jump / DT); i += 1) {
-      stepSolver(solver, DT);
-      notePlant();
-    }
+    for (let i = 0; i < Math.round(jump / DT); i += 1) stepSolver(solver, DT);
   }
   var before = captureRenderFrame(solver);
   var after = before;
-  photo.onload = () => {
-    ready = true;
-  };
-  if (photo.complete && photo.naturalWidth > 0) ready = true;
+  var viewInput = document.querySelector("#view");
+  var viewOut = document.querySelector("#view-out");
+  viewInput.addEventListener("input", () => applyView(Number(viewInput.value), true));
+  for (const button of document.querySelectorAll("button[data-view]")) {
+    button.addEventListener("click", () => applyView(Number(button.dataset.view), true));
+  }
+  document.querySelector("#spin").addEventListener("click", () => {
+    spinning = !spinning;
+    syncSpin();
+  });
   document.querySelector("#stand").addEventListener("click", () => setIntent(0));
   document.querySelector("#walk").addEventListener("click", () => setIntent(1.2));
   document.querySelector("#run").addEventListener("click", () => setIntent(3));
@@ -3549,8 +3574,65 @@
     crouchOut.textContent = value.toFixed(2);
     setCrouch(solver.params, value);
   });
+  canvas.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    canvas.setPointerCapture(event.pointerId);
+    spinning = false;
+    syncSpin();
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    applyView(view - event.movementX * 0.4, false);
+  });
+  canvas.addEventListener("pointerup", () => {
+    dragging = false;
+  });
+  canvas.addEventListener("pointercancel", () => {
+    dragging = false;
+  });
+  canvas.addEventListener(
+    "wheel",
+    (event) => {
+      event.preventDefault();
+      applyView(view + Math.sign(event.deltaY) * 4, true);
+    },
+    { passive: false }
+  );
+  applyView(view, false);
+  syncSpin();
+  void loadShots();
   requestAnimationFrame(frame);
-  function setIntent(speed) {
+  async function loadShots() {
+    const response = await fetch("./spider-views/parts/parts.json");
+    const data = await response.json();
+    const images = /* @__PURE__ */ new Map();
+    shots = data.views.map((item) => ({
+      angle: item.angle,
+      box: { x: item.box[0], y: item.box[1], w: item.box[2], h: item.box[3] },
+      parts: item.parts.map((part) => {
+        let image = images.get(part.file);
+        if (image === void 0) {
+          image = new Image();
+          image.src = `./spider-views/parts/${part.file}`;
+          images.set(part.file, image);
+        }
+        return { ...part, image };
+      })
+    })).sort((a, b) => a.angle - b.angle);
+    await Promise.all(
+      [...images.values()].map(
+        (image) => new Promise((resolve) => {
+          if (image.complete && image.naturalWidth > 0) resolve();
+          else {
+            image.onload = () => resolve();
+            image.onerror = () => resolve();
+          }
+        })
+      )
+    );
+    ready = [...images.values()].every((image) => image.naturalWidth > 0);
+  }
+  function setIntent(speed, resume = true) {
     setSpeed(solver.params, speed);
     const moving2 = speed !== 0;
     setArmSwing(solver.params, moving2 ? 0.85 : 0);
@@ -3564,7 +3646,7 @@
     }
     const pressed = speed === 0 ? "stand" : speed === 3 ? "run" : speed < 0 ? "back" : "walk";
     document.querySelector("#" + pressed).setAttribute("aria-pressed", "true");
-    if (!playing) {
+    if (resume && !playing) {
       playing = true;
       document.querySelector("#pause").setAttribute("aria-pressed", "false");
       document.querySelector("#pause").textContent = "\u6682\u505C";
@@ -3579,38 +3661,45 @@
         before = after;
         stepSolver(solver, DT);
         after = captureRenderFrame(solver);
-        notePlant();
         accumulator -= DT;
       }
     }
+    if (spinning && !dragging) applyView(view + elapsed * SPIN_DEG_PER_SEC, false);
     draw();
     writeReadout();
     requestAnimationFrame(frame);
   }
-  function notePlant() {
-    if (solver.plan.stanceX === lastStance) return;
-    lastStance = solver.plan.stanceX;
-    plants.push({ x: solver.plan.stanceX, y: solver.plan.stanceY });
-    if (plants.length > 14) plants.shift();
+  function applyView(next, fromUser) {
+    const wrapped = (Math.round(next) % 360 + 360) % 360;
+    view = isViewIndex(wrapped) ? wrapped : 0;
+    viewInput.value = String(view);
+    viewOut.textContent = `${view}\xB0`;
+    for (const button of document.querySelectorAll("button[data-view]")) {
+      button.setAttribute("aria-pressed", String(Number(button.dataset.view) === view));
+    }
+    if (fromUser) {
+      spinning = false;
+      syncSpin();
+    }
+  }
+  function syncSpin() {
+    const button = document.querySelector("#spin");
+    button.setAttribute("aria-pressed", String(spinning));
+    button.textContent = spinning ? "\u505C\u6B62\u65CB\u8F6C" : "\u65CB\u8F6C";
   }
   function writeReadout() {
     if (!ready) {
-      readout.textContent = "\u6B63\u5728\u51C6\u5907\u8D34\u56FE\u2026";
+      readout.textContent = "\u6B63\u5728\u51C6\u5907\u5404\u89D2\u5EA6\u8D34\u56FE\u2026";
       return;
     }
-    const active = solver.plan.active;
+    const shot = nearestShot(view);
     const mode = MODE[solver.gait.mode] ?? solver.gait.mode;
-    const parts = [
-      `\u6A21\u5F0F <strong>${mode}</strong>`,
-      `\u901F\u5EA6 <strong>${solver.params.current.speed.toFixed(2)}</strong> m/s`
-    ];
-    if (active) {
-      parts.push(`\u6446\u52A8 <strong>${active.foot === "left" ? "\u5DE6" : "\u53F3"}</strong>`);
-      parts.push(`\u6B65\u5185 <strong>${solver.stepTime.toFixed(2)}</strong> / ${active.duration.toFixed(2)} s`);
-    } else {
-      parts.push("\u7AD9\u7ACB");
-    }
-    readout.innerHTML = parts.join(" \xB7 ");
+    const facing = VIEW_NAME[view] ? ` ${VIEW_NAME[view]}` : "";
+    readout.innerHTML = [
+      `\u89C6\u89D2 <strong>${view}\xB0</strong>${facing}`,
+      `\u8D34\u56FE <strong>${shot.angle}\xB0</strong>`,
+      `\u6A21\u5F0F <strong>${mode}</strong>`
+    ].join(" \xB7 ");
   }
   function draw() {
     const ctx = canvas.getContext("2d");
@@ -3620,80 +3709,111 @@
     if (!ready) return;
     const alpha = Math.min(1, accumulator / DT);
     const sampled = sampleRender(solver.compiled, before, after, alpha);
-    evaluateFk(fk, lateral, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount);
-    const pelvisX = fk[6];
-    const viewHeight = 2.35;
-    const viewWidth = viewHeight * (width / height);
-    const x0 = pelvisX - viewWidth * 0.5;
-    const y0 = -0.08;
-    const scale3 = height / viewHeight;
+    evaluateFk(fk, lateral, solver.compiled, sampled.pose, count);
+    const shot = nearestShot(view);
+    const body = height * 0.78;
+    const layout = { cx: width * 0.5, ground: height * 0.9, body, ppm: body / BODY };
+    const shift = pelvisShift(layout.ppm);
+    const scale3 = body / shot.box.h;
     ctx.save();
-    ctx.translate(-x0 * scale3, height + y0 * scale3);
-    ctx.scale(scale3, -scale3);
-    ctx.beginPath();
-    ctx.moveTo(x0, 0);
-    ctx.lineTo(x0 + viewWidth, 0);
-    ctx.lineWidth = 1.5 / scale3;
+    ctx.translate(shift.x, shift.y);
     ctx.strokeStyle = "#2a3544";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(40, layout.ground);
+    ctx.lineTo(width - 40, layout.ground);
     ctx.stroke();
-    const joints = poseJoints(sampled.pose);
-    const order = BONES.slice().sort((a, b) => a.layer - b.layer);
-    for (const bone2 of order) {
-      paintBone(ctx, joints, bone2, pelvisX);
+    ctx.fillStyle = "#000";
+    ctx.globalAlpha = 0.38;
+    ctx.beginPath();
+    ctx.ellipse(layout.cx, layout.ground + 6, shot.box.w * scale3 * 0.42, body * 0.035, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    const psi = view * Math.PI / 180;
+    const ordered = shot.parts.slice().sort((a, b) => depthOf(b, psi) - depthOf(a, psi));
+    const placed = [];
+    for (const part of ordered) {
+      const destA = screenJoint(shot, part.jax, part.jay, part.a, layout, scale3);
+      const stacked = placed.some(
+        (item) => item.file === part.image.src && Math.hypot(item.jax - part.jax, item.jay - part.jay) < 2 && Math.hypot(item.x - destA.x, item.y - destA.y) < 4
+      );
+      if (stacked) continue;
+      placed.push({ file: part.image.src, jax: part.jax, jay: part.jay, x: destA.x, y: destA.y });
+      paintPart(ctx, shot, part, layout, scale3);
     }
     ctx.restore();
   }
-  function poseJoints(pose) {
-    const joints = {};
-    for (const name of Object.keys(REST)) joints[name] = { ...REST[name] };
-    const yL = fk[footBoneL * 9 + 7];
-    const yR = fk[footBoneR * 9 + 7];
-    const ground = Math.min(yL, yR);
-    bendLeg(joints, "L", Math.max(0, yL - ground) * ppm);
-    bendLeg(joints, "R", Math.max(0, yR - ground) * ppm);
-    swingArm(joints, "L", poseRotation(pose, upperArmL));
-    swingArm(joints, "R", poseRotation(pose, upperArmR));
-    const drop = Math.max(0, -poseTranslation(createVec2(), pose, 0)[1]) * ppm * 0.35;
-    if (drop > 0) {
-      for (const name of ["head", "neck", "waist", "shoulderL", "shoulderR", "elbowL", "elbowR", "wristL", "wristR", "handL", "handR", "hipL", "hipR"]) {
-        joints[name].y += drop;
+  function pelvisShift(ppm) {
+    const pel = rawDelta("waist");
+    const psi = view * Math.PI / 180;
+    return {
+      x: (pel.x * Math.cos(psi) + pel.z * Math.sin(psi)) * ppm,
+      y: -pel.y * ppm
+    };
+  }
+  function nearestShot(angle2) {
+    let best = shots[0];
+    let bestDistance = 360;
+    for (const shot of shots) {
+      const distance2 = Math.min(Math.abs(angle2 - shot.angle), 360 - Math.abs(angle2 - shot.angle));
+      if (distance2 < bestDistance) {
+        best = shot;
+        bestDistance = distance2;
       }
     }
-    return joints;
+    return best;
   }
-  function bendLeg(joints, side, lift) {
-    if (lift < 1) return;
-    const hip = joints[`hip${side}`];
-    const knee = joints[`knee${side}`];
-    const ankle = joints[`ankle${side}`];
-    const foot = joints[`foot${side}`];
-    const sign = side === "L" ? 1 : -1;
-    const thigh = Math.min(0.35, lift / 340);
-    const bend = Math.min(0.75, lift / 170);
-    rotate3(knee, hip, thigh * sign);
-    rotate3(ankle, hip, thigh * sign);
-    rotate3(foot, hip, thigh * sign);
-    rotate3(ankle, knee, bend * sign);
-    rotate3(foot, knee, bend * sign);
+  function depthOf(part, psi) {
+    const a = jointNow(part.a);
+    const b = jointNow(part.b);
+    const x = (a.x + b.x) / 2;
+    const z = (a.z + b.z) / 2;
+    return -x * Math.sin(psi) + z * Math.cos(psi) + (DEPTH_BIAS[part.bone] ?? 0);
   }
-  function swingArm(joints, side, angle2) {
-    if (Math.abs(angle2) < 1e-3) return;
-    const shoulder = joints[`shoulder${side}`];
-    const elbow = joints[`elbow${side}`];
-    const wrist = joints[`wrist${side}`];
-    const hand = joints[`hand${side}`];
-    const swing = angle2 * 0.45;
-    rotate3(elbow, shoulder, swing);
-    rotate3(wrist, shoulder, swing);
-    rotate3(hand, shoulder, swing);
+  function paintPart(ctx, shot, part, layout, scale3) {
+    const destA = screenJoint(shot, part.jax, part.jay, part.a, layout, scale3);
+    const destB = screenJoint(shot, part.jbx, part.jby, part.b, layout, scale3);
+    const sourceA = { x: part.ax, y: part.ay };
+    const sourceB = { x: part.bx, y: part.by };
+    paintLimb(ctx, part.image, sourceA, sourceB, destA, destB, scale3, part.mirror);
   }
-  function rotate3(point, origin, angle2) {
-    const c = Math.cos(angle2);
-    const s = Math.sin(angle2);
-    const x = point.x - origin.x;
-    const y = point.y - origin.y;
-    point.x = origin.x + c * x - s * y;
-    point.y = origin.y + s * x + c * y;
+  function screenJoint(shot, imageX, imageY, name, layout, scale3) {
+    const restX = layout.cx - shot.box.w * scale3 / 2 + (imageX - shot.box.x) * scale3;
+    const restY = layout.ground - shot.box.h * scale3 + (imageY - shot.box.y) * scale3;
+    const moved = localDelta(name);
+    const psi = view * Math.PI / 180;
+    return {
+      x: restX + (moved.x * Math.cos(psi) + moved.z * Math.sin(psi)) * layout.ppm,
+      y: restY - moved.y * layout.ppm
+    };
+  }
+  function paintLimb(ctx, image, iA, iB, sA, sB, pageScale, mirror) {
+    const width = image.naturalWidth;
+    const height = image.naturalHeight;
+    if (width < 1 || height < 1) return;
+    const ri = boneFrame(iA, iB);
+    const rs = boneFrame(sA, sB);
+    const pinned = rs.len / ri.len;
+    const alongScale = Math.min(pageScale * 1.45, Math.max(pageScale * 0.72, pinned));
+    const flip = mirror ? -1 : 1;
+    const map = (x, y) => {
+      const along = (x - ri.ax) * ri.ux + (y - ri.ay) * ri.uy;
+      const side = (x - ri.ax) * ri.px + (y - ri.ay) * ri.py;
+      return {
+        x: rs.ax + along * alongScale * rs.ux + flip * side * pageScale * rs.px,
+        y: rs.ay + along * alongScale * rs.uy + flip * side * pageScale * rs.py
+      };
+    };
+    const corners = [
+      [0, 0],
+      [width, 0],
+      [width, height],
+      [0, height]
+    ];
+    const xy = corners.map(([x, y]) => map(x, y));
+    const uv = corners.map(([x, y]) => ({ x, y }));
+    paintTriangle(ctx, image, xy[0], xy[1], xy[2], uv[0], uv[1], uv[2]);
+    paintTriangle(ctx, image, xy[0], xy[2], xy[3], uv[0], uv[2], uv[3]);
   }
   function boneFrame(a, b) {
     const dx = b.x - a.x;
@@ -3701,67 +3821,65 @@
     const len2 = Math.hypot(dx, dy) || 1;
     const ux = dx / len2;
     const uy = dy / len2;
-    return { ax: a.x, ay: a.y, ux, uy, px: -uy, py: ux };
+    return { ax: a.x, ay: a.y, ux, uy, px: -uy, py: ux, len: len2 };
   }
-  function paintBone(ctx, joints, bone2, pelvisX) {
-    const restA = REST[bone2.a];
-    const restB = REST[bone2.b];
-    const curA = joints[bone2.a];
-    const curB = joints[bone2.b];
-    const rest = boneFrame(restA, restB);
-    const cur = boneFrame(curA, curB);
-    const len2 = Math.hypot(restB.x - restA.x, restB.y - restA.y);
-    const half = HALF[bone2.name] ?? 40;
-    const pad = 12;
-    const corners = [
-      [-pad, -half],
-      [len2 + pad, -half],
-      [len2 + pad, half],
-      [-pad, half]
-    ];
-    const imageAt = (frame2, along, side) => ({
-      x: frame2.ax + along * frame2.ux + side * frame2.px,
-      y: frame2.ay + along * frame2.uy + side * frame2.py
-    });
-    const uv = corners.map(([along, side]) => imageAt(rest, along, side));
-    const xy = corners.map(([along, side]) => imageAt(cur, along, side));
-    const world = xy.map((point) => toWorld(point.x, point.y, pelvisX));
-    paintTriangle(ctx, world[0], world[1], world[2], uv[0].x, uv[0].y, uv[1].x, uv[1].y, uv[2].x, uv[2].y);
-    paintTriangle(ctx, world[0], world[2], world[3], uv[0].x, uv[0].y, uv[2].x, uv[2].y, uv[3].x, uv[3].y);
-  }
-  function toWorld(ix, iy, pelvisX) {
-    return [pelvisX + (ix - originX) / ppm, (footY - iy) / ppm];
-  }
-  function paintTriangle(ctx, w0, w1, w2, u0, v0, u1, v1, u2, v2) {
-    const du1 = u1 - u0;
-    const dv1 = v1 - v0;
-    const du2 = u2 - u0;
-    const dv2 = v2 - v0;
+  function paintTriangle(ctx, image, s0, s1, s2, i0, i1, i2) {
+    const du1 = i1.x - i0.x;
+    const dv1 = i1.y - i0.y;
+    const du2 = i2.x - i0.x;
+    const dv2 = i2.y - i0.y;
     const det = du1 * dv2 - dv1 * du2;
-    if (Math.abs(det) < 1e-4) return;
-    const dx1 = w1[0] - w0[0];
-    const dy1 = w1[1] - w0[1];
-    const dx2 = w2[0] - w0[0];
-    const dy2 = w2[1] - w0[1];
+    if (Math.abs(det) < 1e-3) return;
+    const dx1 = s1.x - s0.x;
+    const dy1 = s1.y - s0.y;
+    const dx2 = s2.x - s0.x;
+    const dy2 = s2.y - s0.y;
     const a = (dx1 * dv2 - dx2 * dv1) / det;
     const c = (dx2 * du1 - dx1 * du2) / det;
     const b = (dy1 * dv2 - dy2 * dv1) / det;
     const d = (dy2 * du1 - dy1 * du2) / det;
-    const e = w0[0] - a * u0 - c * v0;
-    const f = w0[1] - b * u0 - d * v0;
-    const su = Math.min(u0, u1, u2);
-    const sv = Math.min(v0, v1, v2);
-    const eu = Math.max(u0, u1, u2);
-    const ev = Math.max(v0, v1, v2);
+    const e = s0.x - a * i0.x - c * i0.y;
+    const f = s0.y - b * i0.x - d * i0.y;
+    const su = Math.max(0, Math.min(i0.x, i1.x, i2.x));
+    const sv = Math.max(0, Math.min(i0.y, i1.y, i2.y));
+    const eu = Math.min(image.naturalWidth, Math.max(i0.x, i1.x, i2.x));
+    const ev = Math.min(image.naturalHeight, Math.max(i0.y, i1.y, i2.y));
+    if (eu - su < 1 || ev - sv < 1) return;
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(w0[0], w0[1]);
-    ctx.lineTo(w1[0], w1[1]);
-    ctx.lineTo(w2[0], w2[1]);
+    ctx.moveTo(s0.x, s0.y);
+    ctx.lineTo(s1.x, s1.y);
+    ctx.lineTo(s2.x, s2.y);
     ctx.closePath();
     ctx.clip();
     ctx.transform(a, b, c, d, e, f);
-    ctx.drawImage(photo, su, sv, eu - su, ev - sv, su, sv, eu - su, ev - sv);
+    ctx.drawImage(image, su, sv, eu - su, ev - sv, su, sv, eu - su, ev - sv);
     ctx.restore();
+  }
+  function snapshotJoints() {
+    const out = {};
+    for (const name of Object.keys(JOINT_BONE)) out[name] = jointNow(name);
+    return out;
+  }
+  function jointNow(name) {
+    const spec = JOINT_BONE[name];
+    const bone2 = boneIndex.get(spec.bone);
+    const base = bone2 * 9;
+    const x = fk[base + 6];
+    const y = fk[base + 7];
+    const z = lateral[bone2];
+    if (!spec.end) return { x, y, z };
+    const length2 = bindLength(solver.pose.skeleton, bone2);
+    return { x: x + fk[base] * length2, y: y + fk[base + 1] * length2, z };
+  }
+  function rawDelta(name) {
+    const now = jointNow(name);
+    const rest = bindPose[name];
+    return { x: now.x - rest.x, y: now.y - rest.y, z: now.z - rest.z };
+  }
+  function localDelta(name) {
+    const own = rawDelta(name);
+    const root = rawDelta("waist");
+    return { x: own.x - root.x, y: own.y - root.y, z: own.z - root.z };
   }
 })();
