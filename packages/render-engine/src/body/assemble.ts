@@ -137,7 +137,7 @@ export function createHumanoidFromProportions(p: BodyProportions): Humanoid {
   const upperArmL = addBone(builder, {
     name: 'upperArmL',
     parent: chest,
-    translationX: -p.shoulderDropY,
+    translationX: p.chestLength - p.shoulderDropY,
     translationY: 0,
     translationZ: p.shoulderOffsetZ,
     rotation: Math.PI,
@@ -165,7 +165,7 @@ export function createHumanoidFromProportions(p: BodyProportions): Humanoid {
   const upperArmR = addBone(builder, {
     name: 'upperArmR',
     parent: chest,
-    translationX: -p.shoulderDropY,
+    translationX: p.chestLength - p.shoulderDropY,
     translationY: 0,
     translationZ: -p.shoulderOffsetZ,
     rotation: Math.PI,

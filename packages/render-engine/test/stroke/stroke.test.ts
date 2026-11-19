@@ -1,6 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
 import { compileHumanoid } from '@/compile/compile'
+import { AXIAL_STEPS } from '@/mesh/strip'
 import { createPose } from '@/skeleton/pose'
 import { STROKE_WIDTH, strokeContours, type StrokeSource } from '@/stroke/stroke'
 import { presentPose } from '../view/present'
@@ -125,9 +126,10 @@ describe('stroke', () => {
           expect(y).toBeGreaterThanOrEqual(bottom - 1e-5)
           expect(y).toBeLessThanOrEqual(top + 1e-5)
         }
-        const vertical = Math.abs(y1 - y0) > p.thighLength / 2
-        if (vertical && Math.abs(x0 - min) < 1e-4) left = true
-        if (vertical && Math.abs(x0 - max) < 1e-4) right = true
+        const alongSilhouette =
+          Math.abs(x1 - x0) < 1e-4 && Math.abs(y1 - y0) > p.thighLength / AXIAL_STEPS / 2
+        if (alongSilhouette && Math.abs(x0 - min) < 1e-4) left = true
+        if (alongSilhouette && Math.abs(x0 - max) < 1e-4) right = true
       }
       expect(left).toBe(true)
       expect(right).toBe(true)

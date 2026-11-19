@@ -153,7 +153,7 @@ describe('humanoid meshes', () => {
     const humanoid = createHumanoid(1.7)
     const p = humanoid.proportions
     const set = createHumanoidMeshes(humanoid, createHumanoidParts(humanoid.skeleton))
-    const shoulderY = p.hipHeight + p.spineLength - p.shoulderDropY
+    const shoulderY = p.hipHeight + p.spineLength + p.chestLength - p.shoulderDropY
 
     const left = set.meshes.find((mesh) => mesh.partId === 'armL')!
     const right = set.meshes.find((mesh) => mesh.partId === 'armR')!

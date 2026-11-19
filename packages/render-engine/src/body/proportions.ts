@@ -39,7 +39,10 @@ export type BodyProportions = {
    * 派生：`hipHeight − thighLength − shinLength − ankleHeight`。
    */
   readonly hipDropY: number
-  /** 肩相对胸局部原点沿 −Y 的偏移，米 */
+  /**
+   * 肩在胸骨末端以下的距离，米。沿胸的骨轴往回量。
+   * 胸的局部 `+X` 朝上，绑定写 `chestLength − shoulderDropY`。
+   */
   readonly shoulderDropY: number
   /**
    * 可达余量，无量纲，落在 (0, 1]。
@@ -64,7 +67,7 @@ export function createProportions(height: number): BodyProportions {
   const ankleHeight = 0.039 * H
   const thighLength = 0.245 * H
   const shinLength = 0.246 * H
-  const stanceWidth = 0.1 * H
+  const stanceWidth = 0.12 * H
 
   return {
     height: H,
@@ -82,19 +85,19 @@ export function createProportions(height: number): BodyProportions {
     shinLength,
     footLength: 0.152 * H,
     legLength: thighLength + shinLength,
-    spineRadius: 0.045 * H,
-    chestRadius: 0.055 * H,
-    neckRadius: 0.025 * H,
-    headRadius: 0.065 * H,
-    upperArmRadius: 0.03 * H,
+    spineRadius: 0.058 * H,
+    chestRadius: 0.072 * H,
+    neckRadius: 0.032 * H,
+    headRadius: 0.046 * H,
+    upperArmRadius: 0.030 * H,
     lowerArmRadius: 0.024 * H,
-    handRadius: 0.022 * H,
-    thighRadius: 0.045 * H,
-    shinRadius: 0.032 * H,
-    footRadius: 0.028 * H,
+    handRadius: 0.026 * H,
+    thighRadius: 0.050 * H,
+    shinRadius: 0.036 * H,
+    footRadius: 0.030 * H,
     stanceWidth,
     hipOffsetZ: stanceWidth / 2,
-    shoulderOffsetZ: 0.08 * H,
+    shoulderOffsetZ: 0.102 * H,
     hipDropY: hipHeight - thighLength - shinLength - ankleHeight,
     shoulderDropY: 0.02 * H,
     reachMargin: REACH_MARGIN,

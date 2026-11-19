@@ -170,7 +170,7 @@ describe('assemble', () => {
 
     for (const name of ['upperArmL', 'upperArmR'] as const) {
       bindTranslation(out, skeleton, boneIndex[name])
-      expectClose(out[0]!, -p.shoulderDropY)
+      expectClose(out[0]!, p.chestLength - p.shoulderDropY)
       expect(out[1]).toBe(0)
     }
     expectClose(bindLateral(skeleton, boneIndex.upperArmL), p.shoulderOffsetZ)
