@@ -57,13 +57,17 @@
     if (binding2.destroyed) throw new Error("destroyed");
     if (binding2.lost || binding2.layer.lost) return;
     if (binding2.objects.length === 0) {
+      const created = [];
       for (const fill of fills) {
         const placed = rank(order, fill.partId);
-        binding2.layer.add(object("fill", fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed));
+        const fillObject = object("fill", fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed);
         const stroke = strokeMesh(strokes.find((item) => item.partId === fill.partId));
-        binding2.layer.add(object("stroke", fill.partId, stroke.positions, stroke.indices, null, placed + 0.5));
+        const strokeObject = object("stroke", fill.partId, stroke.positions, stroke.indices, null, placed + 0.5);
+        binding2.layer.add(fillObject);
+        binding2.layer.add(strokeObject);
+        created.push(fillObject, strokeObject);
       }
-      binding2.objects = binding2.layer.objects.filter((item) => !item.destroyed);
+      binding2.objects = created;
       return;
     }
     for (const fill of fills) {
