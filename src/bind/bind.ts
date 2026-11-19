@@ -100,13 +100,17 @@ export function updateBinding(
   if (binding.destroyed) throw new Error('destroyed')
   if (binding.lost || binding.layer.lost) return
   if (binding.objects.length === 0) {
+    const created: SceneObject[] = []
     for (const fill of fills) {
       const placed = rank(order, fill.partId)
-      binding.layer.add(object('fill', fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed))
+      const fillObject = object('fill', fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed)
       const stroke = strokeMesh(strokes.find((item) => item.partId === fill.partId))
-      binding.layer.add(object('stroke', fill.partId, stroke.positions, stroke.indices, null, placed + 0.5))
+      const strokeObject = object('stroke', fill.partId, stroke.positions, stroke.indices, null, placed + 0.5)
+      binding.layer.add(fillObject)
+      binding.layer.add(strokeObject)
+      created.push(fillObject, strokeObject)
     }
-    binding.objects = binding.layer.objects.filter((item) => !item.destroyed)
+    binding.objects = created
     return
   }
   for (const fill of fills) {
