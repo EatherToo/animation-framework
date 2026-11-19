@@ -157,7 +157,7 @@ function chainRoot(
   chain: IkChain,
 ): { x: number; y: number } {
   const fk = new Float32Array(compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount)
   const index = chain.root * 9
   return { x: fk[index + 6]!, y: fk[index + 7]! }
 }

@@ -13,7 +13,7 @@ function boneOrigin(
   bone: number,
 ) {
   const fk = new Float32Array(compiled.bindRig.length)
-  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount)
   return { x: fk[bone * 9 + 6]!, y: fk[bone * 9 + 7]! }
 }
 

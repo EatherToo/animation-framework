@@ -17,7 +17,9 @@ import {
 import { createProportions } from '@/body/proportions'
 import {
   PARENT_NONE,
+  bindLateral,
   bindLength,
+  bindRotation,
   bindTranslation,
   findBone,
   parentOf,
@@ -152,10 +154,57 @@ describe('assemble', () => {
     expect(Math.abs(soleY)).toBeLessThanOrEqual(1e-6)
   })
 
+  it('髋与肩的左右分开写在横向，矢状面 x 相同', () => {
+    const human = createHumanoid(H)
+    const p = human.proportions
+    const { skeleton, boneIndex } = human
+    const out = createVec2()
+
+    for (const name of ['thighL', 'thighR'] as const) {
+      bindTranslation(out, skeleton, boneIndex[name])
+      expect(out[0]).toBe(0)
+      expectClose(out[1]!, -p.hipDropY)
+    }
+    expectClose(bindLateral(skeleton, boneIndex.thighL), p.hipOffsetZ)
+    expectClose(bindLateral(skeleton, boneIndex.thighR), -p.hipOffsetZ)
+
+    for (const name of ['upperArmL', 'upperArmR'] as const) {
+      bindTranslation(out, skeleton, boneIndex[name])
+      expectClose(out[0]!, -p.shoulderDropY)
+      expect(out[1]).toBe(0)
+    }
+    expectClose(bindLateral(skeleton, boneIndex.upperArmL), p.shoulderOffsetZ)
+    expectClose(bindLateral(skeleton, boneIndex.upperArmR), -p.shoulderOffsetZ)
+
+    for (const name of BONE_NAMES) {
+      if (name === 'thighL' || name === 'thighR' || name === 'upperArmL' || name === 'upperArmR') {
+        continue
+      }
+      expect(bindLateral(skeleton, boneIndex[name])).toBe(0)
+    }
+  })
+
+  it('上臂局部 +X 在角色空间指向 -Y', () => {
+    const human = createHumanoid(H)
+    const { skeleton, boneIndex } = human
+    for (const name of ['upperArmL', 'upperArmR'] as const) {
+      let angle = 0
+      for (let bone = boneIndex[name]; bone !== PARENT_NONE; bone = parentOf(skeleton, bone)) {
+        angle += bindRotation(skeleton, bone)
+      }
+      expectClose(Math.cos(angle), 0, 1e-6)
+      expectClose(Math.sin(angle), -1, 1e-6)
+    }
+    for (const name of ['lowerArmL', 'handL', 'lowerArmR', 'handR'] as const) {
+      expect(bindRotation(skeleton, boneIndex[name])).toBe(0)
+    }
+  })
+
   it('createHumanoid 与 FromProportions 绑定按位相同', () => {
     const a = createHumanoid(H)
     const b = createHumanoidFromProportions(createProportions(H))
     expectSameBits(a.skeleton.bindTranslation, b.skeleton.bindTranslation)
+    expectSameBits(a.skeleton.bindLateral, b.skeleton.bindLateral)
     expectSameBits(a.skeleton.bindRotation, b.skeleton.bindRotation)
     expectSameBits(a.skeleton.bindLength, b.skeleton.bindLength)
     expectSameBits(a.skeleton.parent, b.skeleton.parent)
@@ -166,6 +215,7 @@ describe('assemble', () => {
     const b = createHumanoid(H)
     expect(a.skeleton).not.toBe(b.skeleton)
     expectSameBits(a.skeleton.bindTranslation, b.skeleton.bindTranslation)
+    expectSameBits(a.skeleton.bindLateral, b.skeleton.bindLateral)
     expectSameBits(a.skeleton.bindRotation, b.skeleton.bindRotation)
     expectSameBits(a.skeleton.bindLength, b.skeleton.bindLength)
     expectSameBits(a.skeleton.parent, b.skeleton.parent)

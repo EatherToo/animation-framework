@@ -26,7 +26,8 @@ describe('weights', () => {
     ])
     const armWeights = set.weights.find((item) => item.partId === 'armL')!
     expect(armWeights.influences).toBe(2)
-    const vertexCount = arm.positions.length / 2
+    const vertexCount = arm.positions.length / 3
+    expect(vertexCount).toBe(24)
     expect(armWeights.weights.length).toBe(vertexCount * 2)
     for (let v = 0; v < vertexCount; v += 1) {
       const sum = armWeights.weights[v * 2]! + armWeights.weights[v * 2 + 1]!
@@ -35,6 +36,13 @@ describe('weights', () => {
       expect(armWeights.weights[v * 2 + 1]!).toBeGreaterThanOrEqual(0)
     }
     expect(armWeights.weights[0]).toBeCloseTo(1, 5)
+    for (let station = 0; station < 3; station += 1) {
+      for (let j = 1; j < 8; j += 1) {
+        const first = station * 8
+        expectClose(armWeights.weights[(first + j) * 2]!, armWeights.weights[first * 2]!, 1e-5)
+        expectClose(armWeights.weights[(first + j) * 2 + 1]!, armWeights.weights[first * 2 + 1]!, 1e-5)
+      }
+    }
     let blended = false
     for (let v = 0; v < vertexCount; v += 1) {
       if (armWeights.weights[v * 2]! > 0.15 && armWeights.weights[v * 2 + 1]! > 0.15) {

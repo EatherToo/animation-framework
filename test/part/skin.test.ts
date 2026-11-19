@@ -19,6 +19,7 @@ function chain(): Skeleton {
     parent: PARENT_NONE,
     translationX: 0,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })
@@ -27,6 +28,7 @@ function chain(): Skeleton {
     parent: 0,
     translationX: 1,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })
@@ -35,6 +37,7 @@ function chain(): Skeleton {
     parent: 1,
     translationX: 1,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })
@@ -43,6 +46,7 @@ function chain(): Skeleton {
     parent: 0,
     translationX: 0,
     translationY: 1,
+    translationZ: 0,
     rotation: 0,
     length: 1,
   })

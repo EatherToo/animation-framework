@@ -46,6 +46,7 @@ function bone(name: string, parent: number): BoneSpec {
     parent,
     translationX: 0,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 0.1,
   }

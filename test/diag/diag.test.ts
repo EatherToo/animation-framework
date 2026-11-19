@@ -3,12 +3,11 @@ import { createBinding, createMemoryLayer, updateBinding } from '@/bind/bind'
 import { createHumanoid } from '@/body/assemble'
 import { debugView, readDiagnostics } from '@/diag/diag'
 import { evaluateFk } from '@/fk/evaluate'
-import { fillPose } from '@/fill/fill'
 import { setCrouch, setSpeed, stepParams } from '@/params/params'
 import { createSolver, stepSolver, type Solver } from '@/solve/solve'
 import { findBone } from '@/skeleton/skeleton'
-import { drawOrder } from '@/slot/slot'
 import { strokeContours } from '@/stroke/stroke'
+import { presentPose } from '../view/present'
 
 const DT = 1 / 60
 
@@ -47,8 +46,7 @@ describe('diagnostics', () => {
     const pose = Array.from(solver.pose.data)
     const layer = createMemoryLayer()
     const binding = createBinding(layer)
-    const order = drawOrder(new Array<string>(solver.compiled.slots.slots.length), solver.compiled.slots, 1)
-    const filled = fillPose(solver.compiled, solver.pose)
+    const { filled, order } = presentPose(solver.compiled, solver.pose, 0)
     updateBinding(binding, filled, strokeContours(filled, true), order)
     const kept = layer.objects.slice()
     const positions = Array.from(kept[0]!.positions)
@@ -57,6 +55,12 @@ describe('diagnostics', () => {
     const active = solver.plan.active
     expect(active).not.toBeNull()
     expect(view.bones).toHaveLength(solver.compiled.skeleton.boneCount - 1)
+    const thighL = findBone(solver.pose.skeleton, 'thighL')
+    const hipSegment = view.bones[thighL - 1]!
+    expect(hipSegment.z0).toBe(0)
+    expect(hipSegment.z1).toBeCloseTo(solver.compiled.proportions.hipOffsetZ, 6)
+    const shinSegment = view.bones[findBone(solver.pose.skeleton, 'shinL') - 1]!
+    expect(shinSegment.z0).toBe(shinSegment.z1)
     expect(view.contacts).toHaveLength(1)
     expect(view.contacts[0]!.x).toBeCloseTo(solver.plan.stanceX, 3)
     expect(view.prints).toHaveLength(2)
@@ -66,7 +70,7 @@ describe('diagnostics', () => {
     expect(view.wire[0]!.positions.length).toBe(solver.compiled.meshes.meshes[0]!.positions.length)
     expect(view.weights.length).toBeGreaterThan(0)
     for (const part of view.weights) {
-      expect(part.values.length).toBe(part.positions.length / 2)
+      expect(part.values.length).toBe(part.positions.length / 3)
       for (const value of part.values) {
         expect(value).toBeGreaterThanOrEqual(0)
         expect(value).toBeLessThanOrEqual(1)
@@ -74,8 +78,8 @@ describe('diagnostics', () => {
     }
 
     const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-    evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
-    const hip = findBone(solver.pose.skeleton, 'thighL') * 9
+    evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
+    const hip = thighL * 9
     const radius = solver.compiled.proportions.legLength
     expect(view.envelope.length).toBeGreaterThanOrEqual(8)
     const end = view.envelope[0]!

@@ -5,6 +5,7 @@ import {
   PARENT_NONE,
   MAX_BONES,
   addBone,
+  bindLateral,
   bindLength,
   bindRotation,
   bindTranslation,
@@ -24,6 +25,7 @@ function exampleChain(builder: SkeletonBuilder = createSkeletonBuilder()) {
     parent: PARENT_NONE,
     translationX: 0,
     translationY: 1,
+    translationZ: 0,
     rotation: 0,
     length: 0.2,
   })
@@ -32,6 +34,7 @@ function exampleChain(builder: SkeletonBuilder = createSkeletonBuilder()) {
     parent: 0,
     translationX: 0,
     translationY: -0.05,
+    translationZ: 0,
     rotation: -Math.PI / 2,
     length: 0.45,
   })
@@ -40,6 +43,7 @@ function exampleChain(builder: SkeletonBuilder = createSkeletonBuilder()) {
     parent: 1,
     translationX: 0.45,
     translationY: 0,
+    translationZ: 0,
     rotation: 0,
     length: 0.45,
   })
@@ -59,6 +63,7 @@ function bone(
     parent,
     translationX: tx,
     translationY: ty,
+    translationZ: 0,
     rotation,
     length,
   }
@@ -130,6 +135,12 @@ describe('skeleton', () => {
       addBone(builder, { ...bone('a', 0), translationX: Number.NaN }),
     ).toThrow()
     expect(() =>
+      addBone(builder, { ...bone('z', 0), translationZ: Number.NaN }),
+    ).toThrow('bind')
+    expect(() =>
+      addBone(builder, { ...bone('z', 0), translationZ: Number.POSITIVE_INFINITY }),
+    ).toThrow('bind')
+    expect(() =>
       addBone(builder, { ...bone('b', 0), rotation: Number.POSITIVE_INFINITY }),
     ).toThrow()
     expect(() =>
@@ -161,6 +172,7 @@ describe('skeleton', () => {
       parent: PARENT_NONE,
       translationX: 0,
       translationY: 0,
+      translationZ: 0,
       rotation: 3 * Math.PI,
       length: 0,
     })
@@ -169,6 +181,7 @@ describe('skeleton', () => {
       parent: 0,
       translationX: 0,
       translationY: 0,
+      translationZ: 0,
       rotation: -Math.PI,
       length: -0,
     })
@@ -193,5 +206,29 @@ describe('skeleton', () => {
     const returned = bindTranslation(out, sk, 0)
     expect(returned).toBe(out)
     expectSameBits(out, new Float32Array([0, 1]))
+  })
+
+  it('横向偏移单独存放，不进绑定平移', () => {
+    const builder = createSkeletonBuilder()
+    addBone(builder, bone('root', PARENT_NONE))
+    addBone(builder, { ...bone('left', 0), translationZ: 0.25 })
+    addBone(builder, { ...bone('right', 0), translationZ: -0.25 })
+    const sk = finishSkeleton(builder)
+    expect(sk.bindLateral).toHaveLength(3)
+    expect(bindLateral(sk, 0)).toBe(0)
+    expect(bindLateral(sk, 1)).toBe(0.25)
+    expect(bindLateral(sk, 2)).toBe(-0.25)
+    expect(sk.bindTranslation).toHaveLength(6)
+    const flat = finishSkeleton(
+      (() => {
+        const other = createSkeletonBuilder()
+        addBone(other, bone('root', PARENT_NONE))
+        addBone(other, bone('left', 0))
+        addBone(other, bone('right', 0))
+        return other
+      })(),
+    )
+    expectSameBits(sk.bindTranslation, flat.bindTranslation)
+    expect(skeleton.bindLateral).toBe(bindLateral)
   })
 })

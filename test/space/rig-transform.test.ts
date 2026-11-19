@@ -26,48 +26,41 @@ describe('rig-transform', () => {
     expect(space.orientationSign).toBe(orientationSign)
   })
 
-  it('setWorldFromRig：facing=±1 时 transformPoint 符合 T·S', () => {
-    // 角色空间点 (0.3, 0.9)
+  it('setWorldFromRig 只平移，不接收朝向或视角', () => {
     const local = setVec2(createVec2(), 0.3, 0.9)
     const out = createVec2()
-    const m = createMat3()
-    // 得到世界空间变换矩阵
-    setWorldFromRig(m, ORIGIN_5_2, 1)
-    // 变换到世界空间点 (5.3, 2.9)
+    const m = setWorldFromRig(createMat3(), ORIGIN_5_2)
     transformPoint(out, local, m)
     expectCloseArray(out, [5.3, 2.9])
-
-    setWorldFromRig(m, ORIGIN_5_2, -1)
-    transformPoint(out, local, m)
-    // 为什么是 (4.7, 2.9)？
-    // 因为 facing=-1 时，朝向与原点相反，所以结果是 (5 - 0.3, 2 + 0.9) = (4.7, 2.9)
-    expectCloseArray(out, [4.7, 2.9])
+    expect(setWorldFromRig.length).toBe(2)
+    expect(setRigFromWorld.length).toBe(2)
   })
 
   it('setWorldFromRig 写出列主序矩阵并返回 out', () => {
     const out = createMat3()
     out.fill(9)
 
-    expect(setWorldFromRig(out, ORIGIN_5_2, -1)).toBe(out)
-    expectCloseArray(out, [-1, 0, 0, 0, 1, 0, 5, 2, 1])
+    expect(setWorldFromRig(out, ORIGIN_5_2)).toBe(out)
+    expectSameBits(out, new Float32Array([1, 0, 0, 0, 1, 0, 5, 2, 1]))
   })
 
   it('setRigFromWorld 写出闭式逆矩阵并返回 out', () => {
     const out = createMat3()
+    out.fill(9)
 
-    expect(setRigFromWorld(out, ORIGIN_5_2, -1)).toBe(out)
-    expectCloseArray(out, [-1, 0, 0, 0, 1, 0, 5, -2, 1])
+    expect(setRigFromWorld(out, ORIGIN_5_2)).toBe(out)
+    expectSameBits(out, new Float32Array([1, 0, 0, 0, 1, 0, -5, -2, 1]))
   })
 
-  it('两种朝向、非零原点：worldFromRig 与 rigFromWorld 互逆', () => {
+  it('非零原点：worldFromRig 与 rigFromWorld 互逆', () => {
     const worldFromRig = createMat3()
     const rigFromWorld = createMat3()
     const product = createMat3()
     const identity = identityMat3(createMat3())
 
-    for (const facing of [1, -1] as const) {
-      setWorldFromRig(worldFromRig, ORIGIN_5_2, facing)
-      setRigFromWorld(rigFromWorld, ORIGIN_5_2, facing)
+    for (const origin of [ORIGIN_5_2, ORIGIN_3_N1, ORIGIN_10_N4]) {
+      setWorldFromRig(worldFromRig, origin)
+      setRigFromWorld(rigFromWorld, origin)
 
       multiplyMat3(product, worldFromRig, rigFromWorld)
       expectCloseArray(product, identity)
@@ -77,15 +70,15 @@ describe('rig-transform', () => {
     }
   })
 
-  it('orientationSign(setWorldFromRig) 等于 facing；单位矩阵为 1；奇异为 0', () => {
+  it('orientationSign(setWorldFromRig) 为 1；镜像为 -1；奇异为 0', () => {
     const m = createMat3()
 
-    for (const facing of [1, -1] as const) {
-      setWorldFromRig(m, ORIGIN_3_N1, facing)
-      expect(orientationSign(m)).toBe(facing)
-    }
-
+    setWorldFromRig(m, ORIGIN_3_N1)
+    expect(orientationSign(m)).toBe(1)
     expect(orientationSign(identityMat3(m))).toBe(1)
+
+    m[4] = -1
+    expect(orientationSign(m)).toBe(-1)
 
     m.fill(0)
     expect(orientationSign(m)).toBe(0)
@@ -94,7 +87,7 @@ describe('rig-transform', () => {
     expect(orientationSign(m)).toBe(0)
   })
 
-  it('facing=-1 时角色空间逆时针三角的有符号面积变负', () => {
+  it('角色空间逆时针三角经实例矩阵后有符号面积仍为正', () => {
     const a = setVec2(createVec2(), 0, 0)
     const b = setVec2(createVec2(), 1, 0)
     const c = setVec2(createVec2(), 0, 1)
@@ -103,23 +96,23 @@ describe('rig-transform', () => {
     const ac = subVec2(createVec2(), c, a)
     expect(crossVec2(ab, ac)).toBeGreaterThan(0)
 
-    const worldFromRig = setWorldFromRig(createMat3(), ORIGIN_10_N4, -1)
+    const worldFromRig = setWorldFromRig(createMat3(), ORIGIN_10_N4)
     const wa = transformPoint(createVec2(), a, worldFromRig)
     const wb = transformPoint(createVec2(), b, worldFromRig)
     const wc = transformPoint(createVec2(), c, worldFromRig)
 
     const wab = subVec2(createVec2(), wb, wa)
     const wac = subVec2(createVec2(), wc, wa)
-    expect(crossVec2(wab, wac)).toBeLessThan(0)
+    expect(crossVec2(wab, wac)).toBeGreaterThan(0)
   })
 
   it('相同输入重复运行，结果二进制相同', () => {
-    const a = setWorldFromRig(createMat3(), ORIGIN_5_2, -1)
-    const b = setWorldFromRig(createMat3(), ORIGIN_5_2, -1)
+    const a = setWorldFromRig(createMat3(), ORIGIN_5_2)
+    const b = setWorldFromRig(createMat3(), ORIGIN_5_2)
     expectSameBits(a, b)
 
-    const c = setRigFromWorld(createMat3(), ORIGIN_5_2, -1)
-    const d = setRigFromWorld(createMat3(), ORIGIN_5_2, -1)
+    const c = setRigFromWorld(createMat3(), ORIGIN_5_2)
+    const d = setRigFromWorld(createMat3(), ORIGIN_5_2)
     expectSameBits(c, d)
 
     expect(Object.is(orientationSign(a), orientationSign(b))).toBe(true)

@@ -1,10 +1,7 @@
-import { evaluateFk } from '../fk/evaluate'
-import { skinMesh } from '../skin/skin'
-import type { CompiledRig } from '../compile/compile'
 import type { Fill } from '../part/set'
-import type { Pose } from '../skeleton/pose'
+import type { ProjectedPart } from '../view/project'
 
-/** 一件已着上纯色的轮廓。 */
+/** 一件已着上纯色的平面轮廓。`positions` 交错存放屏幕横、屏幕竖。 */
 export type FilledPart = {
   readonly partId: string
   readonly positions: Float32Array
@@ -13,23 +10,24 @@ export type FilledPart = {
 }
 
 /**
- * 把姿态收成按部件着色的三角形。
- * @param compiled 编译结果
- * @param pose 当前偏移
+ * 给已投影的部件配上颜色。部件与颜色按登记下标对齐。
+ * 件数不一致时抛出 `part`，不返回半份列表。
+ * @param parts 投影后的平面三角形
+ * @param fills 各部件的纯色
  */
-export function fillPose(compiled: CompiledRig, pose: Pose): FilledPart[] {
-  const fk = new Float32Array(compiled.bindRig.length)
-  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+export function fillProjected(
+  parts: readonly ProjectedPart[],
+  fills: readonly Fill[],
+): FilledPart[] {
+  if (parts.length !== fills.length) throw new Error('part')
   const filled: FilledPart[] = []
-  for (let i = 0; i < compiled.meshes.meshes.length; i += 1) {
-    const mesh = compiled.meshes.meshes[i]!
-    const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, compiled, fk, i)
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i]!
     filled.push({
-      partId: mesh.partId,
-      positions,
-      indices: mesh.indices,
-      fill: compiled.parts.parts[i]!.fill,
+      partId: part.partId,
+      positions: part.positions.slice(),
+      indices: part.indices,
+      fill: fills[i]!,
     })
   }
   return filled

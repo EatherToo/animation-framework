@@ -2,7 +2,6 @@ import { describe, expect, it } from '@jest/globals'
 import { createBinding, createMemoryLayer, updateBinding } from '@/bind/bind'
 import { createHumanoid } from '@/body/assemble'
 import { createContactLog, pullContacts, recordContacts, type ContactLog } from '@/event/event'
-import { fillPose } from '@/fill/fill'
 import { setSpeed, stepParams } from '@/params/params'
 import { setPlacement } from '@/place/place'
 import { captureRenderFrame, type RenderFrame } from '@/render/sample'
@@ -11,7 +10,7 @@ import { createPose, setPoseRotation } from '@/skeleton/pose'
 import { findBone } from '@/skeleton/skeleton'
 import { createSolver, stepSolver, type Solver } from '@/solve/solve'
 import { strokeContours } from '@/stroke/stroke'
-import { drawOrder } from '@/slot/slot'
+import { presentPose } from '../view/present'
 
 const DT = 1 / 60
 
@@ -37,6 +36,7 @@ describe('snapshot', () => {
     const { solver, pair, log } = boot()
     expect(log.pending.length).toBeGreaterThan(0)
     const shot = captureSnapshot(solver, log, pair)
+    expect(JSON.stringify(Object.keys(shot))).not.toMatch(/view/i)
     const pose = Array.from(solver.pose.data)
     const speed = solver.params.current.speed
     const generation = solver.placement.generation
@@ -50,14 +50,13 @@ describe('snapshot', () => {
 
     const layer = createMemoryLayer()
     const binding = createBinding(layer)
-    const order = drawOrder(new Array<string>(solver.compiled.slots.slots.length), solver.compiled.slots, 1)
-    const filled = fillPose(solver.compiled, solver.pose)
+    const { filled, order } = presentPose(solver.compiled, solver.pose, 0)
     updateBinding(binding, filled, strokeContours(filled, true), order)
     const bent = createPose(solver.pose.skeleton)
     bent.data.set(solver.pose.data)
     setPoseRotation(bent, findBone(solver.pose.skeleton, 'shinL'), -0.6)
-    const next = fillPose(solver.compiled, bent)
-    updateBinding(binding, next, strokeContours(next, true), order)
+    const next = presentPose(solver.compiled, bent, 200)
+    updateBinding(binding, next.filled, strokeContours(next.filled, true), next.order)
     const shown = Array.from(layer.objects[0]!.positions)
 
     setPlacement(solver.placement, 4, 1, 0, generation + 1)

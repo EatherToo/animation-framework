@@ -13,19 +13,23 @@ export type BoneSpec = {
   readonly parent: number
   readonly translationX: number
   readonly translationY: number
+  /** 相对父骨的横向偏移，米。角色左侧为正。不进入 parentFromBone。 */
+  readonly translationZ: number
   readonly rotation: number
   readonly length: number
 }
 
 /**
  * 已完成、绑定不可再经本模块改写的骨骼树。
- * `bindTranslation` 步长 2：下标 `2i`、`2i+1` 为第 `i` 根的 `(x, y)`。
+ * `bindTranslation` 步长 2：下标 `2i`、`2i+1` 为第 `i` 根在父空间矢状面里的 `(x, y)`。
+ * `bindLateral[i]` 是第 `i` 根相对父骨的横向偏移。
  */
 export type Skeleton = {
   readonly boneCount: number
   readonly name: readonly string[]
   readonly parent: Int16Array
   readonly bindTranslation: Float32Array
+  readonly bindLateral: Float32Array
   readonly bindRotation: Float32Array
   readonly bindLength: Float32Array
 }
@@ -40,6 +44,7 @@ export type SkeletonBuilder = {
   parent: number[]
   translationX: number[]
   translationY: number[]
+  translationZ: number[]
   rotation: number[]
   length: number[]
 }
@@ -55,6 +60,7 @@ export function createSkeletonBuilder(): SkeletonBuilder {
     parent: [],
     translationX: [],
     translationY: [],
+    translationZ: [],
     rotation: [],
     length: [],
   }
@@ -85,10 +91,11 @@ export function addBone(builder: SkeletonBuilder, spec: BoneSpec): number {
     throw new Error('parent')
   }
 
-  const { translationX: tx, translationY: ty, rotation, length } = spec
+  const { translationX: tx, translationY: ty, translationZ: tz, rotation, length } = spec
   if (
     !Number.isFinite(tx) ||
     !Number.isFinite(ty) ||
+    !Number.isFinite(tz) ||
     !Number.isFinite(rotation) ||
     !Number.isFinite(length) ||
     length < 0
@@ -100,6 +107,7 @@ export function addBone(builder: SkeletonBuilder, spec: BoneSpec): number {
   builder.parent.push(spec.parent)
   builder.translationX.push(tx)
   builder.translationY.push(ty)
+  builder.translationZ.push(tz)
   builder.rotation.push(normalizeAngle(rotation))
   builder.length.push(length === 0 ? 0 : length)
   builder.count = index + 1
@@ -119,6 +127,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
   const name = builder.names.slice()
   const parent = new Int16Array(boneCount)
   const bindTranslation = new Float32Array(boneCount * 2)
+  const bindLateral = new Float32Array(boneCount)
   const bindRotation = new Float32Array(boneCount)
   const bindLength = new Float32Array(boneCount)
 
@@ -126,6 +135,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
     parent[i] = builder.parent[i]!
     bindTranslation[i * 2] = builder.translationX[i]!
     bindTranslation[i * 2 + 1] = builder.translationY[i]!
+    bindLateral[i] = builder.translationZ[i]!
     bindRotation[i] = builder.rotation[i]!
     bindLength[i] = builder.length[i]!
   }
@@ -137,6 +147,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
     name,
     parent,
     bindTranslation,
+    bindLateral,
     bindRotation,
     bindLength,
   }
@@ -184,6 +195,15 @@ export function bindTranslation(out: Vec2, skeleton: Skeleton, bone: number): Ve
   out[0] = skeleton.bindTranslation[i]!
   out[1] = skeleton.bindTranslation[i + 1]!
   return out
+}
+
+/**
+ * 相对父骨的绑定横向偏移（米）。
+ * @param skeleton 骨骼
+ * @param bone 骨头下标
+ */
+export function bindLateral(skeleton: Skeleton, bone: number): number {
+  return skeleton.bindLateral[bone]!
 }
 
 /**

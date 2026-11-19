@@ -9,7 +9,7 @@ function footY(solver: Solver, foot: 'left' | 'right'): number {
   const name = foot === 'left' ? 'footL' : 'footR'
   const bone = findBone(solver.pose.skeleton, name)
   const fk = new Float32Array(solver.pose.skeleton.boneCount * 9)
-  evaluateFk(fk, solver.compiled, solver.pose, solver.pose.skeleton.boneCount)
+  evaluateFk(fk, new Float32Array(solver.pose.skeleton.boneCount), solver.compiled, solver.pose, solver.pose.skeleton.boneCount)
   return fk[bone * 9 + 7]!
 }
 
