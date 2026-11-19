@@ -1,0 +1,9 @@
+{
+  "name": "@animation-framework/preview",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@animation-framework/render-engine": "workspace:*"
+  }
+}

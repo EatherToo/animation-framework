@@ -1,12 +1,12 @@
-import { createHumanoid } from '../src/body/assemble'
-import { compileHumanoid } from '../src/compile/compile'
-import { evaluateFk } from '../src/fk/evaluate'
-import { fillProjected, type FilledPart } from '../src/fill/fill'
-import { skinMesh } from '../src/skin/skin'
-import { createPose, setPoseRotation, zeroPose, type Pose } from '../src/skeleton/pose'
-import { findBone } from '../src/skeleton/skeleton'
-import { drawOrder } from '../src/slot/slot'
-import { depthOrder, projectParts, type ViewIndex } from '../src/view/project'
+import { createHumanoid } from '@animation-framework/render-engine/body/assemble'
+import { compileHumanoid } from '@animation-framework/render-engine/compile/compile'
+import { evaluateFk } from '@animation-framework/render-engine/fk/evaluate'
+import { fillProjected, type FilledPart } from '@animation-framework/render-engine/fill/fill'
+import { skinMesh } from '@animation-framework/render-engine/skin/skin'
+import { createPose, setPoseRotation, zeroPose, type Pose } from '@animation-framework/render-engine/skeleton/pose'
+import { findBone } from '@animation-framework/render-engine/skeleton/skeleton'
+import { drawOrder } from '@animation-framework/render-engine/slot/slot'
+import { depthOrder, projectParts, type ViewIndex } from '@animation-framework/render-engine/view/project'
 
 const JOINTS: readonly { bone: string; label: string }[] = [
   { bone: 'thighL', label: '左大腿' },
