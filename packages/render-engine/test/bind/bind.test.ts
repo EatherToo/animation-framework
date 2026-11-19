@@ -87,6 +87,6 @@ describe('bind', () => {
     expect(Array.from(fill.positions)).toEqual(
       Array.from(other.filled.find((part) => part.partId === 'legL')!.positions),
     )
-    expect(fill.positions.length).toBe(48)
+    expect(fill.positions.length).toBe(544)
   })
 })

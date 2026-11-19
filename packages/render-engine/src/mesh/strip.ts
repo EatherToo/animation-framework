@@ -30,16 +30,11 @@ export type StripSegment = {
   readonly radius: number
 }
 
-/** 圆管截面的采样数。 */
-export const TUBE_SIDES = 8
+/** 圆管截面的采样数。`θ = j · 2π / TUBE_SIDES`。 */
+export const TUBE_SIDES = 16
 
-const S = Math.SQRT1_2
-
-/** 第 `j` 个采样在矢状面侧向上的分量，`θ = j · π / 4`。 */
-const RING_SIDE: readonly number[] = [1, S, 0, -S, -1, -S, 0, S]
-
-/** 第 `j` 个采样在横向上的分量。 */
-const RING_LATERAL: readonly number[] = [0, S, 1, S, 0, -S, -1, -S]
+/** 每根骨头沿轴向切开的等长子段数。 */
+export const AXIAL_STEPS = 8
 
 /**
  * 把中心线段收成两端敞开的圆管。空段列表抛出 `segments`。
@@ -53,9 +48,10 @@ export function meshFromStrip(
   segments: readonly StripSegment[],
 ): Mesh {
   if (segments.length === 0) throw new Error('segments')
-  const stations = segments.length + 1
+  const intervals = segments.length * AXIAL_STEPS
+  const stations = intervals + 1
   const positions = new Float32Array(stations * TUBE_SIDES * 3)
-  const indices = new Uint16Array(segments.length * TUBE_SIDES * 6)
+  const indices = new Uint16Array(intervals * TUBE_SIDES * 6)
   writeTube(positions, indices, segments)
   return { partId, space, positions, indices }
 }
@@ -73,10 +69,11 @@ export function meshFromCappedTube(
   segments: readonly StripSegment[],
 ): Mesh {
   if (segments.length === 0) throw new Error('segments')
-  const stations = segments.length + 1
+  const intervals = segments.length * AXIAL_STEPS
+  const stations = intervals + 1
   const ring = stations * TUBE_SIDES
   const positions = new Float32Array((ring + 2) * 3)
-  const sides = segments.length * TUBE_SIDES * 6
+  const sides = intervals * TUBE_SIDES * 6
   const indices = new Uint16Array(sides + TUBE_SIDES * 6)
   writeTube(positions, indices, segments)
 
@@ -111,13 +108,33 @@ function writeTube(
   segments: readonly StripSegment[],
 ): void {
   const first = segments[0]!
-  writeStation(positions, 0, first.x0, first.y0, first.z0, first)
-  for (let i = 0; i < segments.length; i += 1) {
-    const seg = segments[i]!
-    writeStation(positions, i + 1, seg.x1, seg.y1, seg.z1, seg)
+  writeStation(positions, 0, first.x0, first.y0, first.z0, first.px, first.py, first.radius)
+
+  let station = 0
+  let radiusAtJoint = first.radius
+  for (let b = 0; b < segments.length; b += 1) {
+    const seg = segments[b]!
+    const radiusStart = b === 0 ? seg.radius : radiusAtJoint
+    const radiusEnd = seg.radius
+    for (let k = 1; k <= AXIAL_STEPS; k += 1) {
+      const t = k / AXIAL_STEPS
+      writeStation(
+        positions,
+        station + k,
+        seg.x0 + (seg.x1 - seg.x0) * t,
+        seg.y0 + (seg.y1 - seg.y0) * t,
+        seg.z0 + (seg.z1 - seg.z0) * t,
+        seg.px,
+        seg.py,
+        radiusStart * (1 - t) + radiusEnd * t,
+      )
+    }
+    station += AXIAL_STEPS
+    radiusAtJoint = radiusEnd
   }
 
-  for (let i = 0; i < segments.length; i += 1) {
+  const intervals = segments.length * AXIAL_STEPS
+  for (let i = 0; i < intervals; i += 1) {
     const near = i * TUBE_SIDES
     const far = near + TUBE_SIDES
     for (let j = 0; j < TUBE_SIDES; j += 1) {
@@ -139,14 +156,17 @@ function writeStation(
   x: number,
   y: number,
   z: number,
-  seg: StripSegment,
+  px: number,
+  py: number,
+  radius: number,
 ): void {
   for (let j = 0; j < TUBE_SIDES; j += 1) {
-    const side = seg.radius * RING_SIDE[j]!
+    const theta = (j * 2 * Math.PI) / TUBE_SIDES
+    const side = radius * Math.cos(theta)
     const base = (station * TUBE_SIDES + j) * 3
-    positions[base] = x + seg.px * side
-    positions[base + 1] = y + seg.py * side
-    positions[base + 2] = z + seg.radius * RING_LATERAL[j]!
+    positions[base] = x + px * side
+    positions[base + 1] = y + py * side
+    positions[base + 2] = z + radius * Math.sin(theta)
   }
 }
 
