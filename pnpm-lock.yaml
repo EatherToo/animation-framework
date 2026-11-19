@@ -7,6 +7,12 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
+  packages/render-engine:
     dependencies:
       gl-matrix:
         specifier: 3.4.4
@@ -30,6 +36,12 @@ importers:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
+
+  preview:
+    dependencies:
+      '@animation-framework/render-engine':
+        specifier: workspace:*
+        version: link:../packages/render-engine
 
 packages:
 

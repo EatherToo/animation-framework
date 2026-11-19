@@ -1,10 +1,10 @@
-import { createHumanoid } from '../src/body/assemble'
-import { evaluateFk } from '../src/fk/evaluate'
-import { setArmSwing, setBreath, setCrouch, setSpeed, setSpineBend, stepParams } from '../src/params/params'
-import { captureRenderFrame, sampleRender, type RenderFrame } from '../src/render/sample'
-import { bindLength, findBone } from '../src/skeleton/skeleton'
-import { createSolver, stepSolver } from '../src/solve/solve'
-import { isViewIndex, type ViewIndex } from '../src/view/project'
+import { createHumanoid } from '@animation-framework/render-engine/body/assemble'
+import { evaluateFk } from '@animation-framework/render-engine/fk/evaluate'
+import { setArmSwing, setBreath, setCrouch, setSpeed, setSpineBend, stepParams } from '@animation-framework/render-engine/params/params'
+import { captureRenderFrame, sampleRender, type RenderFrame } from '@animation-framework/render-engine/render/sample'
+import { bindLength, findBone } from '@animation-framework/render-engine/skeleton/skeleton'
+import { createSolver, stepSolver } from '@animation-framework/render-engine/solve/solve'
+import { isViewIndex, type ViewIndex } from '@animation-framework/render-engine/view/project'
 
 const DT = 1 / 60
 const BODY = 1.7
