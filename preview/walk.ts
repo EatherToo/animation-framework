@@ -1,12 +1,15 @@
 import { createBinding, createMemoryLayer, updateBinding } from '../src/bind/bind'
 import { createHumanoid } from '../src/body/assemble'
 import { evaluateFk } from '../src/fk/evaluate'
-import { fillPose } from '../src/fill/fill'
+import { fillProjected } from '../src/fill/fill'
 import { setArmSwing, setBreath, setCrouch, setSpeed, setSpineBend, stepParams } from '../src/params/params'
 import { captureRenderFrame, sampleRender, type RenderFrame } from '../src/render/sample'
 import { findBone } from '../src/skeleton/skeleton'
 import { createSolver, stepSolver } from '../src/solve/solve'
+import { createVec2 } from '../src/math/vec2'
+import { createWorldPoint, setWorldPoint, worldToRigPoint } from '../src/space/world-point'
 import { strokeContours } from '../src/stroke/stroke'
+import { VIEW_COUNT, depthOrder, isViewIndex, projectParts, projectPositions, type ViewIndex } from '../src/view/project'
 
 const DT = 1 / 60
 const MODE: Record<string, string> = {
@@ -26,13 +29,23 @@ const footR = findBone(solver.pose.skeleton, 'footR')
 const layer = createMemoryLayer()
 const binding = createBinding(layer)
 const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
+const lateral = new Float32Array(solver.compiled.skeleton.boneCount)
+const fills = solver.compiled.parts.parts.map((part) => part.fill)
+const hipOffsetZ = solver.compiled.proportions.hipOffsetZ
+const point = new Float32Array(3)
+const seen = new Float32Array(2)
+const rigPoint = createVec2()
+const worldPoint = createWorldPoint()
 
+const VIEW_NAME: Record<number, string> = { 0: '右侧', 90: '正面', 180: '左侧', 270: '背面' }
+
+let view: ViewIndex = 0
 let playing = true
 let accumulator = 0
 let last = performance.now()
 let flash = ''
 let flashUntil = 0
-const plants: { x: number; y: number }[] = []
+const plants: { x: number; y: number; z: number }[] = []
 let lastStance = Number.NaN
 
 setIntent(1.2)
@@ -64,7 +77,43 @@ crouch.addEventListener('input', () => {
   setCrouch(solver.params, value)
 })
 
+const viewInput = document.querySelector<HTMLInputElement>('#view')!
+const viewOut = document.querySelector<HTMLOutputElement>('#view-out')!
+viewInput.max = String(VIEW_COUNT - 1)
+viewInput.addEventListener('input', () => setView(Number(viewInput.value)))
+for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-view]')) {
+  button.addEventListener('click', () => setView(Number(button.dataset.view)))
+}
+setView(Number(new URLSearchParams(location.search).get('view') ?? 0))
+
 requestAnimationFrame(frame)
+
+/** 视角只在画面帧里用：不进固定步，也不改朝向。 */
+function setView(next: number): void {
+  view = isViewIndex(next) ? next : 0
+  viewInput.value = String(view)
+  viewOut.textContent = `${view}°`
+  for (const button of document.querySelectorAll<HTMLButtonElement>('button[data-view]')) {
+    button.setAttribute('aria-pressed', String(Number(button.dataset.view) === view))
+  }
+}
+
+/** 角色空间的一点按当前视角落到屏幕上。 */
+function screenOf(x: number, y: number, z: number): { x: number; y: number } {
+  point[0] = x
+  point[1] = y
+  point[2] = z
+  projectPositions(seen, point, view)
+  return { x: seen[0]!, y: seen[1]! }
+}
+
+/** 矢状面里的世界落点先换回角色空间，再按当前视角投影，最后加上放置原点。 */
+function screenOfWorld(x: number, y: number, z: number): { x: number; y: number } {
+  const origin = solver.placement.origin
+  worldToRigPoint(rigPoint, setWorldPoint(worldPoint, x, y), origin, after.facing)
+  const at = screenOf(rigPoint[0]!, rigPoint[1]!, z)
+  return { x: origin[0]! + at.x, y: origin[1]! + at.y }
+}
 
 function setIntent(speed: number): void {
   setSpeed(solver.params, speed)
@@ -88,7 +137,7 @@ function setIntent(speed: number): void {
 }
 
 function frame(now: number): void {
-  const elapsed = Math.min(0.05, (now - last) / 1000)
+  const elapsed = Math.max(0, Math.min(0.05, (now - last) / 1000))
   last = now
   if (playing) {
     accumulator += elapsed
@@ -109,7 +158,8 @@ function frame(now: number): void {
 function notePlant(): void {
   if (solver.plan.stanceX === lastStance) return
   lastStance = solver.plan.stanceX
-  plants.push({ x: solver.plan.stanceX, y: solver.plan.stanceY })
+  const z = solver.plan.stanceFoot === 'left' ? hipOffsetZ : -hipOffsetZ
+  plants.push({ x: solver.plan.stanceX, y: solver.plan.stanceY, z })
   if (plants.length > 14) plants.shift()
 }
 
@@ -126,6 +176,7 @@ function writeReadout(now: number): void {
   const mode = MODE[solver.gait.mode] ?? solver.gait.mode
   const speed = solver.params.current.speed
   const parts = [
+    `视角 <strong>${view}°</strong>${VIEW_NAME[view] ? ' ' + VIEW_NAME[view] : ''}`,
     `模式 <strong>${mode}</strong>`,
     `速度 <strong>${speed.toFixed(2)}</strong> m/s`,
   ]
@@ -150,24 +201,18 @@ function draw(): void {
 
   const alpha = Math.min(1, accumulator / DT)
   const sampled = sampleRender(solver.compiled, before, after, alpha)
-  const colors = fillPose(solver.compiled, sampled.pose)
-  updateBinding(
-    binding,
-    sampled.parts.map((part) => ({
-      partId: part.partId,
-      positions: part.positions,
-      indices: part.indices,
-      fill: colors.find((item) => item.partId === part.partId)!.fill,
-    })),
-    strokeContours(sampled.parts, true),
-    sampled.order,
-  )
-  evaluateFk(fk, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount)
-  const pelvisX = fk[6]!
+  const projected = projectParts(sampled.parts, view)
+  const filled = fillProjected(projected, fills)
+  const order = depthOrder(new Array<string>(projected.length), projected, sampled.order)
+  updateBinding(binding, filled, strokeContours(filled, true), order)
+  evaluateFk(fk, lateral, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount)
+  const origin = solver.placement.origin
+  const pelvisX = origin[0]! + screenOf(fk[6]!, fk[7]!, 0).x
 
   const viewHeight = 2.2
   const viewWidth = viewHeight * (width / height)
-  const x0 = pelvisX - viewWidth * 0.38
+  const ahead = screenOf(1, 0, 0).x
+  const x0 = pelvisX - viewWidth * (0.5 - 0.12 * ahead)
   const y0 = -0.32
   const scale = height / viewHeight
 
@@ -182,28 +227,42 @@ function draw(): void {
   ctx.strokeStyle = '#b7c3d0'
   ctx.stroke()
 
-  const firstMeter = Math.ceil(x0)
   ctx.font = `${12 / scale}px Palatino, serif`
   ctx.fillStyle = '#8ea0b3'
   ctx.textAlign = 'center'
-  for (let meter = firstMeter; meter < x0 + viewWidth; meter += 1) {
-    ctx.beginPath()
-    ctx.moveTo(meter, 0)
-    ctx.lineTo(meter, -0.06)
-    ctx.strokeStyle = '#d5dde6'
-    ctx.stroke()
-    ctx.save()
-    ctx.scale(1, -1)
-    ctx.fillText(String(meter), meter, 0.16)
-    ctx.restore()
+  const spacing = Math.abs(screenOfWorld(1, 0, 0).x - screenOfWorld(0, 0, 0).x)
+  if (spacing > 0.2) {
+    const walked = solver.plan.stanceX
+    for (let meter = Math.floor(walked - viewWidth / spacing); meter <= walked + viewWidth / spacing; meter += 1) {
+      const at = screenOfWorld(meter, 0, 0).x
+      if (at < x0 || at > x0 + viewWidth) continue
+      ctx.beginPath()
+      ctx.moveTo(at, 0)
+      ctx.lineTo(at, -0.06)
+      ctx.strokeStyle = '#d5dde6'
+      ctx.stroke()
+      ctx.save()
+      ctx.scale(1, -1)
+      ctx.fillText(String(meter), at, 0.16)
+      ctx.restore()
+    }
   }
 
-  for (const plant of plants) dot(ctx, plant.x, plant.y, 0.035, '#c5d0dc')
-  dot(ctx, solver.leftX, solver.leftY, 0.045, '#3d6f9c')
-  dot(ctx, solver.rightX, solver.rightY, 0.045, '#c47b3a')
+  for (const plant of plants) {
+    const at = screenOfWorld(plant.x, plant.y, plant.z)
+    dot(ctx, at.x, at.y, 0.035, '#c5d0dc')
+  }
+  const leftAt = screenOfWorld(solver.leftX, solver.leftY, hipOffsetZ)
+  const rightAt = screenOfWorld(solver.rightX, solver.rightY, -hipOffsetZ)
+  dot(ctx, leftAt.x, leftAt.y, 0.045, '#3d6f9c')
+  dot(ctx, rightAt.x, rightAt.y, 0.045, '#c47b3a')
   const active = solver.plan.active
-  if (active) ring(ctx, active.contactX, active.contactY, 0.07)
+  if (active) {
+    const target = screenOfWorld(active.contactX, active.contactY, active.foot === 'left' ? hipOffsetZ : -hipOffsetZ)
+    ring(ctx, target.x, target.y, 0.07)
+  }
 
+  ctx.translate(origin[0]!, origin[1]!)
   const drawn = layer.objects.slice().sort((a, b) => a.order - b.order)
   for (const object of drawn) {
     if (object.indices.length === 0) continue
