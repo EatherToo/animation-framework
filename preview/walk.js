@@ -6,6 +6,96 @@
       __defProp(target, name, { get: all[name], enumerable: true });
   };
 
+  // src/bind/bind.ts
+  var nextId = 1;
+  function createMemoryLayer() {
+    const layer2 = {
+      objects: [],
+      lost: false,
+      add(object2) {
+        layer2.objects.push(object2);
+      },
+      remove(object2) {
+        layer2.objects = layer2.objects.filter((item) => item !== object2);
+      }
+    };
+    return layer2;
+  }
+  function createBinding(layer2) {
+    return { layer: layer2, objects: [], lost: false, destroyed: false };
+  }
+  function rank(order, partId) {
+    const index = order.indexOf(partId);
+    return index < 0 ? order.length : index;
+  }
+  function writeBuffer(current, next) {
+    if (current.length === next.length) {
+      current.set(next);
+      return current;
+    }
+    return next.slice();
+  }
+  function writeIndices(current, next) {
+    if (current.length === next.length) {
+      current.set(next);
+      return current;
+    }
+    return next.slice();
+  }
+  function strokeMesh(part) {
+    const quads = part?.quads ?? [];
+    const positions = new Float32Array(quads.length * 8);
+    const indices = new Uint16Array(quads.length * 6);
+    for (let i = 0; i < quads.length; i += 1) {
+      positions.set(quads[i].positions, i * 8);
+      const offset = i * 4;
+      indices.set(quads[i].indices.map((index) => index + offset), i * 6);
+    }
+    return { positions, indices };
+  }
+  function updateBinding(binding2, fills, strokes, order) {
+    if (binding2.destroyed) throw new Error("destroyed");
+    if (binding2.lost || binding2.layer.lost) return;
+    if (binding2.objects.length === 0) {
+      for (const fill of fills) {
+        const placed = rank(order, fill.partId);
+        binding2.layer.add(object("fill", fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed));
+        const stroke = strokeMesh(strokes.find((item) => item.partId === fill.partId));
+        binding2.layer.add(object("stroke", fill.partId, stroke.positions, stroke.indices, null, placed + 0.5));
+      }
+      binding2.objects = binding2.layer.objects.filter((item) => !item.destroyed);
+      return;
+    }
+    for (const fill of fills) {
+      const target = binding2.objects.find((item) => item.kind === "fill" && item.partId === fill.partId);
+      if (target === void 0) throw new Error("part");
+      target.positions = writeBuffer(target.positions, fill.positions);
+      target.indices = writeIndices(target.indices, fill.indices);
+      target.color = fill.fill;
+      target.order = rank(order, fill.partId);
+      const stroke = binding2.objects.find((item) => item.kind === "stroke" && item.partId === fill.partId);
+      if (stroke === void 0) throw new Error("stroke");
+      const mesh = strokeMesh(strokes.find((item) => item.partId === fill.partId));
+      stroke.positions = writeBuffer(stroke.positions, mesh.positions);
+      stroke.indices = writeIndices(stroke.indices, mesh.indices);
+      stroke.order = target.order + 0.5;
+    }
+  }
+  function object(kind, partId, positions, indices, color, order) {
+    const created = {
+      id: `${kind}:${partId}:${nextId}`,
+      kind,
+      partId,
+      positions,
+      indices,
+      color,
+      order,
+      destroyed: false
+    };
+    nextId += 1;
+    return created;
+  }
+
   // src/math/angle.ts
   var TAU = Math.PI * 2;
   function normalizeAngle(rad) {
@@ -1255,18 +1345,18 @@
   }
 
   // src/skin/skin.ts
-  function skinMesh(out, compiled, fk, meshIndex) {
+  function skinMesh(out, compiled, fk2, meshIndex) {
     const mesh = compiled.meshes.meshes[meshIndex];
     if (mesh === void 0) throw new Error("mesh");
-    if (fk.length !== compiled.skeleton.boneCount * 9) throw new Error("fk");
+    if (fk2.length !== compiled.skeleton.boneCount * 9) throw new Error("fk");
     if (out.length !== mesh.positions.length) throw new Error("out");
     const corrected = new Float32Array(mesh.positions.length);
     applyCorrection(corrected, mesh.positions, compiled.correction);
     const part = compiled.parts.parts[meshIndex];
-    if (part.kind === "skinned") skinSkinned(out, compiled, fk, corrected, part);
-    else skinRigid(out, fk, corrected, part);
+    if (part.kind === "skinned") skinSkinned(out, compiled, fk2, corrected, part);
+    else skinRigid(out, fk2, corrected, part);
   }
-  function skinSkinned(out, compiled, fk, positions, part) {
+  function skinSkinned(out, compiled, fk2, positions, part) {
     const found = compiled.weights.weights.find((item) => item.partId === part.id);
     if (found === void 0) throw new Error("weight");
     const vertexCount = positions.length / 2;
@@ -1280,7 +1370,7 @@
         if (weight === 0) continue;
         const bone2 = part.bones[i];
         const local = apply(compiled.inverseBind, bone2, x, y);
-        const current = apply(fk, bone2, local.x, local.y);
+        const current = apply(fk2, bone2, local.x, local.y);
         sx += weight * current.x;
         sy += weight * current.y;
       }
@@ -1288,10 +1378,10 @@
       out[v * 2 + 1] = sy;
     }
   }
-  function skinRigid(out, fk, positions, part) {
+  function skinRigid(out, fk2, positions, part) {
     const vertexCount = positions.length / 2;
     for (let v = 0; v < vertexCount; v += 1) {
-      const current = apply(fk, part.bone, positions[v * 2], positions[v * 2 + 1]);
+      const current = apply(fk2, part.bone, positions[v * 2], positions[v * 2 + 1]);
       out[v * 2] = current.x;
       out[v * 2 + 1] = current.y;
     }
@@ -1306,13 +1396,13 @@
 
   // src/fill/fill.ts
   function fillPose(compiled, pose) {
-    const fk = new Float32Array(compiled.bindRig.length);
-    evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount);
+    const fk2 = new Float32Array(compiled.bindRig.length);
+    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
     const filled = [];
     for (let i = 0; i < compiled.meshes.meshes.length; i += 1) {
       const mesh = compiled.meshes.meshes[i];
       const positions = new Float32Array(mesh.positions.length);
-      skinMesh(positions, compiled, fk, i);
+      skinMesh(positions, compiled, fk2, i);
       filled.push({
         partId: mesh.partId,
         positions,
@@ -1386,6 +1476,738 @@
     for (const key of keys) {
       params.current[key] += (params.target[key] - params.current[key]) * k;
     }
+  }
+
+  // src/math/vec2.ts
+  function createVec2() {
+    return vec2_exports.create();
+  }
+  function setVec2(out, x, y) {
+    out[0] = x;
+    out[1] = y;
+    return out;
+  }
+
+  // src/foot/contact.ts
+  function ankleFromContact(out, contact, soleLocal2, pitch) {
+    assertPitch(pitch);
+    assertPoint(contact);
+    assertPoint(soleLocal2);
+    return writeRotated(out, soleLocal2[0], soleLocal2[1], pitch, contact[0], contact[1], -1);
+  }
+  function lowestSoleOffset(out, shape, pitch) {
+    assertPitch(pitch);
+    const soleY2 = shape.ankleHeight === 0 ? 0 : -shape.ankleHeight;
+    const qx = Math.fround(Math.sin(pitch) < 0 ? shape.toeForward : -shape.heelBack);
+    const qy = Math.fround(soleY2);
+    return writeRotated(out, qx, qy, pitch, 0, 0, 1);
+  }
+  function writeRotated(out, qx, qy, pitch, originX, originY, sign) {
+    const c = Math.cos(pitch);
+    const s = Math.sin(pitch);
+    const rx = c * qx - s * qy;
+    const ry = s * qx + c * qy;
+    return setVec2(out, originX + sign * rx, originY + sign * ry);
+  }
+  function assertPitch(pitch) {
+    if (!Number.isFinite(pitch)) throw new Error("pitch");
+  }
+  function assertPoint(point) {
+    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
+      throw new Error("point");
+    }
+  }
+
+  // src/foot/shape.ts
+  var HEEL_BACK_RATIO = 0.3;
+  var FLAT_PARAMETER = HEEL_BACK_RATIO / (HEEL_BACK_RATIO + 1);
+  function createFootShape(footLength, ankleHeight) {
+    if (!Number.isFinite(footLength) || footLength <= 0) {
+      throw new Error("footLength");
+    }
+    if (!Number.isFinite(ankleHeight) || ankleHeight < 0) {
+      throw new Error("ankleHeight");
+    }
+    const heelBack = HEEL_BACK_RATIO * footLength;
+    const toeForward = footLength;
+    return {
+      footLength,
+      ankleHeight,
+      heelBack,
+      toeForward,
+      soleLength: heelBack + toeForward
+    };
+  }
+  function soleLocal(out, shape, u) {
+    if (!Number.isFinite(u) || Object.is(u, -0) || u < 0 || u > 1) {
+      throw new Error("u");
+    }
+    const y = soleY(shape);
+    const x = u === 0 ? -shape.heelBack : u === 1 ? shape.toeForward : -shape.heelBack + u * shape.soleLength;
+    return setVec2(out, x, y);
+  }
+  function stationLocal(out, shape, station) {
+    const y = soleY(shape);
+    if (station === "heel") return setVec2(out, -shape.heelBack, y);
+    if (station === "flat") return setVec2(out, 0, y);
+    if (station === "toe") return setVec2(out, shape.toeForward, y);
+    throw new Error("station");
+  }
+  function soleY(shape) {
+    return shape.ankleHeight === 0 ? 0 : -shape.ankleHeight;
+  }
+
+  // src/ik/solve.ts
+  var HIT = 1e-4;
+  var DIRECTIONLESS = 1e-8;
+  function solveTwoBone(pose, compiled, chain3, targetX, targetY) {
+    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
+    const skeleton = compiled.skeleton;
+    assertChain(skeleton, chain3);
+    const length1 = bindLength(skeleton, chain3.root);
+    const length2 = bindLength(skeleton, chain3.mid);
+    if (!(length1 > 0) || !(length2 > 0)) throw new Error("length");
+    if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error("target");
+    const parent = parentOf(skeleton, chain3.root);
+    const fk2 = new Float32Array(skeleton.boneCount * 9);
+    const parentMatrix = parentMatrixOf(fk2, compiled, pose, parent);
+    const bind = bindTranslation(createVec2(), skeleton, chain3.root);
+    const hipX = parentMatrix[0] * bind[0] + parentMatrix[3] * bind[1] + parentMatrix[6];
+    const hipY = parentMatrix[1] * bind[0] + parentMatrix[4] * bind[1] + parentMatrix[7];
+    const parentAngle = Math.atan2(parentMatrix[1], parentMatrix[0]);
+    const bindRoot = bindRotation(skeleton, chain3.root);
+    const bindMid = bindRotation(skeleton, chain3.mid);
+    const offsetX = targetX - hipX;
+    const offsetY = targetY - hipY;
+    const distance2 = Math.hypot(offsetX, offsetY);
+    const targetAngle = distance2 < DIRECTIONLESS ? 0 : Math.atan2(offsetY, offsetX);
+    const solved = choose(
+      chain3,
+      distance2,
+      targetAngle,
+      length1,
+      length2,
+      hipX,
+      hipY,
+      targetX,
+      targetY,
+      parentAngle,
+      bindRoot,
+      bindMid
+    );
+    setPoseRotation(pose, chain3.root, solved.root);
+    setPoseRotation(pose, chain3.mid, solved.mid);
+    evaluateFk(fk2, compiled, pose, skeleton.boneCount);
+    const end = chain3.end * 9;
+    const error = Math.hypot(fk2[end + 6] - targetX, fk2[end + 7] - targetY);
+    return { reached: error <= HIT };
+  }
+  function assertChain(skeleton, chain3) {
+    const count = skeleton.boneCount;
+    const valid = Number.isInteger(chain3.root) && Number.isInteger(chain3.mid) && Number.isInteger(chain3.end) && chain3.root >= 0 && chain3.mid >= 0 && chain3.end >= 0 && chain3.root < count && chain3.mid < count && chain3.end < count && parentOf(skeleton, chain3.mid) === chain3.root && parentOf(skeleton, chain3.end) === chain3.mid && (chain3.bendSign === 1 || chain3.bendSign === -1) && Number.isFinite(chain3.romMin) && Number.isFinite(chain3.romMax) && chain3.romMin < chain3.romMax;
+    if (!valid) throw new Error("chain");
+  }
+  function parentMatrixOf(fk2, compiled, pose, parent) {
+    if (parent < 0) {
+      const identity2 = new Float32Array(9);
+      identity2[0] = 1;
+      identity2[4] = 1;
+      identity2[8] = 1;
+      return identity2;
+    }
+    const view = fk2.subarray(0, (parent + 1) * 9);
+    evaluateFk(view, compiled, pose, parent + 1);
+    return view.subarray(parent * 9, parent * 9 + 9);
+  }
+  function choose(chain3, distance2, targetAngle, length1, length2, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
+    const minDistance = Math.abs(length1 - length2);
+    const maxDistance = length1 + length2;
+    if (distance2 >= minDistance && distance2 <= maxDistance && distance2 >= DIRECTIONLESS) {
+      const alpha = angleAtRoot(length1, length2, distance2);
+      const preferred = placeSide(
+        chain3.bendSign,
+        alpha,
+        targetAngle,
+        length1,
+        hipX,
+        hipY,
+        targetX,
+        targetY,
+        parentAngle,
+        bindRoot,
+        bindMid
+      );
+      if (inRom(preferred.mid, chain3)) return preferred;
+      const opposite = placeSide(
+        chain3.bendSign === 1 ? -1 : 1,
+        alpha,
+        targetAngle,
+        length1,
+        hipX,
+        hipY,
+        targetX,
+        targetY,
+        parentAngle,
+        bindRoot,
+        bindMid
+      );
+      if (inRom(opposite.mid, chain3)) return opposite;
+      return aim(clamp(preferred.mid, chain3), targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
+    }
+    if (distance2 > maxDistance) {
+      const straight = normalizeAngle(-bindMid);
+      const mid = inRom(straight, chain3) ? straight : clamp(straight, chain3);
+      return aim(mid, targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
+    }
+    const folded = (chain3.bendSign > 0 ? -Math.PI : Math.PI) - bindMid;
+    return aim(clamp(folded, chain3), targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
+  }
+  function placeSide(bendSign, alpha, targetAngle, length1, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
+    const bone1 = targetAngle + bendSign * alpha;
+    const kneeX = hipX + length1 * Math.cos(bone1);
+    const kneeY = hipY + length1 * Math.sin(bone1);
+    const bone2 = Math.atan2(targetY - kneeY, targetX - kneeX);
+    return {
+      root: normalizeAngle(bone1 - parentAngle - bindRoot),
+      mid: normalizeAngle(bone2 - bone1 - bindMid)
+    };
+  }
+  function aim(mid, targetAngle, parentAngle, bindRoot, bindMid, length1, length2) {
+    const turn = bindMid + mid;
+    const localX = length1 + length2 * Math.cos(turn);
+    const localY = length2 * Math.sin(turn);
+    const bone1 = targetAngle - Math.atan2(localY, localX);
+    return {
+      root: normalizeAngle(bone1 - parentAngle - bindRoot),
+      mid: normalizeAngle(mid)
+    };
+  }
+  function angleAtRoot(length1, length2, distance2) {
+    const cosine = (length1 * length1 + distance2 * distance2 - length2 * length2) / (2 * length1 * distance2);
+    return Math.acos(Math.min(1, Math.max(-1, cosine)));
+  }
+  function inRom(angle2, chain3) {
+    return angle2 >= chain3.romMin && angle2 <= chain3.romMax;
+  }
+  function clamp(angle2, chain3) {
+    if (angle2 < chain3.romMin) return chain3.romMin;
+    if (angle2 > chain3.romMax) return chain3.romMax;
+    return angle2;
+  }
+
+  // src/modulate/modulate.ts
+  var CROUCH_DROP_RATIO = 0.25;
+  var BOB_RATIO = 0.01;
+  var ARM_SWING_ARC = 0.4;
+  function unit2(name, value) {
+    if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error(name);
+  }
+  function bone(pose, name) {
+    const index = findBone(pose.skeleton, name);
+    if (index === PARENT_NONE) throw new Error("bone");
+    return index;
+  }
+  function writePelvis(pose, legLength, crouch2, lean, phase, gait) {
+    unit2("crouch", crouch2);
+    if (!Number.isFinite(lean)) throw new Error("lean");
+    if (!Number.isFinite(phase)) throw new Error("phase");
+    if (!Number.isFinite(legLength) || legLength <= 0) throw new Error("legLength");
+    if (gait !== "stand" && gait !== "walk" && gait !== "run") throw new Error("gait");
+    const pelvis = bone(pose, "pelvis");
+    const sign = gait === "walk" ? 1 : gait === "run" ? -1 : 0;
+    const bob = sign * Math.sin(phase) * BOB_RATIO * legLength;
+    const kept = poseTranslation(createVec2(), pose, pelvis);
+    setPoseTranslation(pose, pelvis, kept[0], -crouch2 * CROUCH_DROP_RATIO * legLength + bob);
+    setPoseRotation(pose, pelvis, lean);
+  }
+  function writeUpper(pose, armSwing, spineBend, breath, phase) {
+    unit2("armSwing", armSwing);
+    unit2("spineBend", spineBend);
+    unit2("breath", breath);
+    if (!Number.isFinite(phase)) throw new Error("phase");
+    const spine = bone(pose, "spine");
+    const head = bone(pose, "head");
+    const armL = bone(pose, "upperArmL");
+    const armR = bone(pose, "upperArmR");
+    const swing = Math.sin(phase);
+    setPoseRotation(pose, spine, spineBend * 0.15 + breath * 0.02 * swing);
+    setPoseRotation(pose, armL, -armSwing * ARM_SWING_ARC * swing);
+    setPoseRotation(pose, armR, armSwing * ARM_SWING_ARC * swing);
+    setPoseRotation(pose, head, breath * 0.05 * swing);
+  }
+
+  // src/space/world-point.ts
+  function createWorldPoint() {
+    return new Float64Array(2);
+  }
+  function setWorldPoint(out, x, y) {
+    out[0] = x;
+    out[1] = y;
+    return out;
+  }
+  function rigToWorldPoint(out, p, origin, facing) {
+    const ox = origin[0];
+    const oy = origin[1];
+    const px = p[0];
+    const py = p[1];
+    out[0] = ox + facing * px;
+    out[1] = oy + py;
+    return out;
+  }
+  function worldToRigPoint(out, w, origin, facing) {
+    const ox = origin[0];
+    const oy = origin[1];
+    const wx = w[0];
+    const wy = w[1];
+    out[0] = facing * (wx - ox);
+    out[1] = wy - oy;
+    return out;
+  }
+
+  // src/place/place.ts
+  function createPlacement() {
+    return { origin: createWorldPoint(), groundY: 0, generation: 0 };
+  }
+  function finite2(name, value) {
+    if (!Number.isFinite(value)) throw new Error(name);
+  }
+  function setPlacement(placement, originX, originY, groundY, generation) {
+    finite2("originX", originX);
+    finite2("originY", originY);
+    finite2("groundY", groundY);
+    if (!Number.isInteger(generation) || generation < placement.generation) {
+      throw new Error("generation");
+    }
+    setWorldPoint(placement.origin, originX, originY);
+    placement.groundY = groundY;
+    placement.generation = generation;
+  }
+  function characterGroundY(placement) {
+    return placement.groundY - placement.origin[1];
+  }
+  function movedGeneration(previous, next) {
+    return next > previous;
+  }
+
+  // src/reach/reach.ts
+  function reachFootfall(compiled, pose, chain3, contactX, contactY, soleX, soleY2, pitch) {
+    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
+    assertPoint2(contactX, contactY, soleX, soleY2);
+    const scratch = createPose(pose.skeleton);
+    copyPose(scratch, pose);
+    const ankle = ankleFromContact(
+      createVec2(),
+      setVec2(createVec2(), contactX, contactY),
+      setVec2(createVec2(), soleX, soleY2),
+      pitch
+    );
+    const hip = chainRoot(compiled, scratch, chain3);
+    const solved = solveTwoBone(scratch, compiled, chain3, ankle[0], ankle[1]);
+    return pack(compiled, chain3, hip.x, hip.y, ankle[0], ankle[1], solved.reached);
+  }
+  function pack(compiled, chain3, hipX, hipY, ankleX, ankleY, reached2) {
+    const distance2 = Math.hypot(ankleX - hipX, ankleY - hipY);
+    const span = bindLength(compiled.skeleton, chain3.root) + bindLength(compiled.skeleton, chain3.mid);
+    return {
+      reached: reached2,
+      withinMargin: distance2 <= compiled.proportions.reachMargin * span,
+      distance: distance2
+    };
+  }
+  function chainRoot(compiled, pose, chain3) {
+    const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
+    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
+    const index = chain3.root * 9;
+    return { x: fk2[index + 6], y: fk2[index + 7] };
+  }
+  function assertPoint2(a, b, c, d) {
+    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || !Number.isFinite(d)) {
+      throw new Error("target");
+    }
+  }
+
+  // src/plan/plan.ts
+  var PLAN_HIP_DROP_RATIO = 0.12;
+  function footId(foot) {
+    if (foot !== "left" && foot !== "right") throw new Error("foot");
+    return foot;
+  }
+  function createStepPlan(stanceFoot, stanceX, stanceY) {
+    const foot = footId(stanceFoot);
+    if (!Number.isFinite(stanceX)) throw new Error("stanceX");
+    if (!Number.isFinite(stanceY)) throw new Error("stanceY");
+    return {
+      suspended: false,
+      nextFoot: foot === "left" ? "right" : "left",
+      active: null,
+      stanceFoot: foot,
+      stanceX,
+      stanceY
+    };
+  }
+  function assertCandidate(candidate) {
+    if (!Number.isFinite(candidate.cadence) || candidate.cadence < 0) throw new Error("cadence");
+    if (!Number.isFinite(candidate.stepLength)) throw new Error("stepLength");
+    if (!Number.isFinite(candidate.duty) || candidate.duty <= 0 || candidate.duty > 1) throw new Error("duty");
+  }
+  function reachable(compiled, pose, placement, facing, chain3, stanceX, stanceY, length2, groundY) {
+    const world = setWorldPoint(createWorldPoint(), stanceX + facing * length2, groundY);
+    const contact = worldToRigPoint(createVec2(), world, placement.origin, facing);
+    const stanceWorld = setWorldPoint(createWorldPoint(), stanceX, stanceY);
+    const stanceRig = worldToRigPoint(createVec2(), stanceWorld, placement.origin, facing);
+    const scratch = createPose(pose.skeleton);
+    copyPose(scratch, pose);
+    const bind = bindTranslation(createVec2(), compiled.skeleton, 0);
+    const drop = PLAN_HIP_DROP_RATIO * compiled.proportions.legLength;
+    setPoseTranslation(scratch, 0, (stanceRig[0] + contact[0]) / 2 - bind[0], -drop);
+    const result = reachFootfall(
+      compiled,
+      scratch,
+      chain3,
+      contact[0],
+      contact[1],
+      0,
+      -compiled.foot.ankleHeight,
+      0
+    );
+    return result.reached && result.withinMargin;
+  }
+  function underHip(compiled, chain3, placement, facing, stanceX) {
+    const pelvis = bindTranslation(createVec2(), compiled.skeleton, 0);
+    const hip = bindTranslation(createVec2(), compiled.skeleton, chain3.root);
+    const rigX = pelvis[0] + hip[0];
+    const world = setWorldPoint(createWorldPoint(), 0, 0);
+    world[0] = placement.origin[0] + facing * rigX;
+    return facing * (world[0] - stanceX);
+  }
+  function beginStep(plan, compiled, pose, placement, facing, candidate, chain3) {
+    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
+    if (!isFacing(facing)) throw new Error("facing");
+    assertCandidate(candidate);
+    if (plan.suspended || plan.active) return false;
+    if (candidate.cadence === 0 || candidate.stepLength === 0) return false;
+    const sign = candidate.stepLength > 0 ? 1 : -1;
+    let lo = 0;
+    let hi = Math.abs(candidate.stepLength);
+    for (let i = 0; i < 24; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (reachable(compiled, pose, placement, facing, chain3, plan.stanceX, plan.stanceY, sign * mid, placement.groundY)) {
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    let stepLength = sign * lo;
+    if (!reachable(
+      compiled,
+      pose,
+      placement,
+      facing,
+      chain3,
+      plan.stanceX,
+      plan.stanceY,
+      stepLength,
+      placement.groundY
+    )) {
+      stepLength = underHip(compiled, chain3, placement, facing, plan.stanceX);
+    }
+    const contactX = plan.stanceX + facing * stepLength;
+    plan.active = {
+      foot: plan.nextFoot,
+      duration: 1 / candidate.cadence,
+      stepLength,
+      duty: candidate.duty,
+      contactX,
+      contactY: placement.groundY,
+      generation: placement.generation
+    };
+    return true;
+  }
+  function finishStep(plan) {
+    if (!plan.active) throw new Error("active");
+    plan.stanceFoot = plan.active.foot;
+    plan.stanceX = plan.active.contactX;
+    plan.stanceY = plan.active.contactY;
+    plan.nextFoot = plan.active.foot === "left" ? "right" : "left";
+    plan.active = null;
+  }
+  function suspendPlan(plan) {
+    plan.suspended = true;
+  }
+  function resumePlan(plan) {
+    plan.suspended = false;
+  }
+
+  // src/slot/slot.ts
+  var SLOT_NONE = -1;
+  var MAX_SLOTS = 256;
+  var SIDES = ["left", "right", "center"];
+  function createSlotSetBuilder() {
+    return { finished: false, slots: [] };
+  }
+  function addSlot(builder, spec) {
+    if (builder.finished) throw new Error("slot set already finished");
+    if (builder.slots.length >= MAX_SLOTS) throw new Error("too many slots");
+    if (typeof spec.partId !== "string" || spec.partId.length === 0) throw new Error("id");
+    for (let i = 0; i < builder.slots.length; i += 1) {
+      if (builder.slots[i].partId === spec.partId) throw new Error("duplicate part id");
+    }
+    if (!Number.isInteger(spec.layer)) throw new Error("layer");
+    if (!SIDES.includes(spec.side)) throw new Error("side");
+    const index = builder.slots.length;
+    builder.slots.push({
+      partId: spec.partId,
+      layer: spec.layer,
+      side: spec.side
+    });
+    return index;
+  }
+  function finishSlotSet(builder) {
+    if (builder.finished) throw new Error("slot set already finished");
+    if (builder.slots.length === 0) throw new Error("empty slot set");
+    builder.finished = true;
+    return { slots: builder.slots.slice() };
+  }
+  function findSlot(set3, partId) {
+    for (let i = 0; i < set3.slots.length; i += 1) {
+      if (set3.slots[i].partId === partId) return i;
+    }
+    return SLOT_NONE;
+  }
+  function drawOrder(out, set3, facing) {
+    if (!isFacing(facing)) throw new Error("facing");
+    const count = set3.slots.length;
+    if (out.length !== count) throw new Error("order");
+    const order = new Array(count);
+    for (let i = 0; i < count; i += 1) order[i] = i;
+    const near2 = nearSide(facing);
+    const far = farSide(facing);
+    order.sort((a, b) => compareSlot(set3, a, b, near2, far));
+    for (let i = 0; i < count; i += 1) out[i] = set3.slots[order[i]].partId;
+    return out;
+  }
+  function compareSlot(set3, a, b, near2, far) {
+    const sa = set3.slots[a];
+    const sb = set3.slots[b];
+    if (sa.layer !== sb.layer) return sa.layer - sb.layer;
+    const bandA = band(sa.side, near2, far);
+    const bandB = band(sb.side, near2, far);
+    if (bandA !== bandB) return bandA - bandB;
+    return a - b;
+  }
+  function band(side, near2, far) {
+    if (side === far) return 0;
+    if (side === "center") return 1;
+    if (side === near2) return 2;
+    return 1;
+  }
+
+  // src/trajectory/trajectory.ts
+  var SWING_CLEARANCE = 0.05;
+  var ROLL_PITCH = 0.35;
+  function smoothstep(u) {
+    return u * u * (3 - 2 * u);
+  }
+  function bump(u) {
+    return 16 * u * u * (1 - u) * (1 - u);
+  }
+  function ankleAt(compiled, placement, facing, contactX, contactY, soleU, pitch) {
+    const contact = worldToRigPoint(
+      createVec2(),
+      setWorldPoint(createWorldPoint(), contactX, contactY),
+      placement.origin,
+      facing
+    );
+    const sole = soleLocal(createVec2(), compiled.foot, soleU);
+    const ankle = ankleFromContact(createVec2(), contact, sole, pitch);
+    return { ankleX: ankle[0], ankleY: ankle[1], pitch };
+  }
+  function raise(compiled, placement, target) {
+    const lowest = lowestSoleOffset(createVec2(), compiled.foot, target.pitch);
+    const floor2 = characterGroundY(placement);
+    const gap = floor2 - (target.ankleY + lowest[1]);
+    if (gap > 0) return { ...target, ankleY: target.ankleY + gap };
+    return target;
+  }
+  function footTarget(compiled, placement, facing, step, fromX, fromY, time) {
+    if (step.generation !== placement.generation) throw new Error("generation");
+    if (!isFacing(facing)) throw new Error("facing");
+    if (!Number.isFinite(fromX) || !Number.isFinite(fromY)) throw new Error("from");
+    if (!Number.isFinite(time) || time < 0 || time > step.duration) throw new Error("time");
+    const forward = step.stepLength >= 0;
+    const liftoff = step.duty * step.duration;
+    if (time < liftoff || liftoff >= step.duration) {
+      const u2 = liftoff === 0 ? 1 : Math.min(time / liftoff, 1);
+      const pitch = (forward ? 1 : -1) * ROLL_PITCH * (1 - 2 * u2);
+      const soleU = forward ? u2 : 1 - u2;
+      return ankleAt(compiled, placement, facing, fromX, fromY, soleU, pitch);
+    }
+    const u = (time - liftoff) / (step.duration - liftoff);
+    const start = ankleAt(compiled, placement, facing, fromX, fromY, forward ? 1 : 0, (forward ? -1 : 1) * ROLL_PITCH);
+    const end = ankleAt(
+      compiled,
+      placement,
+      facing,
+      step.contactX,
+      step.contactY,
+      forward ? 0 : 1,
+      (forward ? 1 : -1) * ROLL_PITCH
+    );
+    const s = smoothstep(u);
+    const blended = {
+      ankleX: start.ankleX + (end.ankleX - start.ankleX) * s,
+      ankleY: start.ankleY + (end.ankleY - start.ankleY) * s + SWING_CLEARANCE * bump(u),
+      pitch: start.pitch + (end.pitch - start.pitch) * s
+    };
+    return raise(compiled, placement, blended);
+  }
+
+  // src/render/sample.ts
+  function captureRenderFrame(solver2) {
+    const pose = createPose(solver2.pose.skeleton);
+    copyPose(pose, solver2.pose);
+    const active = solver2.plan.active;
+    return {
+      pose,
+      originX: solver2.placement.origin[0],
+      originY: solver2.placement.origin[1],
+      groundY: solver2.placement.groundY,
+      generation: solver2.placement.generation,
+      facing: solver2.params.current.facing,
+      crouch: solver2.params.current.crouch,
+      lean: solver2.params.current.lean,
+      armSwing: solver2.params.current.armSwing,
+      spineBend: solver2.params.current.spineBend,
+      breath: solver2.params.current.breath,
+      gait: solver2.gait.mode,
+      stepTime: solver2.stepTime,
+      step: active ? {
+        foot: active.foot,
+        duration: active.duration,
+        stepLength: active.stepLength,
+        duty: active.duty,
+        contactX: active.contactX,
+        contactY: active.contactY,
+        generation: active.generation
+      } : null,
+      stanceX: solver2.plan.stanceX,
+      stanceY: solver2.plan.stanceY,
+      leftX: solver2.leftX,
+      leftY: solver2.leftY,
+      rightX: solver2.rightX,
+      rightY: solver2.rightY,
+      recovering: solver2.recovery.active,
+      legL: solver2.legL,
+      legR: solver2.legR
+    };
+  }
+  function sameStep(before2, after2) {
+    if (before2.step === null || after2.step === null) return false;
+    return before2.step.foot === after2.step.foot && before2.step.contactX === after2.step.contactX && before2.step.contactY === after2.step.contactY && before2.step.duration === after2.step.duration;
+  }
+  function discontinuous(before2, after2) {
+    if (before2.facing !== after2.facing) return true;
+    if (after2.generation > before2.generation) return true;
+    if (!before2.recovering && after2.recovering) return true;
+    if ((before2.step !== null || after2.step !== null) && !sameStep(before2, after2)) return true;
+    return false;
+  }
+  function placementOf(frame2) {
+    const placement = createPlacement();
+    setPlacement(placement, frame2.originX, frame2.originY, frame2.groundY, frame2.generation);
+    return placement;
+  }
+  function planted(compiled, placement, facing, x, y) {
+    const contact = worldToRigPoint(
+      createVec2(),
+      setWorldPoint(createWorldPoint(), x, y),
+      placement.origin,
+      facing
+    );
+    const sole = stationLocal(createVec2(), compiled.foot, "flat");
+    const ankle = ankleFromContact(createVec2(), contact, sole, 0);
+    return { ankleX: ankle[0], ankleY: ankle[1], pitch: 0 };
+  }
+  function lerp2(a, b, alpha) {
+    return a + (b - a) * alpha;
+  }
+  function pelvisGait(mode) {
+    if (mode === "run") return "run";
+    if (mode === "stand") return "stand";
+    return "walk";
+  }
+  function chain(frame2, foot) {
+    return foot === "left" ? frame2.legL : frame2.legR;
+  }
+  function reSolve(compiled, before2, after2, alpha) {
+    const step = after2.step;
+    const time = before2.stepTime + (after2.stepTime - before2.stepTime) * alpha;
+    const placement = placementOf(after2);
+    const latched = {
+      foot: step.foot,
+      duration: step.duration,
+      stepLength: step.stepLength,
+      duty: step.duty,
+      contactX: step.contactX,
+      contactY: step.contactY,
+      generation: step.generation
+    };
+    const from = step.foot === "left" ? { x: after2.leftX, y: after2.leftY } : { x: after2.rightX, y: after2.rightY };
+    const swing = footTarget(compiled, placement, after2.facing, latched, from.x, from.y, time);
+    const stanceFoot = step.foot === "left" ? "right" : "left";
+    const stance = planted(compiled, placement, after2.facing, after2.stanceX, after2.stanceY);
+    const pose = createPose(compiled.skeleton);
+    const phase = Math.PI * 2 * time / step.duration;
+    const bind = bindTranslation(createVec2(), compiled.skeleton, 0);
+    const pelvisX = (swing.ankleX + stance.ankleX) / 2;
+    setPoseTranslation(pose, 0, pelvisX - bind[0], 0);
+    writePelvis(
+      pose,
+      compiled.proportions.legLength,
+      lerp2(before2.crouch, after2.crouch, alpha),
+      lerp2(before2.lean, after2.lean, alpha),
+      phase,
+      pelvisGait(after2.gait)
+    );
+    const kept = poseTranslation(createVec2(), pose, 0);
+    setPoseTranslation(pose, 0, kept[0], kept[1] - PLAN_HIP_DROP_RATIO * compiled.proportions.legLength);
+    solveTwoBone(pose, compiled, chain(after2, step.foot), swing.ankleX, swing.ankleY);
+    solveTwoBone(pose, compiled, chain(after2, stanceFoot), stance.ankleX, stance.ankleY);
+    setPoseRotation(pose, chain(after2, step.foot).end, swing.pitch);
+    setPoseRotation(pose, chain(after2, stanceFoot).end, stance.pitch);
+    writeUpper(
+      pose,
+      lerp2(before2.armSwing, after2.armSwing, alpha),
+      lerp2(before2.spineBend, after2.spineBend, alpha),
+      lerp2(before2.breath, after2.breath, alpha),
+      phase
+    );
+    return pose;
+  }
+  function present(compiled, pose, facing, snapped) {
+    const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
+    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
+    const parts = compiled.meshes.meshes.map((mesh, index) => {
+      const positions = new Float32Array(mesh.positions.length);
+      skinMesh(positions, compiled, fk2, index);
+      return { partId: mesh.partId, positions, indices: mesh.indices };
+    });
+    const order = drawOrder(new Array(compiled.slots.slots.length), compiled.slots, facing);
+    return { snapped, pose, parts, order };
+  }
+  function clonePose(pose) {
+    const copy3 = createPose(pose.skeleton);
+    copyPose(copy3, pose);
+    return copy3;
+  }
+  function sampleRender(compiled, before2, after2, alpha) {
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) throw new Error("alpha");
+    if (alpha === 0) return present(compiled, clonePose(before2.pose), before2.facing, false);
+    const jump2 = discontinuous(before2, after2);
+    if (alpha === 1 || jump2 || before2.step === null) {
+      return present(compiled, clonePose(after2.pose), after2.facing, jump2 && alpha < 1);
+    }
+    return present(compiled, reSolve(compiled, before2, after2, alpha), after2.facing, false);
   }
 
   // src/mesh/strip.ts
@@ -1711,119 +2533,6 @@
     return finishPartSet(builder);
   }
 
-  // src/math/vec2.ts
-  function createVec2() {
-    return vec2_exports.create();
-  }
-  function setVec2(out, x, y) {
-    out[0] = x;
-    out[1] = y;
-    return out;
-  }
-
-  // src/foot/shape.ts
-  var HEEL_BACK_RATIO = 0.3;
-  var FLAT_PARAMETER = HEEL_BACK_RATIO / (HEEL_BACK_RATIO + 1);
-  function createFootShape(footLength, ankleHeight) {
-    if (!Number.isFinite(footLength) || footLength <= 0) {
-      throw new Error("footLength");
-    }
-    if (!Number.isFinite(ankleHeight) || ankleHeight < 0) {
-      throw new Error("ankleHeight");
-    }
-    const heelBack = HEEL_BACK_RATIO * footLength;
-    const toeForward = footLength;
-    return {
-      footLength,
-      ankleHeight,
-      heelBack,
-      toeForward,
-      soleLength: heelBack + toeForward
-    };
-  }
-  function soleLocal(out, shape, u) {
-    if (!Number.isFinite(u) || Object.is(u, -0) || u < 0 || u > 1) {
-      throw new Error("u");
-    }
-    const y = soleY(shape);
-    const x = u === 0 ? -shape.heelBack : u === 1 ? shape.toeForward : -shape.heelBack + u * shape.soleLength;
-    return setVec2(out, x, y);
-  }
-  function stationLocal(out, shape, station) {
-    const y = soleY(shape);
-    if (station === "heel") return setVec2(out, -shape.heelBack, y);
-    if (station === "flat") return setVec2(out, 0, y);
-    if (station === "toe") return setVec2(out, shape.toeForward, y);
-    throw new Error("station");
-  }
-  function soleY(shape) {
-    return shape.ankleHeight === 0 ? 0 : -shape.ankleHeight;
-  }
-
-  // src/slot/slot.ts
-  var SLOT_NONE = -1;
-  var MAX_SLOTS = 256;
-  var SIDES = ["left", "right", "center"];
-  function createSlotSetBuilder() {
-    return { finished: false, slots: [] };
-  }
-  function addSlot(builder, spec) {
-    if (builder.finished) throw new Error("slot set already finished");
-    if (builder.slots.length >= MAX_SLOTS) throw new Error("too many slots");
-    if (typeof spec.partId !== "string" || spec.partId.length === 0) throw new Error("id");
-    for (let i = 0; i < builder.slots.length; i += 1) {
-      if (builder.slots[i].partId === spec.partId) throw new Error("duplicate part id");
-    }
-    if (!Number.isInteger(spec.layer)) throw new Error("layer");
-    if (!SIDES.includes(spec.side)) throw new Error("side");
-    const index = builder.slots.length;
-    builder.slots.push({
-      partId: spec.partId,
-      layer: spec.layer,
-      side: spec.side
-    });
-    return index;
-  }
-  function finishSlotSet(builder) {
-    if (builder.finished) throw new Error("slot set already finished");
-    if (builder.slots.length === 0) throw new Error("empty slot set");
-    builder.finished = true;
-    return { slots: builder.slots.slice() };
-  }
-  function findSlot(set3, partId) {
-    for (let i = 0; i < set3.slots.length; i += 1) {
-      if (set3.slots[i].partId === partId) return i;
-    }
-    return SLOT_NONE;
-  }
-  function drawOrder(out, set3, facing) {
-    if (!isFacing(facing)) throw new Error("facing");
-    const count = set3.slots.length;
-    if (out.length !== count) throw new Error("order");
-    const order2 = new Array(count);
-    for (let i = 0; i < count; i += 1) order2[i] = i;
-    const near = nearSide(facing);
-    const far = farSide(facing);
-    order2.sort((a, b) => compareSlot(set3, a, b, near, far));
-    for (let i = 0; i < count; i += 1) out[i] = set3.slots[order2[i]].partId;
-    return out;
-  }
-  function compareSlot(set3, a, b, near, far) {
-    const sa = set3.slots[a];
-    const sb = set3.slots[b];
-    if (sa.layer !== sb.layer) return sa.layer - sb.layer;
-    const bandA = band(sa.side, near, far);
-    const bandB = band(sb.side, near, far);
-    if (bandA !== bandB) return bandA - bandB;
-    return a - b;
-  }
-  function band(side, near, far) {
-    if (side === far) return 0;
-    if (side === "center") return 1;
-    if (side === near) return 2;
-    return 1;
-  }
-
   // src/slot/humanoid.ts
   var HUMANOID_SLOTS = [
     { partId: "legL", layer: 0, side: "left" },
@@ -1878,11 +2587,11 @@
       addEdge(edges, b, c);
       addEdge(edges, c, a);
     }
-    let boundary = 0;
+    let boundary2 = 0;
     for (const edge of edges.values()) {
-      if (edge.count === 1) boundary += 1;
+      if (edge.count === 1) boundary2 += 1;
     }
-    if (boundary === 0) throw new Error("boundary");
+    if (boundary2 === 0) throw new Error("boundary");
     const neighbors = Array.from({ length: triangleCount }, () => []);
     const used = /* @__PURE__ */ new Map();
     for (let t = 0; t < triangleCount; t += 1) {
@@ -2137,9 +2846,9 @@
       humanoid.chains.armR
     ];
     for (let i = 0; i < chains.length; i += 1) {
-      const chain2 = chains[i];
-      assertLink(humanoid.skeleton, chain2.root, chain2.mid);
-      assertLink(humanoid.skeleton, chain2.mid, chain2.end);
+      const chain3 = chains[i];
+      assertLink(humanoid.skeleton, chain3.root, chain3.mid);
+      assertLink(humanoid.skeleton, chain3.mid, chain3.end);
     }
   }
   function assertLink(skeleton, parent, child) {
@@ -2179,36 +2888,6 @@
       for (let k = 0; k < 9; k += 1) inverse2[dst + k] = inv[k];
     }
     return inverse2;
-  }
-
-  // src/foot/contact.ts
-  function ankleFromContact(out, contact, soleLocal2, pitch) {
-    assertPitch(pitch);
-    assertPoint(contact);
-    assertPoint(soleLocal2);
-    return writeRotated(out, soleLocal2[0], soleLocal2[1], pitch, contact[0], contact[1], -1);
-  }
-  function lowestSoleOffset(out, shape, pitch) {
-    assertPitch(pitch);
-    const soleY2 = shape.ankleHeight === 0 ? 0 : -shape.ankleHeight;
-    const qx = Math.fround(Math.sin(pitch) < 0 ? shape.toeForward : -shape.heelBack);
-    const qy = Math.fround(soleY2);
-    return writeRotated(out, qx, qy, pitch, 0, 0, 1);
-  }
-  function writeRotated(out, qx, qy, pitch, originX, originY, sign) {
-    const c = Math.cos(pitch);
-    const s = Math.sin(pitch);
-    const rx = c * qx - s * qy;
-    const ry = s * qx + c * qy;
-    return setVec2(out, originX + sign * rx, originY + sign * ry);
-  }
-  function assertPitch(pitch) {
-    if (!Number.isFinite(pitch)) throw new Error("pitch");
-  }
-  function assertPoint(point) {
-    if (!Number.isFinite(point[0]) || !Number.isFinite(point[1])) {
-      throw new Error("point");
-    }
   }
 
   // src/speed/speed.ts
@@ -2291,433 +2970,6 @@
     }
   }
 
-  // src/ik/solve.ts
-  var HIT = 1e-4;
-  var DIRECTIONLESS = 1e-8;
-  function solveTwoBone(pose, compiled, chain2, targetX, targetY) {
-    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
-    const skeleton = compiled.skeleton;
-    assertChain(skeleton, chain2);
-    const length1 = bindLength(skeleton, chain2.root);
-    const length2 = bindLength(skeleton, chain2.mid);
-    if (!(length1 > 0) || !(length2 > 0)) throw new Error("length");
-    if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error("target");
-    const parent = parentOf(skeleton, chain2.root);
-    const fk = new Float32Array(skeleton.boneCount * 9);
-    const parentMatrix = parentMatrixOf(fk, compiled, pose, parent);
-    const bind = bindTranslation(createVec2(), skeleton, chain2.root);
-    const hipX = parentMatrix[0] * bind[0] + parentMatrix[3] * bind[1] + parentMatrix[6];
-    const hipY = parentMatrix[1] * bind[0] + parentMatrix[4] * bind[1] + parentMatrix[7];
-    const parentAngle = Math.atan2(parentMatrix[1], parentMatrix[0]);
-    const bindRoot = bindRotation(skeleton, chain2.root);
-    const bindMid = bindRotation(skeleton, chain2.mid);
-    const offsetX = targetX - hipX;
-    const offsetY = targetY - hipY;
-    const distance2 = Math.hypot(offsetX, offsetY);
-    const targetAngle = distance2 < DIRECTIONLESS ? 0 : Math.atan2(offsetY, offsetX);
-    const solved = choose(
-      chain2,
-      distance2,
-      targetAngle,
-      length1,
-      length2,
-      hipX,
-      hipY,
-      targetX,
-      targetY,
-      parentAngle,
-      bindRoot,
-      bindMid
-    );
-    setPoseRotation(pose, chain2.root, solved.root);
-    setPoseRotation(pose, chain2.mid, solved.mid);
-    evaluateFk(fk, compiled, pose, skeleton.boneCount);
-    const end = chain2.end * 9;
-    const error = Math.hypot(fk[end + 6] - targetX, fk[end + 7] - targetY);
-    return { reached: error <= HIT };
-  }
-  function assertChain(skeleton, chain2) {
-    const count = skeleton.boneCount;
-    const valid = Number.isInteger(chain2.root) && Number.isInteger(chain2.mid) && Number.isInteger(chain2.end) && chain2.root >= 0 && chain2.mid >= 0 && chain2.end >= 0 && chain2.root < count && chain2.mid < count && chain2.end < count && parentOf(skeleton, chain2.mid) === chain2.root && parentOf(skeleton, chain2.end) === chain2.mid && (chain2.bendSign === 1 || chain2.bendSign === -1) && Number.isFinite(chain2.romMin) && Number.isFinite(chain2.romMax) && chain2.romMin < chain2.romMax;
-    if (!valid) throw new Error("chain");
-  }
-  function parentMatrixOf(fk, compiled, pose, parent) {
-    if (parent < 0) {
-      const identity2 = new Float32Array(9);
-      identity2[0] = 1;
-      identity2[4] = 1;
-      identity2[8] = 1;
-      return identity2;
-    }
-    const view = fk.subarray(0, (parent + 1) * 9);
-    evaluateFk(view, compiled, pose, parent + 1);
-    return view.subarray(parent * 9, parent * 9 + 9);
-  }
-  function choose(chain2, distance2, targetAngle, length1, length2, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
-    const minDistance = Math.abs(length1 - length2);
-    const maxDistance = length1 + length2;
-    if (distance2 >= minDistance && distance2 <= maxDistance && distance2 >= DIRECTIONLESS) {
-      const alpha = angleAtRoot(length1, length2, distance2);
-      const preferred = placeSide(
-        chain2.bendSign,
-        alpha,
-        targetAngle,
-        length1,
-        hipX,
-        hipY,
-        targetX,
-        targetY,
-        parentAngle,
-        bindRoot,
-        bindMid
-      );
-      if (inRom(preferred.mid, chain2)) return preferred;
-      const opposite = placeSide(
-        chain2.bendSign === 1 ? -1 : 1,
-        alpha,
-        targetAngle,
-        length1,
-        hipX,
-        hipY,
-        targetX,
-        targetY,
-        parentAngle,
-        bindRoot,
-        bindMid
-      );
-      if (inRom(opposite.mid, chain2)) return opposite;
-      return aim(clamp(preferred.mid, chain2), targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
-    }
-    if (distance2 > maxDistance) {
-      const straight = normalizeAngle(-bindMid);
-      const mid = inRom(straight, chain2) ? straight : clamp(straight, chain2);
-      return aim(mid, targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
-    }
-    const folded = (chain2.bendSign > 0 ? -Math.PI : Math.PI) - bindMid;
-    return aim(clamp(folded, chain2), targetAngle, parentAngle, bindRoot, bindMid, length1, length2);
-  }
-  function placeSide(bendSign, alpha, targetAngle, length1, hipX, hipY, targetX, targetY, parentAngle, bindRoot, bindMid) {
-    const bone1 = targetAngle + bendSign * alpha;
-    const kneeX = hipX + length1 * Math.cos(bone1);
-    const kneeY = hipY + length1 * Math.sin(bone1);
-    const bone2 = Math.atan2(targetY - kneeY, targetX - kneeX);
-    return {
-      root: normalizeAngle(bone1 - parentAngle - bindRoot),
-      mid: normalizeAngle(bone2 - bone1 - bindMid)
-    };
-  }
-  function aim(mid, targetAngle, parentAngle, bindRoot, bindMid, length1, length2) {
-    const turn = bindMid + mid;
-    const localX = length1 + length2 * Math.cos(turn);
-    const localY = length2 * Math.sin(turn);
-    const bone1 = targetAngle - Math.atan2(localY, localX);
-    return {
-      root: normalizeAngle(bone1 - parentAngle - bindRoot),
-      mid: normalizeAngle(mid)
-    };
-  }
-  function angleAtRoot(length1, length2, distance2) {
-    const cosine = (length1 * length1 + distance2 * distance2 - length2 * length2) / (2 * length1 * distance2);
-    return Math.acos(Math.min(1, Math.max(-1, cosine)));
-  }
-  function inRom(angle2, chain2) {
-    return angle2 >= chain2.romMin && angle2 <= chain2.romMax;
-  }
-  function clamp(angle2, chain2) {
-    if (angle2 < chain2.romMin) return chain2.romMin;
-    if (angle2 > chain2.romMax) return chain2.romMax;
-    return angle2;
-  }
-
-  // src/modulate/modulate.ts
-  var CROUCH_DROP_RATIO = 0.25;
-  var BOB_RATIO = 0.01;
-  var ARM_SWING_ARC = 0.4;
-  function unit2(name, value) {
-    if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error(name);
-  }
-  function bone(pose, name) {
-    const index = findBone(pose.skeleton, name);
-    if (index === PARENT_NONE) throw new Error("bone");
-    return index;
-  }
-  function writePelvis(pose, legLength, crouch2, lean, phase, gait) {
-    unit2("crouch", crouch2);
-    if (!Number.isFinite(lean)) throw new Error("lean");
-    if (!Number.isFinite(phase)) throw new Error("phase");
-    if (!Number.isFinite(legLength) || legLength <= 0) throw new Error("legLength");
-    if (gait !== "stand" && gait !== "walk" && gait !== "run") throw new Error("gait");
-    const pelvis = bone(pose, "pelvis");
-    const sign = gait === "walk" ? 1 : gait === "run" ? -1 : 0;
-    const bob = sign * Math.sin(phase) * BOB_RATIO * legLength;
-    const kept = poseTranslation(createVec2(), pose, pelvis);
-    setPoseTranslation(pose, pelvis, kept[0], -crouch2 * CROUCH_DROP_RATIO * legLength + bob);
-    setPoseRotation(pose, pelvis, lean);
-  }
-  function writeUpper(pose, armSwing, spineBend, breath, phase) {
-    unit2("armSwing", armSwing);
-    unit2("spineBend", spineBend);
-    unit2("breath", breath);
-    if (!Number.isFinite(phase)) throw new Error("phase");
-    const spine = bone(pose, "spine");
-    const head = bone(pose, "head");
-    const armL = bone(pose, "upperArmL");
-    const armR = bone(pose, "upperArmR");
-    const swing = Math.sin(phase);
-    setPoseRotation(pose, spine, spineBend * 0.15 + breath * 0.02 * swing);
-    setPoseRotation(pose, armL, -armSwing * ARM_SWING_ARC * swing);
-    setPoseRotation(pose, armR, armSwing * ARM_SWING_ARC * swing);
-    setPoseRotation(pose, head, breath * 0.05 * swing);
-  }
-
-  // src/space/world-point.ts
-  function createWorldPoint() {
-    return new Float64Array(2);
-  }
-  function setWorldPoint(out, x, y) {
-    out[0] = x;
-    out[1] = y;
-    return out;
-  }
-  function rigToWorldPoint(out, p, origin, facing) {
-    const ox = origin[0];
-    const oy = origin[1];
-    const px = p[0];
-    const py = p[1];
-    out[0] = ox + facing * px;
-    out[1] = oy + py;
-    return out;
-  }
-  function worldToRigPoint(out, w, origin, facing) {
-    const ox = origin[0];
-    const oy = origin[1];
-    const wx = w[0];
-    const wy = w[1];
-    out[0] = facing * (wx - ox);
-    out[1] = wy - oy;
-    return out;
-  }
-
-  // src/place/place.ts
-  function createPlacement() {
-    return { origin: createWorldPoint(), groundY: 0, generation: 0 };
-  }
-  function characterGroundY(placement) {
-    return placement.groundY - placement.origin[1];
-  }
-  function movedGeneration(previous, next) {
-    return next > previous;
-  }
-
-  // src/reach/reach.ts
-  function reachFootfall(compiled, pose, chain2, contactX, contactY, soleX, soleY2, pitch) {
-    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
-    assertPoint2(contactX, contactY, soleX, soleY2);
-    const scratch = createPose(pose.skeleton);
-    copyPose(scratch, pose);
-    const ankle = ankleFromContact(
-      createVec2(),
-      setVec2(createVec2(), contactX, contactY),
-      setVec2(createVec2(), soleX, soleY2),
-      pitch
-    );
-    const hip = chainRoot(compiled, scratch, chain2);
-    const solved = solveTwoBone(scratch, compiled, chain2, ankle[0], ankle[1]);
-    return pack(compiled, chain2, hip.x, hip.y, ankle[0], ankle[1], solved.reached);
-  }
-  function pack(compiled, chain2, hipX, hipY, ankleX, ankleY, reached2) {
-    const distance2 = Math.hypot(ankleX - hipX, ankleY - hipY);
-    const span = bindLength(compiled.skeleton, chain2.root) + bindLength(compiled.skeleton, chain2.mid);
-    return {
-      reached: reached2,
-      withinMargin: distance2 <= compiled.proportions.reachMargin * span,
-      distance: distance2
-    };
-  }
-  function chainRoot(compiled, pose, chain2) {
-    const fk = new Float32Array(compiled.skeleton.boneCount * 9);
-    evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount);
-    const index = chain2.root * 9;
-    return { x: fk[index + 6], y: fk[index + 7] };
-  }
-  function assertPoint2(a, b, c, d) {
-    if (!Number.isFinite(a) || !Number.isFinite(b) || !Number.isFinite(c) || !Number.isFinite(d)) {
-      throw new Error("target");
-    }
-  }
-
-  // src/plan/plan.ts
-  var PLAN_HIP_DROP_RATIO = 0.12;
-  function footId(foot) {
-    if (foot !== "left" && foot !== "right") throw new Error("foot");
-    return foot;
-  }
-  function createStepPlan(stanceFoot, stanceX, stanceY) {
-    const foot = footId(stanceFoot);
-    if (!Number.isFinite(stanceX)) throw new Error("stanceX");
-    if (!Number.isFinite(stanceY)) throw new Error("stanceY");
-    return {
-      suspended: false,
-      nextFoot: foot === "left" ? "right" : "left",
-      active: null,
-      stanceFoot: foot,
-      stanceX,
-      stanceY
-    };
-  }
-  function assertCandidate(candidate) {
-    if (!Number.isFinite(candidate.cadence) || candidate.cadence < 0) throw new Error("cadence");
-    if (!Number.isFinite(candidate.stepLength)) throw new Error("stepLength");
-    if (!Number.isFinite(candidate.duty) || candidate.duty <= 0 || candidate.duty > 1) throw new Error("duty");
-  }
-  function reachable(compiled, pose, placement, facing, chain2, stanceX, stanceY, length2, groundY) {
-    const world = setWorldPoint(createWorldPoint(), stanceX + facing * length2, groundY);
-    const contact = worldToRigPoint(createVec2(), world, placement.origin, facing);
-    const stanceWorld = setWorldPoint(createWorldPoint(), stanceX, stanceY);
-    const stanceRig = worldToRigPoint(createVec2(), stanceWorld, placement.origin, facing);
-    const scratch = createPose(pose.skeleton);
-    copyPose(scratch, pose);
-    const bind = bindTranslation(createVec2(), compiled.skeleton, 0);
-    const drop = PLAN_HIP_DROP_RATIO * compiled.proportions.legLength;
-    setPoseTranslation(scratch, 0, (stanceRig[0] + contact[0]) / 2 - bind[0], -drop);
-    const result = reachFootfall(
-      compiled,
-      scratch,
-      chain2,
-      contact[0],
-      contact[1],
-      0,
-      -compiled.foot.ankleHeight,
-      0
-    );
-    return result.reached && result.withinMargin;
-  }
-  function underHip(compiled, chain2, placement, facing, stanceX) {
-    const pelvis = bindTranslation(createVec2(), compiled.skeleton, 0);
-    const hip = bindTranslation(createVec2(), compiled.skeleton, chain2.root);
-    const rigX = pelvis[0] + hip[0];
-    const world = setWorldPoint(createWorldPoint(), 0, 0);
-    world[0] = placement.origin[0] + facing * rigX;
-    return facing * (world[0] - stanceX);
-  }
-  function beginStep(plan, compiled, pose, placement, facing, candidate, chain2) {
-    if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
-    if (!isFacing(facing)) throw new Error("facing");
-    assertCandidate(candidate);
-    if (plan.suspended || plan.active) return false;
-    if (candidate.cadence === 0 || candidate.stepLength === 0) return false;
-    const sign = candidate.stepLength > 0 ? 1 : -1;
-    let lo = 0;
-    let hi = Math.abs(candidate.stepLength);
-    for (let i = 0; i < 24; i += 1) {
-      const mid = (lo + hi) / 2;
-      if (reachable(compiled, pose, placement, facing, chain2, plan.stanceX, plan.stanceY, sign * mid, placement.groundY)) {
-        lo = mid;
-      } else {
-        hi = mid;
-      }
-    }
-    let stepLength = sign * lo;
-    if (!reachable(
-      compiled,
-      pose,
-      placement,
-      facing,
-      chain2,
-      plan.stanceX,
-      plan.stanceY,
-      stepLength,
-      placement.groundY
-    )) {
-      stepLength = underHip(compiled, chain2, placement, facing, plan.stanceX);
-    }
-    const contactX = plan.stanceX + facing * stepLength;
-    plan.active = {
-      foot: plan.nextFoot,
-      duration: 1 / candidate.cadence,
-      stepLength,
-      duty: candidate.duty,
-      contactX,
-      contactY: placement.groundY,
-      generation: placement.generation
-    };
-    return true;
-  }
-  function finishStep(plan) {
-    if (!plan.active) throw new Error("active");
-    plan.stanceFoot = plan.active.foot;
-    plan.stanceX = plan.active.contactX;
-    plan.stanceY = plan.active.contactY;
-    plan.nextFoot = plan.active.foot === "left" ? "right" : "left";
-    plan.active = null;
-  }
-  function suspendPlan(plan) {
-    plan.suspended = true;
-  }
-  function resumePlan(plan) {
-    plan.suspended = false;
-  }
-
-  // src/trajectory/trajectory.ts
-  var SWING_CLEARANCE = 0.05;
-  var ROLL_PITCH = 0.35;
-  function smoothstep(u) {
-    return u * u * (3 - 2 * u);
-  }
-  function bump(u) {
-    return 16 * u * u * (1 - u) * (1 - u);
-  }
-  function ankleAt(compiled, placement, facing, contactX, contactY, soleU, pitch) {
-    const contact = worldToRigPoint(
-      createVec2(),
-      setWorldPoint(createWorldPoint(), contactX, contactY),
-      placement.origin,
-      facing
-    );
-    const sole = soleLocal(createVec2(), compiled.foot, soleU);
-    const ankle = ankleFromContact(createVec2(), contact, sole, pitch);
-    return { ankleX: ankle[0], ankleY: ankle[1], pitch };
-  }
-  function raise(compiled, placement, target) {
-    const lowest = lowestSoleOffset(createVec2(), compiled.foot, target.pitch);
-    const floor2 = characterGroundY(placement);
-    const gap = floor2 - (target.ankleY + lowest[1]);
-    if (gap > 0) return { ...target, ankleY: target.ankleY + gap };
-    return target;
-  }
-  function footTarget(compiled, placement, facing, step, fromX, fromY, time) {
-    if (step.generation !== placement.generation) throw new Error("generation");
-    if (!isFacing(facing)) throw new Error("facing");
-    if (!Number.isFinite(fromX) || !Number.isFinite(fromY)) throw new Error("from");
-    if (!Number.isFinite(time) || time < 0 || time > step.duration) throw new Error("time");
-    const forward = step.stepLength >= 0;
-    const liftoff = step.duty * step.duration;
-    if (time < liftoff || liftoff >= step.duration) {
-      const u2 = liftoff === 0 ? 1 : Math.min(time / liftoff, 1);
-      const pitch = (forward ? 1 : -1) * ROLL_PITCH * (1 - 2 * u2);
-      const soleU = forward ? u2 : 1 - u2;
-      return ankleAt(compiled, placement, facing, fromX, fromY, soleU, pitch);
-    }
-    const u = (time - liftoff) / (step.duration - liftoff);
-    const start = ankleAt(compiled, placement, facing, fromX, fromY, forward ? 1 : 0, (forward ? -1 : 1) * ROLL_PITCH);
-    const end = ankleAt(
-      compiled,
-      placement,
-      facing,
-      step.contactX,
-      step.contactY,
-      forward ? 0 : 1,
-      (forward ? 1 : -1) * ROLL_PITCH
-    );
-    const s = smoothstep(u);
-    const blended = {
-      ankleX: start.ankleX + (end.ankleX - start.ankleX) * s,
-      ankleY: start.ankleY + (end.ankleY - start.ankleY) * s + SWING_CLEARANCE * bump(u),
-      pitch: start.pitch + (end.pitch - start.pitch) * s
-    };
-    return raise(compiled, placement, blended);
-  }
-
   // src/recover/recover.ts
   var RECOVER_STEP = 0.05;
   var RECOVER_DURATION = 0.3;
@@ -2737,7 +2989,7 @@
     if (foot !== "left" && foot !== "right") throw new Error("foot");
     return foot;
   }
-  function reachedAt(compiled, pose, placement, facing, chain2, x, y) {
+  function reachedAt(compiled, pose, placement, facing, chain3, x, y) {
     const rig = worldToRigPoint(
       createVec2(),
       setWorldPoint(createWorldPoint(), x, y),
@@ -2749,7 +3001,7 @@
     return reachFootfall(
       compiled,
       scratch,
-      chain2,
+      chain3,
       rig[0],
       rig[1],
       0,
@@ -2757,15 +3009,15 @@
       0
     ).reached;
   }
-  function underHip2(compiled, placement, facing, chain2) {
+  function underHip2(compiled, placement, facing, chain3) {
     const pelvis = bindTranslation(createVec2(), compiled.skeleton, 0);
-    const hip = bindTranslation(createVec2(), compiled.skeleton, chain2.root);
+    const hip = bindTranslation(createVec2(), compiled.skeleton, chain3.root);
     return {
       x: placement.origin[0] + facing * (pelvis[0] + hip[0]),
       y: placement.groundY
     };
   }
-  function beginRecovery(recovery, compiled, pose, placement, facing, chain2, foot, fromX, fromY, failedX, failedY, approachX, approachY) {
+  function beginRecovery(recovery, compiled, pose, placement, facing, chain3, foot, fromX, fromY, failedX, failedY, approachX, approachY) {
     if (pose.skeleton !== compiled.skeleton) throw new Error("pose");
     if (!isFacing(facing)) throw new Error("facing");
     const which = footOf(foot);
@@ -2781,14 +3033,14 @@
       const t = length2 === 0 ? 1 : Math.min(1, i * RECOVER_STEP / length2);
       const x = failedX + dx * t;
       const y = failedY + dy * t;
-      if (reachedAt(compiled, pose, placement, facing, chain2, x, y)) {
+      if (reachedAt(compiled, pose, placement, facing, chain3, x, y)) {
         foundX = x;
         foundY = y;
         break;
       }
     }
     if (!Number.isFinite(foundX)) {
-      const hip = underHip2(compiled, placement, facing, chain2);
+      const hip = underHip2(compiled, placement, facing, chain3);
       foundX = hip.x;
       foundY = hip.y;
     }
@@ -2841,11 +3093,11 @@
 
   // src/solve/solve.ts
   function footWorld(compiled, pose, bone2) {
-    const fk = new Float32Array(compiled.skeleton.boneCount * 9);
-    evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount);
+    const fk2 = new Float32Array(compiled.skeleton.boneCount * 9);
+    evaluateFk(fk2, compiled, pose, compiled.skeleton.boneCount);
     return {
-      x: fk[bone2 * 9 + 6],
-      y: fk[bone2 * 9 + 7] - compiled.foot.ankleHeight
+      x: fk2[bone2 * 9 + 6],
+      y: fk2[bone2 * 9 + 7] - compiled.foot.ankleHeight
     };
   }
   function createSolver(humanoid) {
@@ -2878,7 +3130,7 @@
       bindRightY: right.y
     };
   }
-  function chain(solver2, foot) {
+  function chain2(solver2, foot) {
     return foot === "left" ? solver2.legL : solver2.legR;
   }
   function plant(solver2, foot) {
@@ -2989,7 +3241,7 @@
     );
   }
   function reached(solver2, pose, foot, ankleX, ankleY) {
-    return solveTwoBone(pose, solver2.compiled, chain(solver2, foot), ankleX, ankleY).reached;
+    return solveTwoBone(pose, solver2.compiled, chain2(solver2, foot), ankleX, ankleY).reached;
   }
   function fail(solver2, step, candidate) {
     const from = plant(solver2, step.foot);
@@ -2999,7 +3251,7 @@
       solver2.pose,
       solver2.placement,
       facingOf(solver2),
-      chain(solver2, step.foot),
+      chain2(solver2, step.foot),
       step.foot,
       from.x,
       from.y,
@@ -3027,8 +3279,8 @@
     evaluateFk(new Float32Array(9), solver2.compiled, solver2.scratch, 1);
     if (!reached(solver2, solver2.scratch, step.foot, swing.ankleX, swing.ankleY)) return false;
     if (!reached(solver2, solver2.scratch, stanceFoot, stance.ankleX, stance.ankleY)) return false;
-    setPoseRotation(solver2.scratch, chain(solver2, step.foot).end, swing.pitch);
-    setPoseRotation(solver2.scratch, chain(solver2, stanceFoot).end, stance.pitch);
+    setPoseRotation(solver2.scratch, chain2(solver2, step.foot).end, swing.pitch);
+    setPoseRotation(solver2.scratch, chain2(solver2, stanceFoot).end, stance.pitch);
     const full = new Float32Array(solver2.compiled.skeleton.boneCount * 9);
     evaluateFk(full, solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
     writeUpper(
@@ -3053,8 +3305,8 @@
     const swingOk = reached(solver2, solver2.scratch, solver2.recovery.foot, swing.ankleX, swing.ankleY);
     const stanceOk = reached(solver2, solver2.scratch, stanceFoot, stance.ankleX, stance.ankleY);
     if (!swingOk || !stanceOk) return;
-    setPoseRotation(solver2.scratch, chain(solver2, solver2.recovery.foot).end, swing.pitch);
-    setPoseRotation(solver2.scratch, chain(solver2, stanceFoot).end, 0);
+    setPoseRotation(solver2.scratch, chain2(solver2, solver2.recovery.foot).end, swing.pitch);
+    setPoseRotation(solver2.scratch, chain2(solver2, stanceFoot).end, 0);
     const full = new Float32Array(solver2.compiled.skeleton.boneCount * 9);
     evaluateFk(full, solver2.compiled, solver2.scratch, solver2.compiled.skeleton.boneCount);
     writeUpper(solver2.scratch, solver2.params.current.armSwing, solver2.params.current.spineBend, solver2.params.current.breath, 0);
@@ -3092,7 +3344,7 @@
         solver2.placement,
         facingOf(solver2),
         candidate,
-        chain(solver2, solver2.plan.nextFoot)
+        chain2(solver2, solver2.plan.nextFoot)
       );
     }
     const step = solver2.plan.active;
@@ -3124,12 +3376,92 @@
           solver2.placement,
           facingOf(solver2),
           candidate,
-          chain(solver2, solver2.plan.nextFoot)
+          chain2(solver2, solver2.plan.nextFoot)
         );
       }
       return;
     }
     solver2.stepTime = nextTime;
+  }
+
+  // src/stroke/stroke.ts
+  var STROKE_WIDTH = 0.012;
+  var SEAM = 1e-4;
+  function strokeContours(parts, enabled, width = STROKE_WIDTH) {
+    if (!enabled) return [];
+    if (!Number.isFinite(width) || width <= 0) throw new Error("width");
+    const edges = [];
+    for (let part = 0; part < parts.length; part += 1) {
+      edges.push(...boundary(part, parts[part]));
+    }
+    const keep = edges.filter((edge, index) => !edges.some((other, otherIndex) => otherIndex !== index && edge.part !== other.part && seam(edge, other)));
+    const grouped = /* @__PURE__ */ new Map();
+    for (const edge of keep) {
+      const list = grouped.get(edge.part) ?? [];
+      list.push(edge);
+      grouped.set(edge.part, list);
+    }
+    return parts.map((part, index) => ({
+      partId: part.partId,
+      quads: (grouped.get(index) ?? []).map((edge) => quad(edge, width))
+    }));
+  }
+  function boundary(part, source) {
+    const counts = /* @__PURE__ */ new Map();
+    const indices = source.indices;
+    const positions = source.positions;
+    for (let i = 0; i < indices.length; i += 3) {
+      add3(counts, part, positions, indices[i], indices[i + 1]);
+      add3(counts, part, positions, indices[i + 1], indices[i + 2]);
+      add3(counts, part, positions, indices[i + 2], indices[i]);
+    }
+    const edges = [];
+    for (const item of counts.values()) {
+      if (item.count === 1) edges.push(item.edge);
+    }
+    return edges;
+  }
+  function add3(counts, part, positions, a, b) {
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    const found = counts.get(key);
+    if (found) {
+      found.count += 1;
+      return;
+    }
+    counts.set(key, {
+      count: 1,
+      edge: {
+        part,
+        x0: positions[a * 2],
+        y0: positions[a * 2 + 1],
+        x1: positions[b * 2],
+        y1: positions[b * 2 + 1]
+      }
+    });
+  }
+  function near(ax, ay, bx, by) {
+    return Math.hypot(ax - bx, ay - by) <= SEAM;
+  }
+  function seam(a, b) {
+    return near(a.x0, a.y0, b.x0, b.y0) && near(a.x1, a.y1, b.x1, b.y1) || near(a.x0, a.y0, b.x1, b.y1) && near(a.x1, a.y1, b.x0, b.y0);
+  }
+  function quad(edge, width) {
+    const dx = edge.x1 - edge.x0;
+    const dy = edge.y1 - edge.y0;
+    const length2 = Math.hypot(dx, dy) || 1;
+    const nx = dy / length2;
+    const ny = -dx / length2;
+    const half = width / 2;
+    const positions = new Float32Array(8);
+    write(positions, 0, edge.x0 + nx * half, edge.y0 + ny * half);
+    write(positions, 2, edge.x1 + nx * half, edge.y1 + ny * half);
+    write(positions, 4, edge.x1 - nx * half, edge.y1 - ny * half);
+    write(positions, 6, edge.x0 - nx * half, edge.y0 - ny * half);
+    return { positions, indices: Uint16Array.of(0, 1, 2, 0, 2, 3) };
+  }
+  function write(out, index, x, y) {
+    out[index] = x;
+    out[index + 1] = y;
   }
 
   // preview/walk.ts
@@ -3147,7 +3479,9 @@
   var readout = document.querySelector("#readout");
   var footL = findBone(solver.pose.skeleton, "footL");
   var footR = findBone(solver.pose.skeleton, "footR");
-  var order = new Array(solver.compiled.slots.slots.length);
+  var layer = createMemoryLayer();
+  var binding = createBinding(layer);
+  var fk = new Float32Array(solver.compiled.skeleton.boneCount * 9);
   var playing = true;
   var accumulator = 0;
   var last = performance.now();
@@ -3163,6 +3497,8 @@
       notePlant();
     }
   }
+  var before = captureRenderFrame(solver);
+  var after = before;
   document.querySelector("#stand").addEventListener("click", () => setIntent(0));
   document.querySelector("#walk").addEventListener("click", () => setIntent(1.2));
   document.querySelector("#run").addEventListener("click", () => setIntent(3));
@@ -3206,7 +3542,9 @@
     if (playing) {
       accumulator += elapsed;
       while (accumulator >= DT) {
+        before = after;
         stepSolver(solver, DT);
+        after = captureRenderFrame(solver);
         notePlant();
         noteEvents(now);
         accumulator -= DT;
@@ -3252,9 +3590,21 @@
     const width = canvas.width;
     const height = canvas.height;
     ctx.clearRect(0, 0, width, height);
-    const filled = fillPose(solver.compiled, solver.pose);
-    const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9);
-    evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount);
+    const alpha = Math.min(1, accumulator / DT);
+    const sampled = sampleRender(solver.compiled, before, after, alpha);
+    const colors = fillPose(solver.compiled, sampled.pose);
+    updateBinding(
+      binding,
+      sampled.parts.map((part) => ({
+        partId: part.partId,
+        positions: part.positions,
+        indices: part.indices,
+        fill: colors.find((item) => item.partId === part.partId).fill
+      })),
+      strokeContours(sampled.parts, true),
+      sampled.order
+    );
+    evaluateFk(fk, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount);
     const pelvisX = fk[6];
     const viewHeight = 2.2;
     const viewWidth = viewHeight * (width / height);
@@ -3290,21 +3640,20 @@
     dot2(ctx, solver.rightX, solver.rightY, 0.045, "#c47b3a");
     const active = solver.plan.active;
     if (active) ring(ctx, active.contactX, active.contactY, 0.07);
-    const facing = solver.params.current.facing;
-    for (const partId of drawOrder(order, solver.compiled.slots, facing)) {
-      const part = filled.find((item) => item.partId === partId);
-      if (part === void 0) continue;
-      const { r, g, b } = part.fill;
-      ctx.fillStyle = `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`;
+    const drawn = layer.objects.slice().sort((a, b) => a.order - b.order);
+    for (const object2 of drawn) {
+      if (object2.indices.length === 0) continue;
+      const color = object2.color;
+      ctx.fillStyle = color === null ? "#1c2430" : `rgb(${Math.round(color.r * 255)} ${Math.round(color.g * 255)} ${Math.round(color.b * 255)})`;
       ctx.beginPath();
-      const positions = part.positions;
-      const indices = part.indices;
+      const positions = object2.positions;
+      const indices = object2.indices;
       for (let i = 0; i < indices.length; i += 3) {
         const a = indices[i] * 2;
-        const b2 = indices[i + 1] * 2;
+        const b = indices[i + 1] * 2;
         const c = indices[i + 2] * 2;
         ctx.moveTo(positions[a], positions[a + 1]);
-        ctx.lineTo(positions[b2], positions[b2 + 1]);
+        ctx.lineTo(positions[b], positions[b + 1]);
         ctx.lineTo(positions[c], positions[c + 1]);
         ctx.closePath();
       }
@@ -3319,8 +3668,8 @@
     const lifted = active !== null && solver.stepTime > active.duty * active.duration && swing > stance + 0.02;
     ctx.fillText(lifted ? "\u6446\u52A8\u811A\u5DF2\u79BB\u5F00\u5730\u9762" : "\u84DD\u70B9\u5DE6\u811A\uFF0C\u6A59\u70B9\u53F3\u811A", 16, 24);
   }
-  function boneY(fk, bone2) {
-    return fk[bone2 * 9 + 7];
+  function boneY(fk2, bone2) {
+    return fk2[bone2 * 9 + 7];
   }
   function dot2(ctx, x, y, radius, color) {
     ctx.beginPath();

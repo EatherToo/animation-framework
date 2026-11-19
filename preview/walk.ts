@@ -1,10 +1,12 @@
+import { createBinding, createMemoryLayer, updateBinding } from '../src/bind/bind'
 import { createHumanoid } from '../src/body/assemble'
 import { evaluateFk } from '../src/fk/evaluate'
 import { fillPose } from '../src/fill/fill'
 import { setArmSwing, setBreath, setCrouch, setSpeed, setSpineBend, stepParams } from '../src/params/params'
-import { createSolver, stepSolver, type Solver } from '../src/solve/solve'
+import { captureRenderFrame, sampleRender, type RenderFrame } from '../src/render/sample'
 import { findBone } from '../src/skeleton/skeleton'
-import { drawOrder } from '../src/slot/slot'
+import { createSolver, stepSolver } from '../src/solve/solve'
+import { strokeContours } from '../src/stroke/stroke'
 
 const DT = 1 / 60
 const MODE: Record<string, string> = {
@@ -21,7 +23,9 @@ const canvas = document.querySelector<HTMLCanvasElement>('#stage')!
 const readout = document.querySelector<HTMLElement>('#readout')!
 const footL = findBone(solver.pose.skeleton, 'footL')
 const footR = findBone(solver.pose.skeleton, 'footR')
-const order = new Array<string>(solver.compiled.slots.slots.length)
+const layer = createMemoryLayer()
+const binding = createBinding(layer)
+const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
 
 let playing = true
 let accumulator = 0
@@ -39,6 +43,8 @@ if (jump > 0) {
     notePlant()
   }
 }
+let before: RenderFrame = captureRenderFrame(solver)
+let after: RenderFrame = before
 
 document.querySelector('#stand')!.addEventListener('click', () => setIntent(0))
 document.querySelector('#walk')!.addEventListener('click', () => setIntent(1.2))
@@ -87,7 +93,9 @@ function frame(now: number): void {
   if (playing) {
     accumulator += elapsed
     while (accumulator >= DT) {
+      before = after
       stepSolver(solver, DT)
+      after = captureRenderFrame(solver)
       notePlant()
       noteEvents(now)
       accumulator -= DT
@@ -140,9 +148,21 @@ function draw(): void {
   const height = canvas.height
   ctx.clearRect(0, 0, width, height)
 
-  const filled = fillPose(solver.compiled, solver.pose)
-  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
+  const alpha = Math.min(1, accumulator / DT)
+  const sampled = sampleRender(solver.compiled, before, after, alpha)
+  const colors = fillPose(solver.compiled, sampled.pose)
+  updateBinding(
+    binding,
+    sampled.parts.map((part) => ({
+      partId: part.partId,
+      positions: part.positions,
+      indices: part.indices,
+      fill: colors.find((item) => item.partId === part.partId)!.fill,
+    })),
+    strokeContours(sampled.parts, true),
+    sampled.order,
+  )
+  evaluateFk(fk, solver.compiled, sampled.pose, solver.compiled.skeleton.boneCount)
   const pelvisX = fk[6]!
 
   const viewHeight = 2.2
@@ -184,15 +204,17 @@ function draw(): void {
   const active = solver.plan.active
   if (active) ring(ctx, active.contactX, active.contactY, 0.07)
 
-  const facing = solver.params.current.facing
-  for (const partId of drawOrder(order, solver.compiled.slots, facing)) {
-    const part = filled.find((item) => item.partId === partId)
-    if (part === undefined) continue
-    const { r, g, b } = part.fill
-    ctx.fillStyle = `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)})`
+  const drawn = layer.objects.slice().sort((a, b) => a.order - b.order)
+  for (const object of drawn) {
+    if (object.indices.length === 0) continue
+    const color = object.color
+    ctx.fillStyle =
+      color === null
+        ? '#1c2430'
+        : `rgb(${Math.round(color.r * 255)} ${Math.round(color.g * 255)} ${Math.round(color.b * 255)})`
     ctx.beginPath()
-    const positions = part.positions
-    const indices = part.indices
+    const positions = object.positions
+    const indices = object.indices
     for (let i = 0; i < indices.length; i += 3) {
       const a = indices[i]! * 2
       const b = indices[i + 1]! * 2
