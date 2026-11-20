@@ -1,7 +1,8 @@
 import { BONE_NAMES, createHumanoid, type BoneId } from '@animation-framework/render-engine/body'
 import { compileHumanoid, type CompiledRig } from '@animation-framework/render-engine/compile'
 import { evaluateFk } from '@animation-framework/render-engine/fk'
-import { fillProjected, type FilledPart } from '@animation-framework/render-engine/fill'
+import { fillProjected } from '@animation-framework/render-engine/fill'
+import { sampleTexture, textureProjected, triangleUv, type TexturedPart } from '@animation-framework/render-engine/texture'
 import {
   createPose,
   setPoseRotation,
@@ -19,7 +20,6 @@ const FRONT_VIEW = 90
 const FACING = 1
 const BACKGROUND = '#5c5c5c'
 const STROKE = '#141414'
-const EDGE = '#141414'
 const STEP = 5
 
 type Axis = 'rotation' | 'swing' | 'twist'
@@ -78,7 +78,10 @@ const readouts = new Map<string, HTMLElement>()
 
 mountPose(panel)
 new ResizeObserver(() => draw()).observe(canvas.parentElement ?? canvas)
-draw()
+void loadGrayTextures().then(() => {
+  texturesReady = true
+  draw()
+})
 
 function mountPose(root: HTMLElement): void {
   const title = document.createElement('h1')
@@ -162,7 +165,69 @@ function writeReadout(control: Control): void {
   readout.textContent = `${formatDeg(Number(slider.value))} · 可活动 ${formatDeg(control.min)} ~ ${formatDeg(control.max)}`
 }
 
+let texturesReady = false
+
+type InstalledTexture = {
+  readonly width: number
+  readonly height: number
+  readonly rgb: Uint8Array
+}
+
+async function loadGrayTextures(): Promise<void> {
+  const response = await fetch('./textures/manifest.json')
+  if (!response.ok) throw new Error('texture')
+  const manifest = (await response.json()) as {
+    parts: readonly { partId: string; count: number }[]
+  }
+  const byId = new Map(compiled.meshes.meshes.map((mesh) => [mesh.partId, mesh]))
+  const jobs: { partId: string; index: number }[] = []
+  for (const part of manifest.parts) {
+    const mesh = byId.get(part.partId)
+    if (mesh === undefined || mesh.indices.length / 3 !== part.count) throw new Error('texture')
+    for (let index = 0; index < part.count; index += 1) jobs.push({ partId: part.partId, index })
+  }
+  const decoded = new Map<string, InstalledTexture[]>()
+  for (const part of manifest.parts) decoded.set(part.partId, new Array(part.count))
+  const scratch = document.createElement('canvas')
+  const scratchCtx = scratch.getContext('2d', { willReadFrequently: true })
+  if (scratchCtx === null) throw new Error('2d')
+  const batch = 24
+  for (let start = 0; start < jobs.length; start += batch) {
+    const slice = jobs.slice(start, start + batch)
+    const bitmaps = await Promise.all(
+      slice.map(async (job) => {
+        const image = await fetch(`./textures/${job.partId}/${job.index}.png`)
+        if (!image.ok) throw new Error('texture')
+        return createImageBitmap(await image.blob())
+      }),
+    )
+    for (let i = 0; i < slice.length; i += 1) {
+      const bitmap = bitmaps[i]!
+      const job = slice[i]!
+      if (scratch.width !== bitmap.width || scratch.height !== bitmap.height) {
+        scratch.width = bitmap.width
+        scratch.height = bitmap.height
+      }
+      scratchCtx.drawImage(bitmap, 0, 0)
+      const pixels = scratchCtx.getImageData(0, 0, bitmap.width, bitmap.height).data
+      const rgb = new Uint8Array(bitmap.width * bitmap.height * 3)
+      for (let pixel = 0; pixel < bitmap.width * bitmap.height; pixel += 1) {
+        rgb[pixel * 3] = pixels[pixel * 4]!
+        rgb[pixel * 3 + 1] = pixels[pixel * 4 + 1]!
+        rgb[pixel * 3 + 2] = pixels[pixel * 4 + 2]!
+      }
+      decoded.get(job.partId)![job.index] = { width: bitmap.width, height: bitmap.height, rgb }
+      bitmap.close()
+    }
+  }
+  for (const part of manifest.parts) {
+    const textures = decoded.get(part.partId)!
+    ;(byId.get(part.partId) as { textures: InstalledTexture[] }).textures = textures
+  }
+}
+
 function draw(): void {
+  if (!texturesReady) return
   const stage = canvas!.parentElement
   const cssWidth = stage?.clientWidth ?? window.innerWidth
   const cssHeight = stage?.clientHeight ?? window.innerHeight
@@ -180,6 +245,7 @@ function draw(): void {
     projected,
     compiled.parts.parts.map((part) => part.fill),
   )
+  const textured = textureProjected(compiled, projected)
   const stroked = strokeContours(filled, true)
   const order = depthOrder(new Array<string>(projected.length), projected, tie)
   const frame = fit(restFrame, canvas!.width, canvas!.height)
@@ -187,16 +253,74 @@ function draw(): void {
   ctx!.setTransform(1, 0, 0, 1, 0, 0)
   ctx!.fillStyle = BACKGROUND
   ctx!.fillRect(0, 0, canvas!.width, canvas!.height)
+  const pixels = ctx!.getImageData(0, 0, canvas!.width, canvas!.height)
+  paintTextures(textured, order, frame, pixels)
+  ctx!.putImageData(pixels, 0, 0)
   const byFill = new Map(filled.map((part) => [part.partId, part]))
   const byStroke = new Map(stroked.map((part) => [part.partId, part]))
   for (let i = 0; i < order.length; i += 1) {
     const id = order[i]!
     const part = byFill.get(id)
     if (part === undefined) continue
-    paintPart(part, frame)
-    paintEdges(part, frame)
     const contour = byStroke.get(id)
     if (contour !== undefined) paintStroke(contour, frame)
+  }
+}
+
+function paintTextures(
+  parts: readonly TexturedPart[],
+  order: readonly string[],
+  frame: Frame,
+  image: ImageData,
+): void {
+  const uv = new Float32Array(2)
+  const corners = new Float32Array(6)
+  const byId = new Map(parts.map((part) => [part.partId, part]))
+  const width = image.width
+  const height = image.height
+  const data = image.data
+  for (let i = 0; i < order.length; i += 1) {
+    const part = byId.get(order[i]!)
+    if (part === undefined || part.textures.length === 0) continue
+    const positions = part.positions
+    const indices = part.indices
+    for (let t = 0; t < indices.length; t += 3) {
+      const ia = indices[t]!
+      const ib = indices[t + 1]!
+      const ic = indices[t + 2]!
+      const ax = frame.originX + positions[ia * 2]! * frame.scale
+      const ay = frame.originY - positions[ia * 2 + 1]! * frame.scale
+      const bx = frame.originX + positions[ib * 2]! * frame.scale
+      const by = frame.originY - positions[ib * 2 + 1]! * frame.scale
+      const cx = frame.originX + positions[ic * 2]! * frame.scale
+      const cy = frame.originY - positions[ic * 2 + 1]! * frame.scale
+      const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+      if (Math.abs(denom) <= 1e-8) continue
+      const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)))
+      const maxX = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)))
+      const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)))
+      const maxY = Math.min(height - 1, Math.ceil(Math.max(ay, by, cy)))
+      corners.set(part.uvs.subarray(t * 2, t * 2 + 6))
+      const texture = part.textures[part.triangleTexture[t / 3]!]
+      if (texture === undefined) continue
+      for (let y = minY; y <= maxY; y += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          const px = x + 0.5
+          const py = y + 0.5
+          const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom
+          const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom
+          const w2 = 1 - w0 - w1
+          if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue
+          triangleUv(uv, ax, ay, bx, by, cx, cy, px, py, corners)
+          const color = sampleTexture(texture, uv[0]!, uv[1]!)
+          const pixel = (y * width + x) * 4
+          data[pixel] = Math.round(color.r * 255)
+          data[pixel + 1] = Math.round(color.g * 255)
+          data[pixel + 2] = Math.round(color.b * 255)
+          data[pixel + 3] = 255
+        }
+      }
+    }
   }
 }
 
@@ -209,39 +333,6 @@ function applyPose(): void {
     else if (control.axis === 'swing') setPoseSwing(pose, bone, radians)
     else setPoseTwist(pose, bone, radians)
   }
-}
-
-function paintPart(part: FilledPart, frame: Frame): void {
-  const color = part.fill
-  ctx!.fillStyle = `rgb(${Math.round(color.r * 255)} ${Math.round(color.g * 255)} ${Math.round(color.b * 255)})`
-  const positions = part.positions
-  const indices = part.indices
-  for (let t = 0; t < indices.length; t += 3) {
-    ctx!.beginPath()
-    move(positions, frame, indices[t]!)
-    line(positions, frame, indices[t + 1]!)
-    line(positions, frame, indices[t + 2]!)
-    ctx!.closePath()
-    ctx!.fill()
-  }
-}
-
-function paintEdges(part: FilledPart, frame: Frame): void {
-  const context = ctx!
-  context.strokeStyle = EDGE
-  context.lineWidth = Math.max(1, window.devicePixelRatio || 1)
-  context.lineJoin = 'miter'
-  context.miterLimit = 2
-  const positions = part.positions
-  const indices = part.indices
-  context.beginPath()
-  for (let t = 0; t < indices.length; t += 3) {
-    move(positions, frame, indices[t]!)
-    line(positions, frame, indices[t + 1]!)
-    line(positions, frame, indices[t + 2]!)
-    context.closePath()
-  }
-  context.stroke()
 }
 
 function paintStroke(part: StrokePart, frame: Frame): void {
