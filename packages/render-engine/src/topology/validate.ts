@@ -61,7 +61,11 @@ export function validateMesh(mesh: Mesh): void {
       stack.push(other)
     }
   }
-  if (visited !== triangleCount) throw new Error('connectivity')
+  if (visited === triangleCount) return
+  // 手是几段各自闭合的圆管。只有每条边都被两个三角形共用时，才允许多个连通块。
+  for (const edge of edges.values()) {
+    if (edge.count !== 2) throw new Error('connectivity')
+  }
 }
 
 function crossLength(positions: Float32Array, indices: Uint16Array, triangle: number): number {

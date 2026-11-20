@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
+import type { RadiusProfile } from '@/body/proportions'
 import { compileHumanoid } from '@/compile/compile'
 import * as entry from '@/index'
 import { createPose, setPoseRotation } from '@/skeleton/pose'
@@ -202,12 +203,12 @@ describe('view', () => {
       return { min, max }
     }
     const p = compiled.proportions
-    expectClose(span(front, 'armL').max, p.shoulderOffsetZ + p.upperArmRadius, 1e-5)
-    expectClose(span(front, 'armR').min, -p.shoulderOffsetZ - p.upperArmRadius, 1e-5)
-    expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighRadius)
-    expectClose(span(front, 'footL').max, p.hipOffsetZ + p.footRadius, 1e-5)
-    expectClose(span(front, 'torso').max, p.chestRadius, 1e-5)
-    expectClose(span(side, 'armR').max - span(side, 'armR').min, 2 * p.upperArmRadius, 1e-5)
+    expectClose(span(front, 'armL').max, p.shoulderOffsetZ + p.upperArmProfile[0]!.radius, 1e-5)
+    expectClose(span(front, 'armR').min, -p.shoulderOffsetZ - p.upperArmProfile[0]!.radius, 1e-5)
+    expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighProfile[0]!.radius)
+    expectClose(span(front, 'footL').max, p.hipOffsetZ + widestStation(p.footHalfWidth), 1e-5)
+    expectClose(span(front, 'torso').max, widestStation(p.chestProfile), 1e-5)
+    expectClose(span(side, 'armR').max - span(side, 'armR').min, 2 * p.upperArmProfile[0]!.radius, 1e-5)
   })
 
   it('投影后的三角形都不是顺时针，索引只换同一个三角形里的两个', () => {
@@ -295,3 +296,20 @@ describe('view', () => {
     expect(kept).toEqual(['x', 'y'])
   })
 })
+
+function widestStation(profile: RadiusProfile): number {
+  let max = 0
+  for (let k = 0; k <= 8; k += 1) max = Math.max(max, profileAt(profile, k / 8))
+  return max
+}
+
+function profileAt(profile: RadiusProfile, t: number): number {
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const u = (t - left.t) / (right.t - left.t)
+    return left.radius * (1 - u) + right.radius * u
+  }
+  throw new Error('radius')
+}

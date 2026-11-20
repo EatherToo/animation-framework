@@ -1,3 +1,4 @@
+import type { RadiusProfile, RadiusSample } from '../body/proportions'
 import type { Fill } from '../part/set'
 import { createMeshTextures, type Texture } from './texture'
 
@@ -33,7 +34,13 @@ export type StripSegment = {
   readonly z1: number
   readonly px: number
   readonly py: number
-  readonly radius: number
+  readonly profile: RadiusProfile
+}
+
+/** 星形截面相对中心线的偏移。`along` 沿段的侧向，`lateral` 沿横向。 */
+export type SectionOffset = {
+  readonly along: number
+  readonly lateral: number
 }
 
 /** 圆管截面的采样数。`θ = j · 2π / TUBE_SIDES`。 */
@@ -110,38 +117,130 @@ export function meshFromCappedTube(
   return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
 }
 
+/**
+ * 沿一条直线放样星形截面，两端加盖。盖心是该站采样的平均位置。
+ * @param section `t` 为 0 到 1，`theta` 为截面角
+ */
+export function meshFromCappedSection(
+  partId: string,
+  space: MeshSpace,
+  x0: number,
+  y0: number,
+  z0: number,
+  x1: number,
+  y1: number,
+  z1: number,
+  section: (t: number, theta: number) => SectionOffset,
+  fill: Fill,
+): Mesh {
+  const dx = x1 - x0
+  const dy = y1 - y0
+  const len = Math.hypot(dx, dy)
+  if (!(len > 0)) throw new Error('segments')
+  const px = -dy / len
+  const py = dx / len
+  const ring = (AXIAL_STEPS + 1) * TUBE_SIDES
+  const positions = new Float32Array((ring + 2) * 3)
+  const sides = AXIAL_STEPS * TUBE_SIDES * 6
+  const indices = new Uint16Array(sides + TUBE_SIDES * 6)
+  for (let k = 0; k <= AXIAL_STEPS; k += 1) {
+    const t = k / AXIAL_STEPS
+    const x = x0 + dx * t
+    const y = y0 + dy * t
+    const z = z0 + (z1 - z0) * t
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      const theta = (j * 2 * Math.PI) / TUBE_SIDES
+      const offset = section(t, theta)
+      writeOffset(positions, k, j, x, y, z, px, py, offset.along, offset.lateral)
+    }
+  }
+  writeIntervals(indices, AXIAL_STEPS)
+  writeCap(positions, indices, 0, ring, sides, false)
+  writeCap(positions, indices, AXIAL_STEPS, ring + 1, sides + TUBE_SIDES * 3, true)
+  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
+}
+
 function writeTube(
   positions: Float32Array,
   indices: Uint16Array,
   segments: readonly StripSegment[],
 ): void {
-  const first = segments[0]!
-  writeStation(positions, 0, first.x0, first.y0, first.z0, first.px, first.py, first.radius)
-
-  let station = 0
-  let radiusAtJoint = first.radius
+  let previousEnd = Number.NaN
   for (let b = 0; b < segments.length; b += 1) {
     const seg = segments[b]!
-    const radiusStart = b === 0 ? seg.radius : radiusAtJoint
-    const radiusEnd = seg.radius
-    for (let k = 1; k <= AXIAL_STEPS; k += 1) {
+    const startRadius = radiusAt(seg.profile, 0)
+    if (b > 0 && Math.abs(previousEnd - startRadius) > 1e-6) throw new Error('radius')
+    previousEnd = radiusAt(seg.profile, 1)
+    for (let k = b === 0 ? 0 : 1; k <= AXIAL_STEPS; k += 1) {
       const t = k / AXIAL_STEPS
-      writeStation(
-        positions,
-        station + k,
-        seg.x0 + (seg.x1 - seg.x0) * t,
-        seg.y0 + (seg.y1 - seg.y0) * t,
-        seg.z0 + (seg.z1 - seg.z0) * t,
-        seg.px,
-        seg.py,
-        radiusStart * (1 - t) + radiusEnd * t,
-      )
+      const radius = radiusAt(seg.profile, t)
+      const x = seg.x0 + (seg.x1 - seg.x0) * t
+      const y = seg.y0 + (seg.y1 - seg.y0) * t
+      const z = seg.z0 + (seg.z1 - seg.z0) * t
+      for (let j = 0; j < TUBE_SIDES; j += 1) {
+        const theta = (j * 2 * Math.PI) / TUBE_SIDES
+        writeOffset(
+          positions,
+          b * AXIAL_STEPS + k,
+          j,
+          x,
+          y,
+          z,
+          seg.px,
+          seg.py,
+          radius * Math.cos(theta),
+          radius * Math.sin(theta),
+        )
+      }
     }
-    station += AXIAL_STEPS
-    radiusAtJoint = radiusEnd
   }
+  writeIntervals(indices, segments.length * AXIAL_STEPS)
+}
 
-  const intervals = segments.length * AXIAL_STEPS
+function radiusAt(profile: readonly RadiusSample[], t: number): number {
+  if (profile.length < 2) throw new Error('radius')
+  let previous = -1
+  for (let i = 0; i < profile.length; i += 1) {
+    const sample = profile[i]!
+    if (!Number.isFinite(sample.t) || !Number.isFinite(sample.radius) || !(sample.radius > 0)) {
+      throw new Error('radius')
+    }
+    if (sample.t <= previous) throw new Error('radius')
+    previous = sample.t
+  }
+  const first = profile[0]!
+  const last = profile[profile.length - 1]!
+  if (first.t !== 0 || last.t !== 1) throw new Error('radius')
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const span = right.t - left.t
+    const u = span === 0 ? 0 : (t - left.t) / span
+    return left.radius * (1 - u) + right.radius * u
+  }
+  throw new Error('radius')
+}
+
+function writeOffset(
+  positions: Float32Array,
+  station: number,
+  j: number,
+  x: number,
+  y: number,
+  z: number,
+  px: number,
+  py: number,
+  along: number,
+  lateral: number,
+): void {
+  const base = (station * TUBE_SIDES + j) * 3
+  positions[base] = x + px * along
+  positions[base + 1] = y + py * along
+  positions[base + 2] = z + lateral
+}
+
+function writeIntervals(indices: Uint16Array, intervals: number): void {
   for (let i = 0; i < intervals; i += 1) {
     const near = i * TUBE_SIDES
     const far = near + TUBE_SIDES
@@ -158,23 +257,33 @@ function writeTube(
   }
 }
 
-function writeStation(
+function writeCap(
   positions: Float32Array,
+  indices: Uint16Array,
   station: number,
-  x: number,
-  y: number,
-  z: number,
-  px: number,
-  py: number,
-  radius: number,
+  center: number,
+  indexBase: number,
+  reverse: boolean,
 ): void {
+  let x = 0
+  let y = 0
+  let z = 0
   for (let j = 0; j < TUBE_SIDES; j += 1) {
-    const theta = (j * 2 * Math.PI) / TUBE_SIDES
-    const side = radius * Math.cos(theta)
     const base = (station * TUBE_SIDES + j) * 3
-    positions[base] = x + px * side
-    positions[base + 1] = y + py * side
-    positions[base + 2] = z + radius * Math.sin(theta)
+    x += positions[base]!
+    y += positions[base + 1]!
+    z += positions[base + 2]!
+  }
+  positions[center * 3] = x / TUBE_SIDES
+  positions[center * 3 + 1] = y / TUBE_SIDES
+  positions[center * 3 + 2] = z / TUBE_SIDES
+  const ring = station * TUBE_SIDES
+  for (let j = 0; j < TUBE_SIDES; j += 1) {
+    const next = (j + 1) % TUBE_SIDES
+    const t = indexBase + j * 3
+    indices[t] = center
+    indices[t + 1] = ring + (reverse ? j : next)
+    indices[t + 2] = ring + (reverse ? next : j)
   }
 }
 
