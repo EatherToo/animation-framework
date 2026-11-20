@@ -1,11 +1,16 @@
 import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
-import { compileHumanoid, type CompiledRig } from '@/compile/compile'
+import { compileHumanoid, compileRig, type CompiledRig } from '@/compile/compile'
+import { createCorrection } from '@/correction/correction'
 import { evaluateFk } from '@/fk/evaluate'
+import { createHumanoidMeshes } from '@/mesh/humanoid'
+import { createHumanoidParts } from '@/part/humanoid'
 import { skinMesh } from '@/skin/skin'
+import { createHumanoidSlots } from '@/slot/humanoid'
 import { createPose, setPoseRotation, setPoseTwist, type Pose } from '@/skeleton/pose'
 import { RIGID_STRIDE } from '@/skeleton/rigid'
 import { findBone } from '@/skeleton/skeleton'
+import { createHumanoidWeights } from '@/weight/humanoid'
 import { expectClose } from '../math/assert'
 
 function rig(compiled: CompiledRig, pose: Pose): Float32Array {
@@ -73,7 +78,20 @@ describe('skin', () => {
   })
 
   it('屈膝只移动矢状面，顶点的 z 留在骨头两侧', () => {
-    const compiled = compileHumanoid(createHumanoid(1.7))
+    // 关掉体积外推，只验矢状蒙皮不搅横向。
+    const humanoid = createHumanoid(1.7)
+    const parts = createHumanoidParts(humanoid.skeleton)
+    const slots = createHumanoidSlots()
+    const meshes = createHumanoidMeshes(humanoid, parts)
+    const weights = createHumanoidWeights(humanoid, parts, meshes)
+    const compiled = compileRig({
+      humanoid,
+      parts,
+      slots,
+      meshes,
+      weights,
+      correction: createCorrection({ enabled: false }),
+    })
     const index = meshIndex(compiled, 'legL')
     const mesh = compiled.meshes.meshes[index]!
     const pose = createPose(compiled.skeleton)
