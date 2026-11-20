@@ -17,14 +17,18 @@
     const ankleHeight = 0.039 * H;
     const thighLength = 0.245 * H;
     const shinLength = 0.246 * H;
+    const footLength = 0.152 * H;
+    const chestLength = 0.144 * H;
+    const shoulderDropY = 0.02 * H;
     const stanceWidth = 0.12 * H;
+    const shoulderOffsetZ = 0.11 * H;
     return {
       height: H,
       hipHeight,
       ankleHeight,
       pelvisLength: 0.05 * H,
       spineLength: 0.144 * H,
-      chestLength: 0.144 * H,
+      chestLength,
       neckLength: 0.052 * H,
       headLength: 0.13 * H,
       upperArmLength: 0.186 * H,
@@ -32,25 +36,44 @@
       handLength: 0.108 * H,
       thighLength,
       shinLength,
-      footLength: 0.152 * H,
+      footLength,
       legLength: thighLength + shinLength,
-      spineRadius: 0.058 * H,
-      chestRadius: 0.072 * H,
-      neckRadius: 0.032 * H,
-      headRadius: 0.046 * H,
-      upperArmRadius: 0.03 * H,
-      lowerArmRadius: 0.024 * H,
-      handRadius: 0.026 * H,
-      thighRadius: 0.05 * H,
-      shinRadius: 0.036 * H,
-      footRadius: 0.03 * H,
+      spineProfile: profile(H, [[0, 0.09], [0.55, 0.062], [1, 0.062]]),
+      chestProfile: profile(H, [
+        [0, 0.062],
+        [0.45, 0.08],
+        [1 - shoulderDropY / chestLength, 0.11],
+        [1, 0.036]
+      ]),
+      neckProfile: profile(H, [[0, 0.036], [1, 0.032]]),
+      headProfile: profile(H, [[0, 0.032], [0.45, 0.078], [1, 0.028]]),
+      upperArmProfile: profile(H, [[0, 0.04], [0.5, 0.032], [1, 0.018]]),
+      lowerArmProfile: profile(H, [[0, 0.018], [0.5, 0.026], [1, 0.016]]),
+      thighProfile: profile(H, [[0, 0.072], [0.4, 0.06], [1, 0.026]]),
+      shinProfile: profile(H, [[0, 0.026], [0.5, 0.038], [1, 0.02]]),
+      palmRadius: 0.028 * H,
+      palmFraction: 0.42,
+      fingerRadius: 65e-4 * H,
+      fingerFraction: 0.58,
+      fingerSpread: [8e-3 * H, 0.022 * H],
+      thumbRadius: 8e-3 * H,
+      thumbFraction: 0.36,
+      thumbAlong: 0.2,
+      thumbDrop: 0.012 * H,
+      thumbOffsetZ: 0.02 * H,
+      heelBack: 0.3 * footLength,
+      footHalfWidth: profile(H, [[0, 0.022], [0.65, 0.032], [1, 0.016]]),
+      footInstep: profile(H, [[0, 0.04], [0.5, 0.052], [1, 0.022]]),
       stanceWidth,
       hipOffsetZ: stanceWidth / 2,
-      shoulderOffsetZ: 0.102 * H,
+      shoulderOffsetZ,
       hipDropY: hipHeight - thighLength - shinLength - ankleHeight,
-      shoulderDropY: 0.02 * H,
+      shoulderDropY,
       reachMargin: REACH_MARGIN
     };
+  }
+  function profile(height, samples) {
+    return samples.map(([t, coefficient]) => ({ t, radius: coefficient * height }));
   }
 
   // packages/render-engine/src/body/chains.ts
@@ -1374,32 +1397,96 @@
     }
     return { partId, space, positions, indices, ...createMeshTextures(indices, fill) };
   }
+  function meshFromCappedSection(partId, space, x0, y0, z0, x1, y1, z1, section, fill) {
+    const dx = x1 - x0;
+    const dy = y1 - y0;
+    const len2 = Math.hypot(dx, dy);
+    if (!(len2 > 0)) throw new Error("segments");
+    const px = -dy / len2;
+    const py = dx / len2;
+    const ring = (AXIAL_STEPS + 1) * TUBE_SIDES;
+    const positions = new Float32Array((ring + 2) * 3);
+    const sides = AXIAL_STEPS * TUBE_SIDES * 6;
+    const indices = new Uint16Array(sides + TUBE_SIDES * 6);
+    for (let k = 0; k <= AXIAL_STEPS; k += 1) {
+      const t = k / AXIAL_STEPS;
+      const x = x0 + dx * t;
+      const y = y0 + dy * t;
+      const z = z0 + (z1 - z0) * t;
+      for (let j = 0; j < TUBE_SIDES; j += 1) {
+        const theta = j * 2 * Math.PI / TUBE_SIDES;
+        const offset = section(t, theta);
+        writeOffset(positions, k, j, x, y, z, px, py, offset.along, offset.lateral);
+      }
+    }
+    writeIntervals(indices, AXIAL_STEPS);
+    writeCap(positions, indices, 0, ring, sides, false);
+    writeCap(positions, indices, AXIAL_STEPS, ring + 1, sides + TUBE_SIDES * 3, true);
+    return { partId, space, positions, indices, ...createMeshTextures(indices, fill) };
+  }
   function writeTube(positions, indices, segments) {
-    const first = segments[0];
-    writeStation(positions, 0, first.x0, first.y0, first.z0, first.px, first.py, first.radius);
-    let station = 0;
-    let radiusAtJoint = first.radius;
+    let previousEnd = Number.NaN;
     for (let b = 0; b < segments.length; b += 1) {
       const seg = segments[b];
-      const radiusStart = b === 0 ? seg.radius : radiusAtJoint;
-      const radiusEnd = seg.radius;
-      for (let k = 1; k <= AXIAL_STEPS; k += 1) {
+      const startRadius = radiusAt(seg.profile, 0);
+      if (b > 0 && Math.abs(previousEnd - startRadius) > 1e-6) throw new Error("radius");
+      previousEnd = radiusAt(seg.profile, 1);
+      for (let k = b === 0 ? 0 : 1; k <= AXIAL_STEPS; k += 1) {
         const t = k / AXIAL_STEPS;
-        writeStation(
-          positions,
-          station + k,
-          seg.x0 + (seg.x1 - seg.x0) * t,
-          seg.y0 + (seg.y1 - seg.y0) * t,
-          seg.z0 + (seg.z1 - seg.z0) * t,
-          seg.px,
-          seg.py,
-          radiusStart * (1 - t) + radiusEnd * t
-        );
+        const radius = radiusAt(seg.profile, t);
+        const x = seg.x0 + (seg.x1 - seg.x0) * t;
+        const y = seg.y0 + (seg.y1 - seg.y0) * t;
+        const z = seg.z0 + (seg.z1 - seg.z0) * t;
+        for (let j = 0; j < TUBE_SIDES; j += 1) {
+          const theta = j * 2 * Math.PI / TUBE_SIDES;
+          writeOffset(
+            positions,
+            b * AXIAL_STEPS + k,
+            j,
+            x,
+            y,
+            z,
+            seg.px,
+            seg.py,
+            radius * Math.cos(theta),
+            radius * Math.sin(theta)
+          );
+        }
       }
-      station += AXIAL_STEPS;
-      radiusAtJoint = radiusEnd;
     }
-    const intervals = segments.length * AXIAL_STEPS;
+    writeIntervals(indices, segments.length * AXIAL_STEPS);
+  }
+  function radiusAt(profile2, t) {
+    if (profile2.length < 2) throw new Error("radius");
+    let previous = -1;
+    for (let i = 0; i < profile2.length; i += 1) {
+      const sample2 = profile2[i];
+      if (!Number.isFinite(sample2.t) || !Number.isFinite(sample2.radius) || !(sample2.radius > 0)) {
+        throw new Error("radius");
+      }
+      if (sample2.t <= previous) throw new Error("radius");
+      previous = sample2.t;
+    }
+    const first = profile2[0];
+    const last = profile2[profile2.length - 1];
+    if (first.t !== 0 || last.t !== 1) throw new Error("radius");
+    for (let i = 0; i < profile2.length - 1; i += 1) {
+      const left = profile2[i];
+      const right = profile2[i + 1];
+      if (t < left.t || t > right.t) continue;
+      const span2 = right.t - left.t;
+      const u = span2 === 0 ? 0 : (t - left.t) / span2;
+      return left.radius * (1 - u) + right.radius * u;
+    }
+    throw new Error("radius");
+  }
+  function writeOffset(positions, station, j, x, y, z, px, py, along, lateral) {
+    const base = (station * TUBE_SIDES + j) * 3;
+    positions[base] = x + px * along;
+    positions[base + 1] = y + py * along;
+    positions[base + 2] = z + lateral;
+  }
+  function writeIntervals(indices, intervals) {
     for (let i = 0; i < intervals; i += 1) {
       const near2 = i * TUBE_SIDES;
       const far = near2 + TUBE_SIDES;
@@ -1415,84 +1502,27 @@
       }
     }
   }
-  function writeStation(positions, station, x, y, z, px, py, radius) {
+  function writeCap(positions, indices, station, center, indexBase, reverse) {
+    let x = 0;
+    let y = 0;
+    let z = 0;
     for (let j = 0; j < TUBE_SIDES; j += 1) {
-      const theta = j * 2 * Math.PI / TUBE_SIDES;
-      const side = radius * Math.cos(theta);
       const base = (station * TUBE_SIDES + j) * 3;
-      positions[base] = x + px * side;
-      positions[base + 1] = y + py * side;
-      positions[base + 2] = z + radius * Math.sin(theta);
+      x += positions[base];
+      y += positions[base + 1];
+      z += positions[base + 2];
     }
-  }
-  function meshFromRectangle(partId, x0, x1, yTop, yBottom, halfWidth, fill) {
-    const near2 = -halfWidth;
-    const far = halfWidth;
-    const positions = new Float32Array([
-      x0,
-      yTop,
-      near2,
-      x0,
-      yBottom,
-      near2,
-      x1,
-      yTop,
-      near2,
-      x1,
-      yBottom,
-      near2,
-      x0,
-      yTop,
-      far,
-      x0,
-      yBottom,
-      far,
-      x1,
-      yTop,
-      far,
-      x1,
-      yBottom,
-      far
-    ]);
-    const indices = new Uint16Array([
-      0,
-      2,
-      3,
-      0,
-      3,
-      1,
-      4,
-      5,
-      7,
-      4,
-      7,
-      6,
-      0,
-      1,
-      5,
-      0,
-      5,
-      4,
-      2,
-      6,
-      7,
-      2,
-      7,
-      3,
-      0,
-      4,
-      6,
-      0,
-      6,
-      2,
-      1,
-      3,
-      7,
-      1,
-      7,
-      5
-    ]);
-    return { partId, space: "part", positions, indices, ...createMeshTextures(indices, fill) };
+    positions[center * 3] = x / TUBE_SIDES;
+    positions[center * 3 + 1] = y / TUBE_SIDES;
+    positions[center * 3 + 2] = z / TUBE_SIDES;
+    const ring = station * TUBE_SIDES;
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      const next = (j + 1) % TUBE_SIDES;
+      const t = indexBase + j * 3;
+      indices[t] = center;
+      indices[t + 1] = ring + (reverse ? j : next);
+      indices[t + 2] = ring + (reverse ? next : j);
+    }
   }
 
   // packages/render-engine/src/mesh/humanoid.ts
@@ -1525,7 +1555,6 @@
       const oy = rig[base + 7];
       const ax = rig[base];
       const ay = rig[base + 1];
-      const radius = radiusOf(name, proportions);
       const x1 = ox + ax * length2;
       const y1 = oy + ay * length2;
       const next = i + 1 < part.bones.length ? part.bones[i + 1] : -1;
@@ -1537,62 +1566,145 @@
         if (dx * dx + dy * dy > JOIN_DISTANCE_SQ) continue;
       }
       const z = lateral[bone];
-      segments.push(segment(ox, oy, z, x1, y1, z, radius));
+      segments.push(segment(ox, oy, z, x1, y1, z, profileOf(name, proportions)));
     }
     return meshFromStrip(part.id, "character", segments, part.fill);
   }
-  function segment(x0, y0, z0, x1, y1, z1, radius) {
+  function segment(x0, y0, z0, x1, y1, z1, profile2) {
     const dx = x1 - x0;
     const dy = y1 - y0;
     const len2 = Math.hypot(dx, dy);
-    return { x0, y0, z0, x1, y1, z1, px: -dy / len2, py: dx / len2, radius };
+    return { x0, y0, z0, x1, y1, z1, px: -dy / len2, py: dx / len2, profile: profile2 };
   }
   function rigidMesh(partId, bone, skeleton, proportions, fill) {
     const length2 = bindLength(skeleton, bone);
     const name = boneName(skeleton, bone);
     if (name === "head") {
-      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.headRadius)], fill);
+      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.headProfile)], fill);
     }
-    if (name === "handL" || name === "handR") {
-      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.handRadius)], fill);
-    }
-    if (name === "footL" || name === "footR") {
-      return meshFromRectangle(
-        partId,
-        0,
-        length2,
-        proportions.footRadius,
-        -proportions.ankleHeight,
-        proportions.footRadius,
-        fill
-      );
-    }
+    if (name === "handL" || name === "handR") return handMesh(partId, name === "handL" ? 1 : -1, length2, proportions, fill);
+    if (name === "footL" || name === "footR") return footMesh(partId, proportions, fill);
     throw new Error("part");
   }
-  function radiusOf(name, proportions) {
+  function handMesh(partId, side, length2, proportions, fill) {
+    const palmEnd = proportions.palmFraction * length2;
+    const pieces = [
+      meshFromCappedTube(partId, "part", [segment(0, 0, 0, palmEnd, 0, 0, constantProfile(proportions.palmRadius))], fill)
+    ];
+    for (const spread of [-proportions.fingerSpread[1], -proportions.fingerSpread[0], proportions.fingerSpread[0], proportions.fingerSpread[1]]) {
+      pieces.push(
+        meshFromCappedTube(
+          partId,
+          "part",
+          [segment(palmEnd, 0, spread, length2, 0, spread, constantProfile(proportions.fingerRadius))],
+          fill
+        )
+      );
+    }
+    const thumbX = proportions.thumbAlong * length2;
+    const thumbZ = side * proportions.thumbOffsetZ;
+    pieces.push(
+      meshFromCappedTube(
+        partId,
+        "part",
+        [
+          segment(
+            thumbX,
+            -proportions.thumbDrop,
+            thumbZ,
+            thumbX + proportions.thumbFraction * length2,
+            -proportions.thumbDrop,
+            thumbZ,
+            constantProfile(proportions.thumbRadius)
+          )
+        ],
+        fill
+      )
+    );
+    return concatenate(partId, pieces, fill);
+  }
+  function footMesh(partId, proportions, fill) {
+    return meshFromCappedSection(
+      partId,
+      "part",
+      -proportions.heelBack,
+      0,
+      0,
+      proportions.footLength,
+      0,
+      0,
+      (t, theta) => {
+        const lifted = Math.max(0, (Math.sin(theta) + 1) / 2);
+        return {
+          along: -proportions.ankleHeight + radiusAt2(proportions.footInstep, t) * lifted,
+          lateral: -radiusAt2(proportions.footHalfWidth, t) * Math.cos(theta)
+        };
+      },
+      fill
+    );
+  }
+  function concatenate(partId, pieces, fill) {
+    let floats = 0;
+    let indexCount = 0;
+    for (const piece of pieces) {
+      floats += piece.positions.length;
+      indexCount += piece.indices.length;
+    }
+    const positions = new Float32Array(floats);
+    const indices = new Uint16Array(indexCount);
+    let floatOffset = 0;
+    let indexOffset = 0;
+    let vertexBase = 0;
+    for (const piece of pieces) {
+      positions.set(piece.positions, floatOffset);
+      for (let i = 0; i < piece.indices.length; i += 1) indices[indexOffset + i] = piece.indices[i] + vertexBase;
+      floatOffset += piece.positions.length;
+      indexOffset += piece.indices.length;
+      vertexBase += piece.positions.length / 3;
+    }
+    return { partId, space: "part", positions, indices, ...createMeshTextures(indices, fill) };
+  }
+  function constantProfile(radius) {
+    return [
+      { t: 0, radius },
+      { t: 1, radius }
+    ];
+  }
+  function profileOf(name, proportions) {
     switch (name) {
       case "pelvis":
       case "spine":
-        return proportions.spineRadius;
+        return proportions.spineProfile;
       case "chest":
-        return proportions.chestRadius;
+        return proportions.chestProfile;
       case "neck":
-        return proportions.neckRadius;
+        return proportions.neckProfile;
       case "upperArmL":
       case "upperArmR":
-        return proportions.upperArmRadius;
+        return proportions.upperArmProfile;
       case "lowerArmL":
       case "lowerArmR":
-        return proportions.lowerArmRadius;
+        return proportions.lowerArmProfile;
       case "thighL":
       case "thighR":
-        return proportions.thighRadius;
+        return proportions.thighProfile;
       case "shinL":
       case "shinR":
-        return proportions.shinRadius;
+        return proportions.shinProfile;
       default:
         throw new Error("bone");
     }
+  }
+  function radiusAt2(profile2, t) {
+    for (let i = 0; i < profile2.length - 1; i += 1) {
+      const left = profile2[i];
+      const right = profile2[i + 1];
+      if (t < left.t || t > right.t) continue;
+      const span2 = right.t - left.t;
+      const u = span2 === 0 ? 0 : (t - left.t) / span2;
+      return left.radius * (1 - u) + right.radius * u;
+    }
+    throw new Error("radius");
   }
   function writeBindRig(skeleton) {
     const rig = new Float32Array(skeleton.boneCount * 9);
@@ -2063,7 +2175,10 @@
         stack.push(other);
       }
     }
-    if (visited !== triangleCount) throw new Error("connectivity");
+    if (visited === triangleCount) return;
+    for (const edge of edges.values()) {
+      if (edge.count !== 2) throw new Error("connectivity");
+    }
   }
   function crossLength(positions, indices, triangle) {
     const i0 = indices[triangle * 3] * 3;
