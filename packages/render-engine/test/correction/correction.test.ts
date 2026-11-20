@@ -2,7 +2,7 @@ import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
 import { compileHumanoid } from '@/compile/compile'
 import { applyCorrection, createCorrection } from '@/correction/correction'
-import { createPose, setPoseTwist } from '@/skeleton/pose'
+import { createPose, setPoseSwing, setPoseTwist } from '@/skeleton/pose'
 import { findBone } from '@/skeleton/skeleton'
 
 describe('correction', () => {
@@ -19,6 +19,13 @@ describe('correction', () => {
     expect(out[0]).toBe(1)
   })
 
+  it('默认开启扭转与弯曲增益', () => {
+    const correction = createCorrection()
+    expect(correction.enabled).toBe(true)
+    expect(correction.twistGain).toBeCloseTo(0.35)
+    expect(correction.bendGain).toBeCloseTo(0.35)
+  })
+
   it('长度不符时不写 out', () => {
     const out = new Float32Array([7, 8])
     expect(() =>
@@ -28,7 +35,7 @@ describe('correction', () => {
     expect(out[1]).toBe(8)
   })
 
-  it('开启时零姿态不变；上臂扭转后过渡带半径抬升', () => {
+  it('开启时零姿态不变；扭转与侧摆分别抬升过渡带半径', () => {
     const compiled = compileHumanoid(createHumanoid(1.7))
     const index = compiled.meshes.meshes.findIndex((mesh) => mesh.partId === 'armL')
     const mesh = compiled.meshes.meshes[index]!
@@ -61,28 +68,35 @@ describe('correction', () => {
       return sum / count
     }
 
-    const bindRadius = meanRadius(mesh.positions)
-    const zeroOut = new Float32Array(mesh.positions.length)
-    applyCorrection(zeroOut, mesh.positions, compiled.correction, {
+    const context = {
       bones: part.bones,
       weights: weights.weights,
       influences: weights.influences,
       bindRig: compiled.bindRig,
       pose,
-    })
+    }
+
+    const bindRadius = meanRadius(mesh.positions)
+    const zeroOut = new Float32Array(mesh.positions.length)
+    applyCorrection(zeroOut, mesh.positions, compiled.correction, context)
     for (let i = 0; i < mesh.positions.length; i += 1) {
       expect(Math.abs(zeroOut[i]! - mesh.positions[i]!)).toBeLessThanOrEqual(1e-6)
     }
 
     setPoseTwist(pose, bone, (-70 * Math.PI) / 180)
     const twisted = new Float32Array(mesh.positions.length)
-    applyCorrection(twisted, mesh.positions, compiled.correction, {
-      bones: part.bones,
-      weights: weights.weights,
-      influences: weights.influences,
-      bindRig: compiled.bindRig,
-      pose,
-    })
+    applyCorrection(twisted, mesh.positions, compiled.correction, context)
     expect(meanRadius(twisted) / bindRadius).toBeGreaterThanOrEqual(0.85)
+
+    pose.data.fill(0)
+    setPoseSwing(pose, bone, Math.PI / 2)
+    const bent = new Float32Array(mesh.positions.length)
+    applyCorrection(bent, mesh.positions, compiled.correction, context)
+    expect(meanRadius(bent) / bindRadius).toBeGreaterThanOrEqual(0.85)
+
+    const bendOff = createCorrection({ enabled: true, twistGain: 0.35, bendGain: 0 })
+    const noBend = new Float32Array(mesh.positions.length)
+    applyCorrection(noBend, mesh.positions, bendOff, context)
+    expect(meanRadius(bent) / bindRadius).toBeGreaterThan(meanRadius(noBend) / bindRadius)
   })
 })

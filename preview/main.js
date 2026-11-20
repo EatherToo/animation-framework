@@ -130,6 +130,12 @@
   function setPoseTwist(pose2, bone, twist) {
     pose2.data[bone * POSE_STRIDE + 4] = normalizeAngle(twist);
   }
+  function poseRotation(pose2, bone) {
+    return pose2.data[bone * POSE_STRIDE + 2];
+  }
+  function poseSwing(pose2, bone) {
+    return pose2.data[bone * POSE_STRIDE + 3];
+  }
   function poseTwist(pose2, bone) {
     return pose2.data[bone * POSE_STRIDE + 4];
   }
@@ -2424,7 +2430,7 @@
     return {
       enabled: options.enabled ?? true,
       twistGain: options.twistGain ?? 0.35,
-      bendGain: options.bendGain ?? 0
+      bendGain: options.bendGain ?? 0.35
     };
   }
   function applyCorrection(out, positions, correction, context) {
@@ -2432,30 +2438,38 @@
     out.set(positions);
     if (!correction.enabled) return out;
     if (context === void 0) throw new Error("correction");
-    pushTwist(out, positions, correction, context);
+    pushRadial(out, positions, correction.twistGain, context, twistAngle);
+    pushRadial(out, positions, correction.bendGain, context, bendAngle);
     return out;
   }
-  function pushTwist(out, positions, correction, context) {
-    const { bones, weights, influences, bindRig, pose: pose2 } = context;
-    const gain = correction.twistGain;
+  function twistAngle(pose2, bone) {
+    return Math.abs(poseTwist(pose2, bone));
+  }
+  function bendAngle(pose2, bone) {
+    return Math.hypot(poseSwing(pose2, bone), poseRotation(pose2, bone));
+  }
+  function pushRadial(out, positions, gain, context, angleOf) {
     if (gain === 0) return;
+    const { bones, weights, influences, bindRig, pose: pose2 } = context;
+    const skeleton = pose2.skeleton;
     const vertexCount = positions.length / 3;
     for (let v = 0; v < vertexCount; v += 1) {
       let bestBone = -1;
       let bestWeight = 0;
-      let bestAbsTwist = 0;
+      let bestPhi = 0;
       for (let i = 0; i < influences; i += 1) {
+        const bone = bones[i];
+        if (!isCorrectionBone(boneName(skeleton, bone))) continue;
         const w = weights[v * influences + i];
         if (w <= 0 || w >= 1) continue;
-        const twist = poseTwist(pose2, bones[i]);
-        const abs = Math.abs(twist);
-        if (abs > bestAbsTwist) {
-          bestAbsTwist = abs;
-          bestBone = bones[i];
+        const phi = angleOf(pose2, bone);
+        if (phi > bestPhi) {
+          bestPhi = phi;
+          bestBone = bone;
           bestWeight = w;
         }
       }
-      if (bestBone < 0 || bestAbsTwist === 0) continue;
+      if (bestBone < 0 || bestPhi === 0) continue;
       const x = positions[v * 3];
       const y = positions[v * 3 + 1];
       const z = positions[v * 3 + 2];
@@ -2470,12 +2484,15 @@
       const r = Math.hypot(px, py, pz);
       if (r < 1e-12) continue;
       const blend2 = 4 * bestWeight * (1 - bestWeight);
-      const push = r * gain * (1 - Math.cos(bestAbsTwist)) * blend2;
+      const push = r * gain * (1 - Math.cos(bestPhi)) * blend2;
       const inv = 1 / r;
-      out[v * 3] = x + px * inv * push;
-      out[v * 3 + 1] = y + py * inv * push;
-      out[v * 3 + 2] = z + pz * inv * push;
+      out[v * 3] = out[v * 3] + px * inv * push;
+      out[v * 3 + 1] = out[v * 3 + 1] + py * inv * push;
+      out[v * 3 + 2] = out[v * 3 + 2] + pz * inv * push;
     }
+  }
+  function isCorrectionBone(name) {
+    return name.startsWith("upperArm") || name.startsWith("lowerArm") || name.startsWith("thigh") || name.startsWith("shin");
   }
   function bindAxis(bindRig, bone) {
     const base = bone * RIGID_STRIDE;
