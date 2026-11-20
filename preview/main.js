@@ -1259,19 +1259,90 @@
     );
   }
 
+  // packages/render-engine/src/mesh/texture.ts
+  var TEXTURE_EDGE = 4;
+  function createTriangleTexture(fill, triangle) {
+    const baseR = byteChannel(fill.r);
+    const baseG = byteChannel(fill.g);
+    const baseB = byteChannel(fill.b);
+    const rgb = new Uint8Array(TEXTURE_EDGE * TEXTURE_EDGE * 3);
+    for (let sy = 0; sy < TEXTURE_EDGE; sy += 1) {
+      for (let sx = 0; sx < TEXTURE_EDGE; sx += 1) {
+        const index = (sy * TEXTURE_EDGE + sx) * 3;
+        if (sx === 0 && sy === 0) {
+          rgb[index] = baseR;
+          rgb[index + 1] = baseG;
+          rgb[index + 2] = baseB;
+          continue;
+        }
+        rgb[index] = mod256(baseR + (triangle + 1) * (sx + sy));
+        rgb[index + 1] = baseG;
+        rgb[index + 2] = mod256(baseB + sx * 13 + sy);
+      }
+    }
+    return { width: TEXTURE_EDGE, height: TEXTURE_EDGE, rgb };
+  }
+  function createMeshTextures(indices, fill) {
+    if (indices.length < 3 || indices.length % 3 !== 0) throw new Error("mesh");
+    const triangleCount = indices.length / 3;
+    const textures = [];
+    const triangleTexture = new Uint16Array(triangleCount);
+    const uvs = new Float32Array(indices.length * 2);
+    for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+      textures.push(createTriangleTexture(fill, triangle));
+      triangleTexture[triangle] = triangle;
+      const corner = triangle * 6;
+      uvs[corner + 2] = 2;
+      uvs[corner + 5] = 2;
+    }
+    return { textures, triangleTexture, uvs };
+  }
+  function validateMeshTextures(indices, textures, triangleTexture, uvs) {
+    if (indices.length < 3 || indices.length % 3 !== 0 || triangleTexture.length !== indices.length / 3) {
+      throw new Error("texture");
+    }
+    for (let i = 0; i < triangleTexture.length; i += 1) {
+      if (triangleTexture[i] >= textures.length) throw new Error("texture");
+    }
+    if (uvs.length !== indices.length * 2) throw new Error("uv");
+    for (let i = 0; i < uvs.length; i += 1) {
+      if (!Number.isFinite(uvs[i])) throw new Error("uv");
+    }
+    for (let i = 0; i < textures.length; i += 1) {
+      const image = textures[i];
+      if (!Number.isInteger(image.width) || image.width < 1) throw new Error("image");
+      if (!Number.isInteger(image.height) || image.height < 1) throw new Error("image");
+      if (image.rgb.length !== image.width * image.height * 3) throw new Error("image");
+      for (let byte = 0; byte < image.rgb.length; byte += 1) {
+        const value = image.rgb[byte];
+        if (!Number.isInteger(value) || value < 0 || value > 255) throw new Error("image");
+      }
+    }
+  }
+  function byteChannel(channel) {
+    if (!Number.isFinite(channel) || channel < 0 || channel > 1) throw new Error("fill");
+    const rounded = Math.round(channel * 255);
+    if (rounded < 0) return 0;
+    if (rounded > 255) return 255;
+    return rounded;
+  }
+  function mod256(value) {
+    return (value % 256 + 256) % 256;
+  }
+
   // packages/render-engine/src/mesh/strip.ts
   var TUBE_SIDES = 16;
   var AXIAL_STEPS = 8;
-  function meshFromStrip(partId, space, segments) {
+  function meshFromStrip(partId, space, segments, fill) {
     if (segments.length === 0) throw new Error("segments");
     const intervals = segments.length * AXIAL_STEPS;
     const stations = intervals + 1;
     const positions = new Float32Array(stations * TUBE_SIDES * 3);
     const indices = new Uint16Array(intervals * TUBE_SIDES * 6);
     writeTube(positions, indices, segments);
-    return { partId, space, positions, indices };
+    return { partId, space, positions, indices, ...createMeshTextures(indices, fill) };
   }
-  function meshFromCappedTube(partId, space, segments) {
+  function meshFromCappedTube(partId, space, segments, fill) {
     if (segments.length === 0) throw new Error("segments");
     const intervals = segments.length * AXIAL_STEPS;
     const stations = intervals + 1;
@@ -1301,7 +1372,7 @@
       indices[t + 4] = tail + j;
       indices[t + 5] = tail + next;
     }
-    return { partId, space, positions, indices };
+    return { partId, space, positions, indices, ...createMeshTextures(indices, fill) };
   }
   function writeTube(positions, indices, segments) {
     const first = segments[0];
@@ -1354,7 +1425,7 @@
       positions[base + 2] = z + radius * Math.sin(theta);
     }
   }
-  function meshFromRectangle(partId, x0, x1, yTop, yBottom, halfWidth) {
+  function meshFromRectangle(partId, x0, x1, yTop, yBottom, halfWidth, fill) {
     const near2 = -halfWidth;
     const far = halfWidth;
     const positions = new Float32Array([
@@ -1421,7 +1492,7 @@
       7,
       5
     ]);
-    return { partId, space: "part", positions, indices };
+    return { partId, space: "part", positions, indices, ...createMeshTextures(indices, fill) };
   }
 
   // packages/render-engine/src/mesh/humanoid.ts
@@ -1437,7 +1508,7 @@
       if (part.kind === "skinned") {
         meshes.push(tubeMesh(part, humanoid2.skeleton, humanoid2.proportions, rig, lateral));
       } else {
-        meshes.push(rigidMesh(part.id, part.bone, humanoid2.skeleton, humanoid2.proportions));
+        meshes.push(rigidMesh(part.id, part.bone, humanoid2.skeleton, humanoid2.proportions, part.fill));
       }
     }
     return { meshes };
@@ -1468,7 +1539,7 @@
       const z = lateral[bone];
       segments.push(segment(ox, oy, z, x1, y1, z, radius));
     }
-    return meshFromStrip(part.id, "character", segments);
+    return meshFromStrip(part.id, "character", segments, part.fill);
   }
   function segment(x0, y0, z0, x1, y1, z1, radius) {
     const dx = x1 - x0;
@@ -1476,14 +1547,14 @@
     const len2 = Math.hypot(dx, dy);
     return { x0, y0, z0, x1, y1, z1, px: -dy / len2, py: dx / len2, radius };
   }
-  function rigidMesh(partId, bone, skeleton, proportions) {
+  function rigidMesh(partId, bone, skeleton, proportions, fill) {
     const length2 = bindLength(skeleton, bone);
     const name = boneName(skeleton, bone);
     if (name === "head") {
-      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.headRadius)]);
+      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.headRadius)], fill);
     }
     if (name === "handL" || name === "handR") {
-      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.handRadius)]);
+      return meshFromCappedTube(partId, "part", [segment(0, 0, 0, length2, 0, 0, proportions.handRadius)], fill);
     }
     if (name === "footL" || name === "footR") {
       return meshFromRectangle(
@@ -1492,7 +1563,8 @@
         length2,
         proportions.footRadius,
         -proportions.ankleHeight,
-        proportions.footRadius
+        proportions.footRadius,
+        fill
       );
     }
     throw new Error("part");
@@ -2196,6 +2268,7 @@
       const mesh = meshes.meshes[i];
       if (mesh.partId !== parts.parts[i].id) throw new Error("mesh");
       validateMesh(mesh);
+      validateMeshTextures(mesh.indices, mesh.textures, mesh.triangleTexture, mesh.uvs);
     }
   }
   function assertWeights(parts, meshes, weights) {
@@ -2342,6 +2415,86 @@
       });
     }
     return filled;
+  }
+
+  // packages/render-engine/src/texture/sample.ts
+  function sampleTexture(texture, u, v) {
+    if (!Number.isFinite(u) || !Number.isFinite(v)) throw new Error("uv");
+    const uu = u < 0 ? 0 : u > 1 ? 1 : u;
+    const vv = v < 0 ? 0 : v > 1 ? 1 : v;
+    const sx = Math.min(texture.width - 1, Math.floor(uu * texture.width));
+    const sy = Math.min(texture.height - 1, Math.floor(vv * texture.height));
+    const index = (sy * texture.width + sx) * 3;
+    return {
+      r: texture.rgb[index] / 255,
+      g: texture.rgb[index + 1] / 255,
+      b: texture.rgb[index + 2] / 255
+    };
+  }
+
+  // packages/render-engine/src/texture/bind.ts
+  function textureProjected(compiled2, projected) {
+    const meshes = compiled2.meshes.meshes;
+    if (projected.length !== meshes.length) throw new Error("mesh");
+    const textured = [];
+    for (let i = 0; i < projected.length; i += 1) {
+      const mesh = meshes[i];
+      const part = projected[i];
+      if (part.partId !== mesh.partId) throw new Error("mesh");
+      if (part.indices.length !== mesh.indices.length) throw new Error("indices");
+      const uvs = new Float32Array(mesh.uvs.length);
+      const triangleCount = mesh.indices.length / 3;
+      for (let triangle = 0; triangle < triangleCount; triangle += 1) {
+        const base = triangle * 3;
+        const a = mesh.indices[base];
+        const b = mesh.indices[base + 1];
+        const c = mesh.indices[base + 2];
+        const pa = part.indices[base];
+        const pb = part.indices[base + 1];
+        const pc = part.indices[base + 2];
+        const corner = triangle * 6;
+        const ua = mesh.uvs[corner];
+        const va = mesh.uvs[corner + 1];
+        const ub = mesh.uvs[corner + 2];
+        const vb = mesh.uvs[corner + 3];
+        const uc = mesh.uvs[corner + 4];
+        const vc = mesh.uvs[corner + 5];
+        if (pa === a && pb === b && pc === c) {
+          writeCorner(uvs, corner, ua, va, ub, vb, uc, vc);
+        } else if (pa === a && pb === c && pc === b) {
+          writeCorner(uvs, corner, ua, va, uc, vc, ub, vb);
+        } else {
+          throw new Error("indices");
+        }
+      }
+      textured.push({
+        partId: part.partId,
+        positions: part.positions.slice(),
+        indices: part.indices,
+        textures: mesh.textures,
+        triangleTexture: mesh.triangleTexture,
+        uvs
+      });
+    }
+    return textured;
+  }
+  function triangleUv(out, ax, ay, bx, by, cx, cy, x, y, uvs) {
+    if (out.length !== 2 || uvs.length !== 6) throw new Error("uv");
+    const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    if (Math.abs(denom) <= 1e-8) throw new Error("degenerate");
+    const w0 = ((by - cy) * (x - cx) + (cx - bx) * (y - cy)) / denom;
+    const w1 = ((cy - ay) * (x - cx) + (ax - cx) * (y - cy)) / denom;
+    const w2 = 1 - w0 - w1;
+    out[0] = w0 * uvs[0] + w1 * uvs[2] + w2 * uvs[4];
+    out[1] = w0 * uvs[1] + w1 * uvs[3] + w2 * uvs[5];
+  }
+  function writeCorner(uvs, corner, ua, va, ub, vb, uc, vc) {
+    uvs[corner] = ua;
+    uvs[corner + 1] = va;
+    uvs[corner + 2] = ub;
+    uvs[corner + 3] = vb;
+    uvs[corner + 4] = uc;
+    uvs[corner + 5] = vc;
   }
 
   // packages/render-engine/src/skin/skin.ts
@@ -2604,7 +2757,6 @@
   var FACING = 1;
   var BACKGROUND = "#5c5c5c";
   var STROKE = "#141414";
-  var EDGE = "#141414";
   var STEP = 5;
   var BONE_UI = {
     pelvis: { group: "\u8EAF\u5E72", label: "\u9AA8\u76C6" },
@@ -2646,7 +2798,10 @@
   var readouts = /* @__PURE__ */ new Map();
   mountPose(panel);
   new ResizeObserver(() => draw()).observe(canvas.parentElement ?? canvas);
-  draw();
+  void loadGrayTextures().then(() => {
+    texturesReady = true;
+    draw();
+  });
   function mountPose(root) {
     const title = document.createElement("h1");
     title.textContent = "\u59FF\u52BF";
@@ -2724,7 +2879,59 @@
     if (readout === void 0 || slider === void 0) return;
     readout.textContent = `${formatDeg(Number(slider.value))} \xB7 \u53EF\u6D3B\u52A8 ${formatDeg(control.min)} ~ ${formatDeg(control.max)}`;
   }
+  var texturesReady = false;
+  async function loadGrayTextures() {
+    const response = await fetch("./textures/manifest.json");
+    if (!response.ok) throw new Error("texture");
+    const manifest = await response.json();
+    const byId = new Map(compiled.meshes.meshes.map((mesh) => [mesh.partId, mesh]));
+    const jobs = [];
+    for (const part of manifest.parts) {
+      const mesh = byId.get(part.partId);
+      if (mesh === void 0 || mesh.indices.length / 3 !== part.count) throw new Error("texture");
+      for (let index = 0; index < part.count; index += 1) jobs.push({ partId: part.partId, index });
+    }
+    const decoded = /* @__PURE__ */ new Map();
+    for (const part of manifest.parts) decoded.set(part.partId, new Array(part.count));
+    const scratch = document.createElement("canvas");
+    const scratchCtx = scratch.getContext("2d", { willReadFrequently: true });
+    if (scratchCtx === null) throw new Error("2d");
+    const batch = 24;
+    for (let start = 0; start < jobs.length; start += batch) {
+      const slice = jobs.slice(start, start + batch);
+      const bitmaps = await Promise.all(
+        slice.map(async (job) => {
+          const image = await fetch(`./textures/${job.partId}/${job.index}.png`);
+          if (!image.ok) throw new Error("texture");
+          return createImageBitmap(await image.blob());
+        })
+      );
+      for (let i = 0; i < slice.length; i += 1) {
+        const bitmap = bitmaps[i];
+        const job = slice[i];
+        if (scratch.width !== bitmap.width || scratch.height !== bitmap.height) {
+          scratch.width = bitmap.width;
+          scratch.height = bitmap.height;
+        }
+        scratchCtx.drawImage(bitmap, 0, 0);
+        const pixels = scratchCtx.getImageData(0, 0, bitmap.width, bitmap.height).data;
+        const rgb = new Uint8Array(bitmap.width * bitmap.height * 3);
+        for (let pixel = 0; pixel < bitmap.width * bitmap.height; pixel += 1) {
+          rgb[pixel * 3] = pixels[pixel * 4];
+          rgb[pixel * 3 + 1] = pixels[pixel * 4 + 1];
+          rgb[pixel * 3 + 2] = pixels[pixel * 4 + 2];
+        }
+        decoded.get(job.partId)[job.index] = { width: bitmap.width, height: bitmap.height, rgb };
+        bitmap.close();
+      }
+    }
+    for (const part of manifest.parts) {
+      const textures = decoded.get(part.partId);
+      byId.get(part.partId).textures = textures;
+    }
+  }
   function draw() {
+    if (!texturesReady) return;
     const stage = canvas.parentElement;
     const cssWidth = stage?.clientWidth ?? window.innerWidth;
     const cssHeight = stage?.clientHeight ?? window.innerHeight;
@@ -2741,22 +2948,75 @@
       projected,
       compiled.parts.parts.map((part) => part.fill)
     );
+    const textured = textureProjected(compiled, projected);
     const stroked = strokeContours(filled, true);
     const order = depthOrder(new Array(projected.length), projected, tie);
     const frame = fit(restFrame, canvas.width, canvas.height);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = BACKGROUND;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    paintTextures(textured, order, frame, pixels);
+    ctx.putImageData(pixels, 0, 0);
     const byFill = new Map(filled.map((part) => [part.partId, part]));
     const byStroke = new Map(stroked.map((part) => [part.partId, part]));
     for (let i = 0; i < order.length; i += 1) {
       const id = order[i];
       const part = byFill.get(id);
       if (part === void 0) continue;
-      paintPart(part, frame);
-      paintEdges(part, frame);
       const contour = byStroke.get(id);
       if (contour !== void 0) paintStroke(contour, frame);
+    }
+  }
+  function paintTextures(parts, order, frame, image) {
+    const uv = new Float32Array(2);
+    const corners = new Float32Array(6);
+    const byId = new Map(parts.map((part) => [part.partId, part]));
+    const width = image.width;
+    const height = image.height;
+    const data = image.data;
+    for (let i = 0; i < order.length; i += 1) {
+      const part = byId.get(order[i]);
+      if (part === void 0 || part.textures.length === 0) continue;
+      const positions = part.positions;
+      const indices = part.indices;
+      for (let t = 0; t < indices.length; t += 3) {
+        const ia = indices[t];
+        const ib = indices[t + 1];
+        const ic = indices[t + 2];
+        const ax = frame.originX + positions[ia * 2] * frame.scale;
+        const ay = frame.originY - positions[ia * 2 + 1] * frame.scale;
+        const bx = frame.originX + positions[ib * 2] * frame.scale;
+        const by = frame.originY - positions[ib * 2 + 1] * frame.scale;
+        const cx = frame.originX + positions[ic * 2] * frame.scale;
+        const cy = frame.originY - positions[ic * 2 + 1] * frame.scale;
+        const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+        if (Math.abs(denom) <= 1e-8) continue;
+        const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+        const maxX = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)));
+        const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+        const maxY = Math.min(height - 1, Math.ceil(Math.max(ay, by, cy)));
+        corners.set(part.uvs.subarray(t * 2, t * 2 + 6));
+        const texture = part.textures[part.triangleTexture[t / 3]];
+        if (texture === void 0) continue;
+        for (let y = minY; y <= maxY; y += 1) {
+          for (let x = minX; x <= maxX; x += 1) {
+            const px = x + 0.5;
+            const py = y + 0.5;
+            const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom;
+            const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom;
+            const w2 = 1 - w0 - w1;
+            if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+            triangleUv(uv, ax, ay, bx, by, cx, cy, px, py, corners);
+            const color = sampleTexture(texture, uv[0], uv[1]);
+            const pixel = (y * width + x) * 4;
+            data[pixel] = Math.round(color.r * 255);
+            data[pixel + 1] = Math.round(color.g * 255);
+            data[pixel + 2] = Math.round(color.b * 255);
+            data[pixel + 3] = 255;
+          }
+        }
+      }
     }
   }
   function applyPose() {
@@ -2768,37 +3028,6 @@
       else if (control.axis === "swing") setPoseSwing(pose, bone, radians);
       else setPoseTwist(pose, bone, radians);
     }
-  }
-  function paintPart(part, frame) {
-    const color = part.fill;
-    ctx.fillStyle = `rgb(${Math.round(color.r * 255)} ${Math.round(color.g * 255)} ${Math.round(color.b * 255)})`;
-    const positions = part.positions;
-    const indices = part.indices;
-    for (let t = 0; t < indices.length; t += 3) {
-      ctx.beginPath();
-      move(positions, frame, indices[t]);
-      line(positions, frame, indices[t + 1]);
-      line(positions, frame, indices[t + 2]);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-  function paintEdges(part, frame) {
-    const context = ctx;
-    context.strokeStyle = EDGE;
-    context.lineWidth = Math.max(1, window.devicePixelRatio || 1);
-    context.lineJoin = "miter";
-    context.miterLimit = 2;
-    const positions = part.positions;
-    const indices = part.indices;
-    context.beginPath();
-    for (let t = 0; t < indices.length; t += 3) {
-      move(positions, frame, indices[t]);
-      line(positions, frame, indices[t + 1]);
-      line(positions, frame, indices[t + 2]);
-      context.closePath();
-    }
-    context.stroke();
   }
   function paintStroke(part, frame) {
     ctx.fillStyle = STROKE;
