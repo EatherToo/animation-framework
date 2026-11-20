@@ -17,17 +17,20 @@
     const ankleHeight = 0.039 * H;
     const thighLength = 0.245 * H;
     const shinLength = 0.246 * H;
-    const footLength = 0.152 * H;
+    const footLength = 0.15 / 1.3 * H;
+    const spineLength = 0.144 * H;
     const chestLength = 0.144 * H;
+    const torsoLength = spineLength + chestLength;
     const shoulderDropY = 0.02 * H;
-    const stanceWidth = 0.12 * H;
-    const shoulderOffsetZ = 0.11 * H;
+    const stanceWidth = 0.1 * H;
+    const shoulderOffsetZ = 0.1 * H;
+    const at = (coefficient) => coefficient * H / torsoLength;
     return {
       height: H,
       hipHeight,
       ankleHeight,
       pelvisLength: 0.05 * H,
-      spineLength: 0.144 * H,
+      spineLength,
       chestLength,
       neckLength: 0.052 * H,
       headLength: 0.13 * H,
@@ -38,32 +41,75 @@
       shinLength,
       footLength,
       legLength: thighLength + shinLength,
-      spineProfile: profile(H, [[0, 0.09], [0.55, 0.062], [1, 0.062]]),
-      chestProfile: profile(H, [
-        [0, 0.062],
-        [0.45, 0.08],
-        [1 - shoulderDropY / chestLength, 0.11],
-        [1, 0.036]
+      torsoProfile: section(H, [
+        [at(0), 0.096, 0.071, 0.055, 2.4],
+        [at(0.03), 0.095, 0.073, 0.055, 2.4],
+        [at(0.06), 0.088, 0.066, 0.05, 2.2],
+        [at(0.09), 0.079, 0.058, 0.046, 2.2],
+        [at(0.12), 0.082, 0.06, 0.048, 2.2],
+        [at(0.16), 0.089, 0.064, 0.054, 2.4],
+        [at(0.2), 0.092, 0.066, 0.056, 2.4],
+        [at(0.24), 0.094, 0.06, 0.058, 2.6],
+        [at(0.268), 0.086, 0.052, 0.054, 2.6],
+        [at(0.288), 0.033, 0.033, 0.033, 2]
       ]),
-      neckProfile: profile(H, [[0, 0.036], [1, 0.032]]),
-      headProfile: profile(H, [[0, 0.032], [0.45, 0.078], [1, 0.028]]),
-      upperArmProfile: profile(H, [[0, 0.04], [0.5, 0.032], [1, 0.018]]),
-      lowerArmProfile: profile(H, [[0, 0.018], [0.5, 0.026], [1, 0.016]]),
-      thighProfile: profile(H, [[0, 0.072], [0.4, 0.06], [1, 0.026]]),
-      shinProfile: profile(H, [[0, 0.026], [0.5, 0.038], [1, 0.02]]),
-      palmRadius: 0.028 * H,
+      neckProfile: section(H, [
+        [0, 0.033, 0.033, 0.033, 2],
+        [1, 0.033, 0.033, 0.033, 2]
+      ]),
+      headProfile: section(H, [
+        [0, 0.033, 0.033, 0.033, 2],
+        [0.1, 0.032, 0.055, 0.045, 2.2],
+        [0.22, 0.0347, 0.054, 0.051, 2.2],
+        [0.36, 0.038, 0.052, 0.056, 2.2],
+        [0.52, 0.0425, 0.052, 0.056, 2.2],
+        [0.7, 0.041, 0.046, 0.054, 2.2],
+        [0.86, 0.031, 0.032, 0.043, 2.2],
+        [1, 7e-3, 8e-3, 0.012, 2]
+      ]),
+      upperArmProfile: section(H, [
+        [0, 0.034, 0.0323, 0.0323, 2],
+        [0.15, 0.033, 0.03135, 0.03135, 2],
+        [0.4, 0.032, 0.0304, 0.0304, 2],
+        [0.7, 0.03, 0.0285, 0.0285, 2],
+        [1, 0.022, 0.0209, 0.0209, 2]
+      ]),
+      lowerArmProfile: section(H, [
+        [0, 0.022, 0.0209, 0.0209, 2],
+        [0.15, 0.0255, 0.021675, 0.021675, 2],
+        [0.4, 0.0245, 0.020825, 0.020825, 2],
+        [0.7, 0.02, 0.017, 0.017, 2],
+        [1, 0.016, 0.0136, 0.0136, 2]
+      ]),
+      thighProfile: section(H, [
+        [0, 0.048, 0.0456, 0.0456, 2],
+        [0.2, 0.046, 0.0437, 0.0437, 2],
+        [0.45, 0.043, 0.04085, 0.04085, 2],
+        [0.7, 0.034, 0.0323, 0.0323, 2],
+        [1, 0.029, 0.02755, 0.02755, 2]
+      ]),
+      shinProfile: section(H, [
+        [0, 0.029, 0.02755, 0.02755, 2],
+        [0.2, 0.03, 0.027, 0.027, 2],
+        [0.35, 0.0325, 0.02925, 0.02925, 2],
+        [0.6, 0.026, 0.0234, 0.0234, 2],
+        [1, 0.0195, 0.01755, 0.01755, 2]
+      ]),
+      palmWrist: { halfWidth: 0.019 * H, halfThickness: 95e-4 * H },
+      palmKnuckle: { halfWidth: 0.024 * H, halfThickness: 85e-4 * H },
       palmFraction: 0.42,
-      fingerRadius: 65e-4 * H,
-      fingerFraction: 0.58,
-      fingerSpread: [8e-3 * H, 0.022 * H],
-      thumbRadius: 8e-3 * H,
-      thumbFraction: 0.36,
-      thumbAlong: 0.2,
-      thumbDrop: 0.012 * H,
-      thumbOffsetZ: 0.02 * H,
+      fingerRadius: 45e-4 * H,
+      fingerLengths: [0.96, 1, 0.93, 0.85],
+      fingerOffsets: [0.0161 * H, 54e-4 * H, -54e-4 * H, -0.0161 * H],
+      thumbRadius: 7e-3 * H,
+      thumbAlong: 0.22,
+      thumbTipAlong: 0.52,
+      thumbDrop: 4e-3 * H,
+      thumbOffsetZ: 0.018 * H,
+      thumbTipZ: 0.032 * H,
       heelBack: 0.3 * footLength,
-      footHalfWidth: profile(H, [[0, 0.022], [0.65, 0.032], [1, 0.016]]),
-      footInstep: profile(H, [[0, 0.04], [0.5, 0.052], [1, 0.022]]),
+      footHalfWidth: radiusProfile(H, [[0, 0.018], [0.65, 0.027], [1, 0.022]]),
+      footInstep: radiusProfile(H, [[0, 0.036], [0.5, 0.041], [1, 0.021]]),
       stanceWidth,
       hipOffsetZ: stanceWidth / 2,
       shoulderOffsetZ,
@@ -72,7 +118,16 @@
       reachMargin: REACH_MARGIN
     };
   }
-  function profile(height, samples) {
+  function section(height, samples) {
+    return samples.map(([t, w, front, back, exponent]) => ({
+      t,
+      halfWidth: w * height,
+      frontDepth: front * height,
+      backDepth: back * height,
+      exponent
+    }));
+  }
+  function radiusProfile(height, samples) {
     return samples.map(([t, coefficient]) => ({ t, radius: coefficient * height }));
   }
 
@@ -1401,7 +1456,10 @@
     const spineRings = [];
     for (let k = 0; k <= AXIAL_STEPS; k += 1) {
       const t = k / AXIAL_STEPS;
-      const ring = addRing(d, ringPoints(spine, t, radiusAt(proportions.spineProfile, t)));
+      const ring = addRing(
+        d,
+        ringPoints(spine, t, torsoSectionAt(proportions, t * proportions.spineLength), TORSO_FRONT)
+      );
       setShare(d, ring, Math.max(0, 1 - 2 * t), 0);
       spineRings.push(ring);
     }
@@ -1410,7 +1468,10 @@
     const chestRings = [spineRings[spineRings.length - 1]];
     for (let i = 1; i < chestTs.length; i += 1) {
       const t = chestTs[i];
-      const ring = addRing(d, ringPoints(chest, t, radiusAt(proportions.chestProfile, t)));
+      const ring = addRing(
+        d,
+        ringPoints(chest, t, torsoSectionAt(proportions, proportions.spineLength + t * proportions.chestLength), TORSO_FRONT)
+      );
       setShare(d, ring, 0, 0);
       chestRings.push(ring);
     }
@@ -1423,7 +1484,7 @@
     const neckRings = [chestRings[chestRings.length - 1]];
     for (let k = 1; k <= AXIAL_STEPS; k += 1) {
       const t = k / AXIAL_STEPS;
-      const ring = addRing(d, ringPoints(neck, t, radiusAt(proportions.neckProfile, t)));
+      const ring = addRing(d, ringPoints(neck, t, sectionAt(proportions.neckProfile, t), TORSO_FRONT));
       const headShare = t >= 0.5 ? 2 * t - 1 : 0;
       setShare(d, ring, 0, headShare);
       neckRings.push(ring);
@@ -1444,10 +1505,17 @@
     const lower = frameOf(rig, lateral, skeleton, findBone(skeleton, `lowerArm${side > 0 ? "L" : "R"}`));
     const tS = 1 - proportions.shoulderDropY / proportions.chestLength;
     const chestTs = chestStations(tS);
-    const chestRingsPoints = chestTs.map((t) => ringPoints(chest, t, radiusAt(proportions.chestProfile, t)));
+    const chestRingsPoints = chestTs.map(
+      (t) => ringPoints(
+        chest,
+        t,
+        torsoSectionAt(proportions, proportions.spineLength + t * proportions.chestLength),
+        TORSO_FRONT
+      )
+    );
     const rim = shoulderRimPoints(chestRingsPoints, 3, 9, side);
-    const end = ringPoints(upper, 6 / 8, radiusAt(proportions.upperArmProfile, 6 / 8));
-    const collar = addCollar(d, rim, end, upper, proportions.upperArmProfile, 0, true);
+    const end = ringPoints(upper, 6 / 8, sectionAt(proportions.upperArmProfile, 6 / 8), LIMB_FRONT);
+    const collar = addCollar(d, rim, end, upper, proportions.upperArmProfile, 0, true, null, LIMB_FRONT);
     markSeam(d, collar[0]);
     link(d.indices, collar);
     const upperTail = addProfile(
@@ -1455,7 +1523,8 @@
       upper,
       proportions.upperArmProfile,
       [6 / 8, 7 / 8, 1],
-      collar[collar.length - 1]
+      collar[collar.length - 1],
+      LIMB_FRONT
     );
     link(d.indices, upperTail);
     const forearm = addProfile(
@@ -1463,19 +1532,31 @@
       lower,
       proportions.lowerArmProfile,
       [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8],
-      upperTail[upperTail.length - 1]
+      upperTail[upperTail.length - 1],
+      LIMB_FRONT
     );
     link(d.indices, forearm);
-    const wristTo = ringPoints(lower, 1, proportions.palmRadius);
+    const wristTo = ringPoints(
+      lower,
+      1,
+      {
+        halfWidth: proportions.palmWrist.halfWidth,
+        frontDepth: proportions.palmWrist.halfThickness,
+        backDepth: proportions.palmWrist.halfThickness,
+        exponent: 3
+      },
+      LIMB_FRONT
+    );
     const wristRings = addCollar(
       d,
-      ringPoints(lower, 5 / 8, radiusAt(proportions.lowerArmProfile, 5 / 8)),
+      ringPoints(lower, 5 / 8, sectionAt(proportions.lowerArmProfile, 5 / 8), LIMB_FRONT),
       wristTo,
       lower,
       null,
       1,
       false,
-      forearm[forearm.length - 1]
+      forearm[forearm.length - 1],
+      LIMB_FRONT
     );
     markSeam(d, wristRings[wristRings.length - 1]);
     link(d.indices, wristRings);
@@ -1489,8 +1570,8 @@
     const shin = frameOf(rig, lateral, skeleton, findBone(skeleton, `shin${side > 0 ? "L" : "R"}`));
     const foot = frameOf(rig, lateral, skeleton, findBone(skeleton, `foot${side > 0 ? "L" : "R"}`));
     const rim = hipRimPoints(spine, proportions, side);
-    const end = ringPoints(thigh, 6 / 8, radiusAt(proportions.thighProfile, 6 / 8));
-    const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true);
+    const end = ringPoints(thigh, 6 / 8, sectionAt(proportions.thighProfile, 6 / 8), LIMB_FRONT);
+    const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true, null, LIMB_FRONT);
     markSeam(d, collar[0]);
     link(d.indices, collar);
     const thighTail = addProfile(
@@ -1498,7 +1579,8 @@
       thigh,
       proportions.thighProfile,
       [6 / 8, 7 / 8, 1],
-      collar[collar.length - 1]
+      collar[collar.length - 1],
+      LIMB_FRONT
     );
     link(d.indices, thighTail);
     const shinRings = addProfile(
@@ -1506,19 +1588,21 @@
       shin,
       proportions.shinProfile,
       [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8],
-      thighTail[thighTail.length - 1]
+      thighTail[thighTail.length - 1],
+      LIMB_FRONT
     );
     link(d.indices, shinRings);
     const ankleRim = footHoleRimPoints(proportions).map((point) => transformPartPoint(foot, point));
     const ankleRings = addCollar(
       d,
-      ringPoints(shin, 5 / 8, radiusAt(proportions.shinProfile, 5 / 8)),
+      ringPoints(shin, 5 / 8, sectionAt(proportions.shinProfile, 5 / 8), LIMB_FRONT),
       ankleRim,
       shin,
       null,
       1,
       false,
-      shinRings[shinRings.length - 1]
+      shinRings[shinRings.length - 1],
+      LIMB_FRONT
     );
     markSeam(d, ankleRings[ankleRings.length - 1]);
     link(d.indices, ankleRings);
@@ -1537,7 +1621,7 @@
   function headMesh(partId, length2, proportions, fill) {
     const d = draft(false);
     const frame = { ox: 0, oy: 0, oz: 0, ax: 1, ay: 0, px: 0, py: 1, length: length2 };
-    const rings = addProfile(d, frame, proportions.headProfile, uniformStations(), null);
+    const rings = addProfile(d, frame, proportions.headProfile, uniformStations(), null, HEAD_FRONT);
     markSeam(d, rings[0]);
     link(d.indices, rings);
     addCap(d, rings[rings.length - 1], true);
@@ -1546,7 +1630,7 @@
   function handMesh(partId, side, length2, proportions, fill) {
     const d = draft(false);
     const palmEnd = proportions.palmFraction * length2;
-    const palm = tubeAlongX(d, 0, 0, 0, palmEnd, 0, 0, proportions.palmRadius);
+    const palm = palmTube(d, palmEnd, proportions.palmWrist, proportions.palmKnuckle);
     markSeam(d, palm[0]);
     const thumbX = proportions.thumbAlong * length2;
     const thumbY = -proportions.thumbDrop;
@@ -1554,17 +1638,16 @@
     const hole = thumbHole(palmEnd, thumbX, thumbY, thumbZ);
     linkExcept(d.indices, palm, (interval, j) => interval === hole.interval && hole.omitted.has(j));
     const fingers = [];
-    for (const spread of [
-      -proportions.fingerSpread[1],
-      -proportions.fingerSpread[0],
-      proportions.fingerSpread[0],
-      proportions.fingerSpread[1]
-    ]) {
-      const root = tubeAlongX(d, palmEnd, 0, spread, length2, 0, spread, proportions.fingerRadius);
+    for (let f = 0; f < 4; f += 1) {
+      const spread = side * proportions.fingerOffsets[f];
+      const tip = proportions.fingerLengths[f] * length2;
+      const root = tubeAlongX(d, palmEnd, 0, spread, tip, 0, spread, proportions.fingerRadius);
       link(d.indices, root);
       addCap(d, root[root.length - 1], true);
       const ring = root[0];
-      for (let j = 0; j < TUBE_SIDES; j += 1) pullInsidePalm(d.positions, ring + j, proportions.palmRadius);
+      for (let j = 0; j < TUBE_SIDES; j += 1) {
+        clampPalmThickness(d.positions, ring + j, proportions.palmKnuckle.halfThickness);
+      }
       fingers.push(ring);
     }
     const thumb = tubeAlongX(
@@ -1572,9 +1655,9 @@
       thumbX,
       thumbY,
       thumbZ,
-      thumbX + proportions.thumbFraction * length2,
+      proportions.thumbTipAlong * length2,
       thumbY,
-      thumbZ,
+      side * proportions.thumbTipZ,
       proportions.thumbRadius
     );
     link(d.indices, thumb);
@@ -1582,6 +1665,33 @@
     weldPalmEnd(d.indices, d.positions, palm[palm.length - 1], fingers);
     weldThumb(d.indices, d.positions, palm, hole, thumb[0]);
     return finish(partId, "part", d, fill);
+  }
+  function palmPoint(section2, theta) {
+    const power = 2 / 3;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+    return {
+      y: section2.halfThickness * Math.sign(cos) * Math.pow(Math.abs(cos), power),
+      z: section2.halfWidth * Math.sign(sin) * Math.pow(Math.abs(sin), power)
+    };
+  }
+  function palmTube(d, length2, wrist, knuckle) {
+    const rings = [];
+    for (let k = 0; k <= AXIAL_STEPS; k += 1) {
+      const u = k / AXIAL_STEPS;
+      const section2 = {
+        halfWidth: wrist.halfWidth + (knuckle.halfWidth - wrist.halfWidth) * u,
+        halfThickness: wrist.halfThickness + (knuckle.halfThickness - wrist.halfThickness) * u
+      };
+      const points = [];
+      for (let j = 0; j < TUBE_SIDES; j += 1) {
+        const theta = j * 2 * Math.PI / TUBE_SIDES;
+        const { y, z } = palmPoint(section2, theta);
+        points.push({ x: length2 * u, y, z });
+      }
+      rings.push(addRing(d, points));
+    }
+    return rings;
   }
   function footMesh(partId, proportions, fill) {
     const d = draft(false);
@@ -1645,21 +1755,22 @@
     return Array.from({ length: TUBE_SIDES }, (_, k) => left[(TUBE_SIDES - k) % TUBE_SIDES]);
   }
   function hipRimPoints(spine, proportions, side) {
-    const r0 = radiusAt(proportions.spineProfile, 0);
+    const base = torsoSectionAt(proportions, 0);
     const drop = proportions.thighLength / 8;
     const crotch = (m) => {
       const beta = m * Math.PI / 8;
-      return { x: -r0 * Math.cos(beta), y: spine.oy - drop * Math.sin(beta), z: 0 };
+      const depth = beta <= Math.PI / 2 ? base.backDepth : base.frontDepth;
+      return { x: -depth * Math.cos(beta), y: spine.oy - drop * Math.sin(beta), z: 0 };
     };
     const rim = [];
     if (side > 0) {
-      for (let k = 0; k <= 8; k += 1) rim.push(sample(spine, 0, r0, 8 - k));
+      for (let k = 0; k <= 8; k += 1) rim.push(sample(spine, 0, base, 8 - k, TORSO_FRONT));
       for (let m = 1; m <= 7; m += 1) rim.push(crotch(m));
     } else {
-      rim.push(sample(spine, 0, r0, 8));
+      rim.push(sample(spine, 0, base, 8, TORSO_FRONT));
       for (let m = 7; m >= 1; m -= 1) rim.push(crotch(m));
-      rim.push(sample(spine, 0, r0, 0));
-      for (let j = 15; j >= 9; j -= 1) rim.push(sample(spine, 0, r0, j));
+      rim.push(sample(spine, 0, base, 0, TORSO_FRONT));
+      for (let j = 15; j >= 9; j -= 1) rim.push(sample(spine, 0, base, j, TORSO_FRONT));
     }
     return rim;
   }
@@ -1707,7 +1818,7 @@
       at(3, 3)
     ];
   }
-  function addCollar(d, from, to, frame, profile2, chainEnd, writeFirst, reuseFirst = null) {
+  function addCollar(d, from, to, frame, profile, chainEnd, writeFirst, reuseFirst = null, frontSign = LIMB_FRONT) {
     const rings = [];
     for (let i = 0; i <= AXIAL_STEPS; i += 1) {
       const s = i / AXIAL_STEPS;
@@ -1724,7 +1835,7 @@
         const a = from[k];
         const b = to[k];
         const tk = clamp01(dotAxis(a, frame) / (frame.length * frame.length));
-        const wall = profile2 === null ? b : sample(frame, tk, radiusAt(profile2, tk), k);
+        const wall = profile === null ? b : sample(frame, tk, sectionAt(profile, tk), k, frontSign);
         const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
         const c = {
           x: 0.5 * mid.x + 0.5 * wall.x,
@@ -1745,14 +1856,14 @@
     }
     return rings;
   }
-  function addProfile(d, frame, profile2, ts, reuseFirst) {
+  function addProfile(d, frame, profile, ts, reuseFirst, frontSign) {
     const rings = [];
     for (let i = 0; i < ts.length; i += 1) {
       if (i === 0 && reuseFirst !== null) {
         rings.push(reuseFirst);
         continue;
       }
-      const ring = addRing(d, ringPoints(frame, ts[i], radiusAt(profile2, ts[i])));
+      const ring = addRing(d, ringPoints(frame, ts[i], sectionAt(profile, ts[i]), frontSign));
       setShare(d, ring, 0, 0);
       rings.push(ring);
     }
@@ -1860,15 +1971,11 @@
     for (let s = 0; s < count; s += 1) omitted.add(mod(j0 + s));
     return { interval: along, omitted, j0, count };
   }
-  function pullInsidePalm(positions, vertex, radius) {
+  function clampPalmThickness(positions, vertex, halfThickness) {
     const y = positions[vertex * 3 + 1];
-    const z = positions[vertex * 3 + 2];
-    const reach = Math.hypot(y, z);
-    const limit = radius * 0.98;
-    if (reach <= limit) return;
-    const scale3 = limit / reach;
-    positions[vertex * 3 + 1] = y * scale3;
-    positions[vertex * 3 + 2] = z * scale3;
+    const limit = halfThickness * 0.98;
+    if (Math.abs(y) <= limit) return;
+    positions[vertex * 3 + 1] = Math.sign(y) * limit;
   }
   function weldPalmEnd(indices, positions, palm, fingers) {
     const poly = [];
@@ -2067,15 +2174,48 @@
     for (let k = 0; k <= AXIAL_STEPS; k += 1) ts.push(k / AXIAL_STEPS);
     return ts;
   }
-  function ringPoints(frame, t, radius) {
+  var TORSO_FRONT = -1;
+  var LIMB_FRONT = 1;
+  var HEAD_FRONT = -1;
+  function torsoSectionAt(proportions, heightAboveHip) {
+    const total = proportions.spineLength + proportions.chestLength;
+    return sectionAt(proportions.torsoProfile, heightAboveHip / total);
+  }
+  function sectionAt(profile, t) {
+    for (let i = 0; i < profile.length - 1; i += 1) {
+      const left = profile[i];
+      const right = profile[i + 1];
+      if (t < left.t || t > right.t) continue;
+      const span2 = right.t - left.t;
+      const u = span2 === 0 ? 0 : (t - left.t) / span2;
+      return {
+        halfWidth: left.halfWidth * (1 - u) + right.halfWidth * u,
+        frontDepth: left.frontDepth * (1 - u) + right.frontDepth * u,
+        backDepth: left.backDepth * (1 - u) + right.backDepth * u,
+        exponent: left.exponent * (1 - u) + right.exponent * u
+      };
+    }
+    throw new Error("section");
+  }
+  function sectionPoint(section2, theta, frontSign) {
+    const power = 2 / section2.exponent;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+    const towardFront = cos >= 0 === frontSign > 0;
+    const depth = (towardFront ? section2.frontDepth : section2.backDepth) * Math.pow(Math.abs(cos), power);
+    return {
+      along: cos >= 0 ? depth : -depth,
+      lateral: section2.halfWidth * Math.sign(sin) * Math.pow(Math.abs(sin), power)
+    };
+  }
+  function ringPoints(frame, t, section2, frontSign) {
     const points = [];
-    for (let j = 0; j < TUBE_SIDES; j += 1) points.push(sample(frame, t, radius, j));
+    for (let j = 0; j < TUBE_SIDES; j += 1) points.push(sample(frame, t, section2, j, frontSign));
     return points;
   }
-  function sample(frame, t, radius, j) {
+  function sample(frame, t, section2, j, frontSign) {
     const theta = j * 2 * Math.PI / TUBE_SIDES;
-    const along = radius * Math.cos(theta);
-    const lateral = radius * Math.sin(theta);
+    const { along, lateral } = sectionPoint(section2, theta, frontSign);
     return {
       x: frame.ox + frame.ax * frame.length * t + frame.px * along,
       y: frame.oy + frame.ay * frame.length * t + frame.py * along,
@@ -2108,10 +2248,10 @@
       length: length2
     };
   }
-  function radiusAt(profile2, t) {
-    for (let i = 0; i < profile2.length - 1; i += 1) {
-      const left = profile2[i];
-      const right = profile2[i + 1];
+  function radiusAt(profile, t) {
+    for (let i = 0; i < profile.length - 1; i += 1) {
+      const left = profile[i];
+      const right = profile[i + 1];
       if (t < left.t || t > right.t) continue;
       const span2 = right.t - left.t;
       const u = span2 === 0 ? 0 : (t - left.t) / span2;
@@ -2704,17 +2844,18 @@
     if (parts.skeleton !== humanoid2.skeleton) throw new Error("skeleton");
     if (meshes.meshes.length !== parts.parts.length) throw new Error("mesh");
     const rig = writeBindRig2(humanoid2.skeleton);
+    const lateral = writeBindLateral2(humanoid2.skeleton);
     const weights = [];
     for (let i = 0; i < parts.parts.length; i += 1) {
       const part = parts.parts[i];
       const mesh = meshes.meshes[i];
       if (mesh.partId !== part.id) throw new Error("mesh");
       if (part.kind !== "skinned") continue;
-      weights.push(weightPart(part, mesh, rig, humanoid2.skeleton));
+      weights.push(weightPart(part, mesh, rig, lateral, humanoid2.skeleton));
     }
     return { weights };
   }
-  function weightPart(part, mesh, rig, skeleton) {
+  function weightPart(part, mesh, rig, lateral, skeleton) {
     const positions = mesh.positions;
     const endShare = mesh.endShare;
     const segments = [];
@@ -2729,6 +2870,7 @@
         slot: i,
         x0,
         y0,
+        z0: lateral[bone],
         x1: x0 + rig[base] * length2,
         y1: y0 + rig[base + 1] * length2,
         length: length2
@@ -2743,11 +2885,12 @@
     for (let v = 0; v < vertexCount; v += 1) {
       const x = positions[v * 3];
       const y = positions[v * 3 + 1];
+      const z = positions[v * 3 + 2];
       let best = 0;
       let bestDist = Number.POSITIVE_INFINITY;
       let bestT = 0;
       for (let s = 0; s < segments.length; s += 1) {
-        const proj = project(x, y, segments[s]);
+        const proj = project(x, y, z, segments[s]);
         if (proj.dist < bestDist) {
           best = s;
           bestDist = proj.dist;
@@ -2809,7 +2952,7 @@
       }
     }
   }
-  function project(x, y, seg) {
+  function project(x, y, z, seg) {
     const dx = seg.x1 - seg.x0;
     const dy = seg.y1 - seg.y0;
     const len2 = dx * dx + dy * dy;
@@ -2818,7 +2961,16 @@
     if (t > 1) t = 1;
     const cx = seg.x0 + dx * t;
     const cy = seg.y0 + dy * t;
-    return { t, dist: Math.hypot(x - cx, y - cy) };
+    return { t, dist: Math.hypot(x - cx, y - cy, z - seg.z0) };
+  }
+  function writeBindLateral2(skeleton) {
+    const lateral = new Float32Array(skeleton.boneCount);
+    for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+      const parentIndex = skeleton.parent[bone];
+      const own = skeleton.bindLateral[bone];
+      lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex] + own;
+    }
+    return lateral;
   }
   function writeBindRig2(skeleton) {
     const rig = new Float32Array(skeleton.boneCount * 9);
@@ -3436,12 +3588,100 @@
     return out;
   }
 
+  // preview/raster.ts
+  var buffer = {
+    width: 0,
+    height: 0,
+    pixels: null,
+    depth: new Float32Array(0)
+  };
+  function beginFrame(width, height, pixels, background) {
+    if (width <= 0 || height <= 0) throw new Error("size");
+    if (pixels.length !== width * height * 4) throw new Error("pixels");
+    if (buffer.width !== width || buffer.height !== height) {
+      buffer.width = width;
+      buffer.height = height;
+      buffer.depth = new Float32Array(width * height);
+    }
+    buffer.pixels = pixels;
+    buffer.depth.fill(Number.POSITIVE_INFINITY);
+    pixels.fill(0);
+    for (let i = 0; i < width * height; i += 1) {
+      pixels[i * 4] = background[0];
+      pixels[i * 4 + 1] = background[1];
+      pixels[i * 4 + 2] = background[2];
+      pixels[i * 4 + 3] = 255;
+    }
+    return { width, height, pixels, depth: buffer.depth };
+  }
+  function barycentric(ax, ay, bx, by, cx, cy) {
+    const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    return Math.abs(denom) <= 1e-8 ? null : { denom };
+  }
+  function bounds(surface, ax, ay, bx, by, cx, cy) {
+    const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+    const maxX = Math.min(surface.width - 1, Math.ceil(Math.max(ax, bx, cx)));
+    const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+    const maxY = Math.min(surface.height - 1, Math.ceil(Math.max(ay, by, cy)));
+    return minX > maxX || minY > maxY ? null : { minX, maxX, minY, maxY };
+  }
+  function flatTriangle(surface, point, z, color) {
+    const [ax, ay, bx, by, cx, cy] = point;
+    const basis = barycentric(ax, ay, bx, by, cx, cy);
+    const box = bounds(surface, ax, ay, bx, by, cx, cy);
+    if (basis === null || box === null) return;
+    const { denom } = basis;
+    const { width, pixels, depth } = surface;
+    for (let y = box.minY; y <= box.maxY; y += 1) {
+      for (let x = box.minX; x <= box.maxX; x += 1) {
+        const px = x + 0.5;
+        const py = y + 0.5;
+        const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom;
+        const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom;
+        if (w0 < -1e-6 || w1 < -1e-6 || 1 - w0 - w1 < -1e-6) continue;
+        const pixel = y * width + x;
+        if (z >= depth[pixel]) continue;
+        pixels[pixel * 4] = color[0];
+        pixels[pixel * 4 + 1] = color[1];
+        pixels[pixel * 4 + 2] = color[2];
+        pixels[pixel * 4 + 3] = 255;
+        depth[pixel] = z;
+      }
+    }
+  }
+  function shadedTriangle(surface, point, z, shade) {
+    const [ax, ay, bx, by, cx, cy] = point;
+    const basis = barycentric(ax, ay, bx, by, cx, cy);
+    const box = bounds(surface, ax, ay, bx, by, cx, cy);
+    if (basis === null || box === null) return;
+    const { denom } = basis;
+    const { width, pixels, depth } = surface;
+    const [za, zb, zc] = z;
+    for (let y = box.minY; y <= box.maxY; y += 1) {
+      for (let x = box.minX; x <= box.maxX; x += 1) {
+        const px = x + 0.5;
+        const py = y + 0.5;
+        const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom;
+        const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom;
+        if (w0 < -1e-6 || w1 < -1e-6 || 1 - w0 - w1 < -1e-6) continue;
+        const pixel = y * width + x;
+        const value = w0 * za + w1 * zb + (1 - w0 - w1) * zc;
+        if (value >= depth[pixel]) continue;
+        const color = shade(px, py);
+        if (color === null) continue;
+        pixels[pixel * 4] = color[0];
+        pixels[pixel * 4 + 1] = color[1];
+        pixels[pixel * 4 + 2] = color[2];
+        pixels[pixel * 4 + 3] = 255;
+        depth[pixel] = value;
+      }
+    }
+  }
+
   // preview/main.ts
   var HEIGHT = 1.8;
   var FRONT_VIEW = 90;
   var FACING = 1;
-  var BACKGROUND = "#5c5c5c";
-  var STROKE = "#141414";
   var STEP = 5;
   var BONE_UI = {
     pelvis: { group: "\u8EAF\u5E72", label: "\u9AA8\u76C6" },
@@ -3486,7 +3726,17 @@
   void loadGrayTextures().then(() => {
     texturesReady = true;
     draw();
-  });
+  }).catch((error) => showLoadError(error));
+  function showLoadError(error) {
+    const stage = canvas.parentElement;
+    if (stage === null) return;
+    const note = document.createElement("pre");
+    note.className = "error";
+    note.textContent = `${error instanceof Error ? error.message : String(error)}
+
+\u7EB9\u7406\u662F\u6309\u7F51\u683C\u9010\u4E09\u89D2\u5F62\u751F\u6210\u7684\u3002\u5148\u91CD\u5EFA\uFF1Apnpm --dir preview run build\uFF08\u6216\u5206\u6B65 build:engine / textures / bundle\uFF09\u3002`;
+    stage.append(note);
+  }
   function mountPose(root) {
     const title = document.createElement("h1");
     title.textContent = "\u59FF\u52BF";
@@ -3573,7 +3823,13 @@
     const jobs = [];
     for (const part of manifest.parts) {
       const mesh = byId.get(part.partId);
-      if (mesh === void 0 || mesh.indices.length / 3 !== part.count) throw new Error("texture");
+      if (mesh === void 0) throw new Error(`\u7EB9\u7406\u6E05\u5355\u91CC\u6709\u672A\u77E5\u90E8\u4EF6\uFF1A${part.partId}`);
+      const triangles = mesh.indices.length / 3;
+      if (triangles !== part.count) {
+        throw new Error(
+          `\u7EB9\u7406\u4E0E\u7F51\u683C\u5BF9\u4E0D\u4E0A\uFF1A${part.partId} \u6E05\u5355 ${part.count} \u5F20\uFF0C\u7F51\u683C ${triangles} \u4E2A\u4E09\u89D2\u5F62`
+        );
+      }
       for (let index = 0; index < part.count; index += 1) jobs.push({ partId: part.partId, index });
     }
     const decoded = /* @__PURE__ */ new Map();
@@ -3615,6 +3871,12 @@
       byId.get(part.partId).textures = textures;
     }
   }
+  var DEPTH_BIAS = 1e-4;
+  var VIEW_ANGLE = FRONT_VIEW * Math.PI / 180;
+  var VIEW_COS = Math.cos(VIEW_ANGLE);
+  var VIEW_SIN = Math.sin(VIEW_ANGLE);
+  var STROKE_RGB = [20, 20, 20];
+  var BACKGROUND_RGB = [92, 92, 92];
   function draw() {
     if (!texturesReady) return;
     const stage = canvas.parentElement;
@@ -3622,8 +3884,10 @@
     const cssHeight = stage?.clientHeight ?? window.innerHeight;
     if (cssWidth < 2 || cssHeight < 2) return;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(cssWidth * dpr));
-    canvas.height = Math.max(1, Math.round(cssHeight * dpr));
+    const width = Math.max(1, Math.round(cssWidth * dpr));
+    const height = Math.max(1, Math.round(cssHeight * dpr));
+    canvas.width = width;
+    canvas.height = height;
     canvas.style.width = `${cssWidth}px`;
     canvas.style.height = `${cssHeight}px`;
     applyPose();
@@ -3636,36 +3900,41 @@
     const textured = textureProjected(compiled, projected);
     const stroked = strokeContours(filled, true);
     const order = depthOrder(new Array(projected.length), projected, tie);
-    const frame = fit(restFrame, canvas.width, canvas.height);
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = BACKGROUND;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    paintTextures(textured, order, frame, pixels);
-    ctx.putImageData(pixels, 0, 0);
-    const byFill = new Map(filled.map((part) => [part.partId, part]));
-    const byStroke = new Map(stroked.map((part) => [part.partId, part]));
-    for (let i = 0; i < order.length; i += 1) {
-      const id = order[i];
-      const part = byFill.get(id);
-      if (part === void 0) continue;
-      const contour = byStroke.get(id);
-      if (contour !== void 0) paintStroke(contour, frame);
-    }
+    const frame = framing(projected, width, height);
+    const depths = sampled.map((part) => vertexDepths(part.positions));
+    const rawIndices = sampled.map((part) => part.indices);
+    const partIndex = new Map(projected.map((part, index) => [part.partId, index]));
+    const image = ctx.getImageData(0, 0, width, height);
+    const surface = beginFrame(width, height, image.data, BACKGROUND_RGB);
+    paintTextures(textured, order, frame, surface, depths, rawIndices, partIndex);
+    paintStrokes(stroked, order, frame, surface, projected, depths, partIndex);
+    ctx.putImageData(image, 0, 0);
   }
-  function paintTextures(parts, order, frame, image) {
+  function vertexDepths(positions) {
+    const out = new Float32Array(positions.length / 3);
+    for (let v = 0; v < out.length; v += 1) {
+      const x = positions[v * 3];
+      const z = positions[v * 3 + 2];
+      out[v] = z * VIEW_COS - x * VIEW_SIN;
+    }
+    return out;
+  }
+  function paintTextures(parts, order, frame, surface, depths, rawIndices, partIndex) {
     const uv = new Float32Array(2);
     const corners = new Float32Array(6);
     const byId = new Map(parts.map((part) => [part.partId, part]));
-    const width = image.width;
-    const height = image.height;
-    const data = image.data;
-    for (let i = 0; i < order.length; i += 1) {
-      const part = byId.get(order[i]);
+    for (let oi = 0; oi < order.length; oi += 1) {
+      const id = order[oi];
+      const part = byId.get(id);
       if (part === void 0 || part.textures.length === 0) continue;
+      const index = partIndex.get(id);
+      if (index === void 0) continue;
+      const partDepth = depths[index];
+      const raw = rawIndices[index];
       const positions = part.positions;
       const indices = part.indices;
       for (let t = 0; t < indices.length; t += 3) {
+        if (backFacing(positions, raw, t)) continue;
         const ia = indices[t];
         const ib = indices[t + 1];
         const ic = indices[t + 2];
@@ -3675,34 +3944,91 @@
         const by = frame.originY - positions[ib * 2 + 1] * frame.scale;
         const cx = frame.originX + positions[ic * 2] * frame.scale;
         const cy = frame.originY - positions[ic * 2 + 1] * frame.scale;
-        const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
-        if (Math.abs(denom) <= 1e-8) continue;
-        const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
-        const maxX = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)));
-        const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
-        const maxY = Math.min(height - 1, Math.ceil(Math.max(ay, by, cy)));
-        corners.set(part.uvs.subarray(t * 2, t * 2 + 6));
         const texture = part.textures[part.triangleTexture[t / 3]];
         if (texture === void 0) continue;
-        for (let y = minY; y <= maxY; y += 1) {
-          for (let x = minX; x <= maxX; x += 1) {
-            const px = x + 0.5;
-            const py = y + 0.5;
-            const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom;
-            const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom;
-            const w2 = 1 - w0 - w1;
-            if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+        corners.set(part.uvs.subarray(t * 2, t * 2 + 6));
+        shadedTriangle(
+          surface,
+          [ax, ay, bx, by, cx, cy],
+          [partDepth[ia], partDepth[ib], partDepth[ic]],
+          (px, py) => {
             triangleUv(uv, ax, ay, bx, by, cx, cy, px, py, corners);
             const color = sampleTexture(texture, uv[0], uv[1]);
-            const pixel = (y * width + x) * 4;
-            data[pixel] = Math.round(color.r * 255);
-            data[pixel + 1] = Math.round(color.g * 255);
-            data[pixel + 2] = Math.round(color.b * 255);
-            data[pixel + 3] = 255;
+            return [Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255)];
           }
-        }
+        );
       }
     }
+  }
+  function backFacing(positions, raw, t) {
+    const a = raw[t];
+    const b = raw[t + 1];
+    const c = raw[t + 2];
+    const ax = positions[a * 2];
+    const ay = positions[a * 2 + 1];
+    const bx = positions[b * 2];
+    const by = positions[b * 2 + 1];
+    const cx = positions[c * 2];
+    const cy = positions[c * 2 + 1];
+    return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) <= 0;
+  }
+  function paintStrokes(parts, order, frame, surface, projected, depths, partIndex) {
+    const byId = new Map(parts.map((part) => [part.partId, part]));
+    for (let oi = 0; oi < order.length; oi += 1) {
+      const id = order[oi];
+      const part = byId.get(id);
+      if (part === void 0) continue;
+      const index = partIndex.get(id);
+      if (index === void 0) continue;
+      const screen = projected[index].positions;
+      const partDepth = depths[index];
+      for (const quad2 of part.quads) {
+        const z = quadDepth(quad2.positions, screen, partDepth) - DEPTH_BIAS;
+        const q = quad2.indices;
+        const points = quad2.positions;
+        const at = (i) => [
+          frame.originX + points[i * 2] * frame.scale,
+          frame.originY - points[i * 2 + 1] * frame.scale
+        ];
+        const p0 = at(q[0]);
+        const p1 = at(q[1]);
+        const p2 = at(q[2]);
+        const p3 = at(q[3]);
+        const p4 = at(q[4]);
+        const p5 = at(q[5]);
+        flatTriangle(surface, [p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]], z, STROKE_RGB);
+        flatTriangle(surface, [p3[0], p3[1], p4[0], p4[1], p5[0], p5[1]], z, STROKE_RGB);
+      }
+    }
+  }
+  function quadDepth(quad2, screen, partDepth) {
+    const cx = (quad2[0] + quad2[4]) / 2;
+    const cy = (quad2[1] + quad2[5]) / 2;
+    let best = Number.POSITIVE_INFINITY;
+    let depth = 0;
+    for (let v = 0; v < partDepth.length; v += 1) {
+      const dx = screen[v * 2] - cx;
+      const dy = screen[v * 2 + 1] - cy;
+      const distance2 = dx * dx + dy * dy;
+      if (distance2 < best) {
+        best = distance2;
+        depth = partDepth[v];
+      }
+    }
+    return Number.isFinite(best) ? depth : 0;
+  }
+  function framing(parts, width, height) {
+    const current = fit(contain(parts), width, height);
+    const baseline = fit(restFrame, width, height);
+    const scale3 = Math.min(current.scale, baseline.scale);
+    const cx = (restFrame.minX + restFrame.maxX) / 2;
+    const cy = (restFrame.minY + restFrame.maxY) / 2;
+    return {
+      ...restFrame,
+      scale: scale3,
+      originX: width / 2 - cx * scale3,
+      originY: height / 2 + cy * scale3
+    };
   }
   function applyPose() {
     for (const control of controls) {
@@ -3712,24 +4038,6 @@
       if (control.axis === "rotation") setPoseRotation(pose, bone, radians);
       else if (control.axis === "swing") setPoseSwing(pose, bone, radians);
       else setPoseTwist(pose, bone, radians);
-    }
-  }
-  function paintStroke(part, frame) {
-    ctx.fillStyle = STROKE;
-    for (let q = 0; q < part.quads.length; q += 1) {
-      const quad2 = part.quads[q];
-      ctx.beginPath();
-      move(quad2.positions, frame, quad2.indices[0]);
-      line(quad2.positions, frame, quad2.indices[1]);
-      line(quad2.positions, frame, quad2.indices[2]);
-      ctx.closePath();
-      ctx.fill();
-      ctx.beginPath();
-      move(quad2.positions, frame, quad2.indices[3]);
-      line(quad2.positions, frame, quad2.indices[4]);
-      line(quad2.positions, frame, quad2.indices[5]);
-      ctx.closePath();
-      ctx.fill();
     }
   }
   function sample2(rig, current, rigFromBone) {
@@ -3790,22 +4098,16 @@
       maxY: maxY + spanY * 0.06
     };
   }
-  function fit(bounds, width, height) {
-    const scale3 = Math.min(width / (bounds.maxX - bounds.minX), height / (bounds.maxY - bounds.minY));
-    const usedW = (bounds.maxX - bounds.minX) * scale3;
-    const usedH = (bounds.maxY - bounds.minY) * scale3;
+  function fit(bounds2, width, height) {
+    const scale3 = Math.min(width / (bounds2.maxX - bounds2.minX), height / (bounds2.maxY - bounds2.minY));
+    const usedW = (bounds2.maxX - bounds2.minX) * scale3;
+    const usedH = (bounds2.maxY - bounds2.minY) * scale3;
     return {
-      ...bounds,
+      ...bounds2,
       scale: scale3,
-      originX: (width - usedW) / 2 - bounds.minX * scale3,
-      originY: (height - usedH) / 2 + bounds.maxY * scale3
+      originX: (width - usedW) / 2 - bounds2.minX * scale3,
+      originY: (height - usedH) / 2 + bounds2.maxY * scale3
     };
-  }
-  function move(positions, frame, index) {
-    ctx.moveTo(frame.originX + positions[index * 2] * frame.scale, frame.originY - positions[index * 2 + 1] * frame.scale);
-  }
-  function line(positions, frame, index) {
-    ctx.lineTo(frame.originX + positions[index * 2] * frame.scale, frame.originY - positions[index * 2 + 1] * frame.scale);
   }
   function degrees(radians) {
     return Math.round(radians * 180 / Math.PI);

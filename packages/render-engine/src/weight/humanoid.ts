@@ -25,6 +25,7 @@ type Segment = {
   readonly slot: number
   readonly x0: number
   readonly y0: number
+  readonly z0: number
   readonly x1: number
   readonly y1: number
   readonly length: number
@@ -44,13 +45,14 @@ export function createHumanoidWeights(
   if (parts.skeleton !== humanoid.skeleton) throw new Error('skeleton')
   if (meshes.meshes.length !== parts.parts.length) throw new Error('mesh')
   const rig = writeBindRig(humanoid.skeleton)
+  const lateral = writeBindLateral(humanoid.skeleton)
   const weights: SkinWeights[] = []
   for (let i = 0; i < parts.parts.length; i += 1) {
     const part = parts.parts[i]!
     const mesh = meshes.meshes[i]!
     if (mesh.partId !== part.id) throw new Error('mesh')
     if (part.kind !== 'skinned') continue
-    weights.push(weightPart(part, mesh, rig, humanoid.skeleton))
+    weights.push(weightPart(part, mesh, rig, lateral, humanoid.skeleton))
   }
   return { weights }
 }
@@ -59,6 +61,7 @@ function weightPart(
   part: SkinnedPart,
   mesh: Mesh,
   rig: Float32Array,
+  lateral: Float32Array,
   skeleton: Skeleton,
 ): SkinWeights {
   const positions = mesh.positions
@@ -75,6 +78,7 @@ function weightPart(
       slot: i,
       x0,
       y0,
+      z0: lateral[bone]!,
       x1: x0 + rig[base]! * length,
       y1: y0 + rig[base + 1]! * length,
       length,
@@ -89,11 +93,12 @@ function weightPart(
   for (let v = 0; v < vertexCount; v += 1) {
     const x = positions[v * 3]!
     const y = positions[v * 3 + 1]!
+    const z = positions[v * 3 + 2]!
     let best = 0
     let bestDist = Number.POSITIVE_INFINITY
     let bestT = 0
     for (let s = 0; s < segments.length; s += 1) {
-      const proj = project(x, y, segments[s]!)
+      const proj = project(x, y, z, segments[s]!)
       if (proj.dist < bestDist) {
         best = s
         bestDist = proj.dist
@@ -159,7 +164,7 @@ function blend(column: Float32Array, segments: Segment[], best: number, t: numbe
   }
 }
 
-function project(x: number, y: number, seg: Segment): { t: number; dist: number } {
+function project(x: number, y: number, z: number, seg: Segment): { t: number; dist: number } {
   const dx = seg.x1 - seg.x0
   const dy = seg.y1 - seg.y0
   const len2 = dx * dx + dy * dy
@@ -168,7 +173,17 @@ function project(x: number, y: number, seg: Segment): { t: number; dist: number 
   if (t > 1) t = 1
   const cx = seg.x0 + dx * t
   const cy = seg.y0 + dy * t
-  return { t, dist: Math.hypot(x - cx, y - cy) }
+  return { t, dist: Math.hypot(x - cx, y - cy, z - seg.z0) }
+}
+
+function writeBindLateral(skeleton: Skeleton): Float32Array {
+  const lateral = new Float32Array(skeleton.boneCount)
+  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+    const parentIndex = skeleton.parent[bone]!
+    const own = skeleton.bindLateral[bone]!
+    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
+  }
+  return lateral
 }
 
 function writeBindRig(skeleton: Skeleton): Float32Array {

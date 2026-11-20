@@ -116,7 +116,7 @@ describe('stroke', () => {
         bottom = Math.min(bottom, leg.positions[i + 1]!)
         top = Math.max(top, leg.positions[i + 1]!)
       }
-      expect(max - min).toBeGreaterThanOrEqual(2 * p.thighProfile[p.thighProfile.length - 1]!.radius - 1e-4)
+      expect(max - min).toBeGreaterThanOrEqual(2 * p.thighProfile[p.thighProfile.length - 1]!.halfWidth - 1e-4)
 
       let left = false
       let right = false

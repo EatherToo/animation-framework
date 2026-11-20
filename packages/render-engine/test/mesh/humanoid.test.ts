@@ -2,7 +2,7 @@ import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
 import * as meshEntry from '@/mesh'
 import { createHumanoidMeshes, type Mesh } from '@/mesh/humanoid'
-import type { RadiusProfile } from '@/body/proportions'
+import type { RadiusProfile, SectionProfile } from '@/body/proportions'
 import { AXIAL_STEPS, TUBE_SIDES, meshFromCappedSection, meshFromCappedTube, meshFromRectangle, meshFromStrip } from '@/mesh/strip'
 import { createHumanoidParts } from '@/part/humanoid'
 import { validateMesh } from '@/topology/validate'
@@ -83,6 +83,43 @@ function profileAt(profile: RadiusProfile, t: number): number {
   throw new Error('radius')
 }
 
+type SectionAt = { halfWidth: number; frontDepth: number; backDepth: number; exponent: number }
+
+function sectionAt(profile: SectionProfile, t: number): SectionAt {
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const span = right.t - left.t
+    const u = span === 0 ? 0 : (t - left.t) / span
+    return {
+      halfWidth: left.halfWidth * (1 - u) + right.halfWidth * u,
+      frontDepth: left.frontDepth * (1 - u) + right.frontDepth * u,
+      backDepth: left.backDepth * (1 - u) + right.backDepth * u,
+      exponent: left.exponent * (1 - u) + right.exponent * u,
+    }
+  }
+  throw new Error('section')
+}
+
+/** 生成时实际取到的站点是 `k / AXIAL_STEPS`，头与四肢的极值也只在这些站上出现。 */
+function stationExtremes(profile: SectionProfile): {
+  halfWidth: number
+  frontDepth: number
+  backDepth: number
+} {
+  let halfWidth = 0
+  let frontDepth = 0
+  let backDepth = 0
+  for (let k = 0; k <= AXIAL_STEPS; k += 1) {
+    const sample = sectionAt(profile, k / AXIAL_STEPS)
+    halfWidth = Math.max(halfWidth, sample.halfWidth)
+    frontDepth = Math.max(frontDepth, sample.frontDepth)
+    backDepth = Math.max(backDepth, sample.backDepth)
+  }
+  return { halfWidth, frontDepth, backDepth }
+}
+
 function range(mesh: Mesh, axis: 0 | 1 | 2): { min: number; max: number } {
   let min = Infinity
   let max = -Infinity
@@ -148,16 +185,17 @@ describe('humanoid meshes', () => {
 
     const torso = byId.get('torso')!
     expect(range(torso, 1).max).toBeGreaterThan(p.hipHeight + p.spineLength)
-    const chestWide = Math.max(...p.chestProfile.map((sample) => sample.radius))
-    expect(range(torso, 2).max).toBeCloseTo(chestWide, 5)
-    expect(range(torso, 2).min).toBeCloseTo(-chestWide, 5)
+    const hipWide = sectionAt(p.torsoProfile, 0).halfWidth
+    expect(range(torso, 2).max).toBeCloseTo(hipWide, 5)
+    expect(range(torso, 2).min).toBeCloseTo(-hipWide, 5)
 
     const head = byId.get('head')!
-    const headWide = widestStation(p.headProfile)
+    const headExtremes = stationExtremes(p.headProfile)
     expect(range(head, 0).min).toBe(0)
     expect(range(head, 0).max).toBeCloseTo(p.headLength, 5)
-    expect(range(head, 1).max).toBeCloseTo(headWide, 5)
-    expect(range(head, 2).max).toBeCloseTo(headWide, 5)
+    expect(range(head, 1).max).toBeCloseTo(headExtremes.backDepth, 5)
+    expect(range(head, 1).min).toBeCloseTo(-headExtremes.frontDepth, 5)
+    expect(range(head, 2).max).toBeCloseTo(headExtremes.halfWidth, 5)
     expect(head.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
 
     for (const id of ['handL', 'handR']) {
@@ -199,12 +237,15 @@ describe('humanoid meshes', () => {
     expect(shoulderSeam).toBe(TUBE_SIDES)
 
     const armEnd = 6 / 8
+    const collarSection = sectionAt(p.upperArmProfile, armEnd)
     let collarEnd = 0
     for (let i = 0; i < arm.positions.length / 3; i += 1) {
       const v = vertex(arm, i)
-      const radius = profileAt(p.upperArmProfile, armEnd)
       if (Math.abs(v.y - (shoulderY - armEnd * p.upperArmLength)) > 1e-4) continue
-      if (Math.abs(Math.hypot(v.x, v.z - p.shoulderOffsetZ) - radius) > 1e-4) continue
+      const ellipse =
+        (v.x / collarSection.frontDepth) ** 2 +
+        ((v.z - p.shoulderOffsetZ) / collarSection.halfWidth) ** 2
+      if (Math.abs(ellipse - 1) > 1e-4) continue
       expect(arm.endShare[i * 2]!).toBeCloseTo(0, 5)
       collarEnd += 1
     }
@@ -246,13 +287,20 @@ describe('humanoid meshes', () => {
     expect(head.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
 
     const elbowY = shoulderY - p.upperArmLength
-    const elbowRadius = p.upperArmProfile[p.upperArmProfile.length - 1]!.radius
-    expect(elbowRadius).toBeCloseTo(p.lowerArmProfile[0]!.radius, 8)
+    const elbowSection = sectionAt(p.upperArmProfile, 1)
+    const forearmStart = sectionAt(p.lowerArmProfile, 0)
+    expect(elbowSection.halfWidth).toBeCloseTo(forearmStart.halfWidth, 8)
+    expect(elbowSection.frontDepth).toBeCloseTo(forearmStart.frontDepth, 8)
+    expect(elbowSection.backDepth).toBeCloseTo(forearmStart.backDepth, 8)
+    expect(elbowSection.exponent).toBeCloseTo(forearmStart.exponent, 8)
     let elbow = 0
     for (let i = 0; i < arm.positions.length / 3; i += 1) {
       const v = vertex(arm, i)
       if (Math.abs(v.y - elbowY) > 1e-5) continue
-      expect(Math.hypot(v.x, v.z - p.shoulderOffsetZ)).toBeCloseTo(elbowRadius, 5)
+      const ellipse =
+        (v.x / elbowSection.frontDepth) ** 2 +
+        ((v.z - p.shoulderOffsetZ) / elbowSection.halfWidth) ** 2
+      expect(ellipse).toBeCloseTo(1, 4)
       elbow += 1
     }
     expect(elbow).toBe(TUBE_SIDES)
