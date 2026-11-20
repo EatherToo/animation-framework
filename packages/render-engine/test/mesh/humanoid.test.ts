@@ -189,8 +189,8 @@ describe('humanoid meshes', () => {
   })
 
   it('空段列表抛出 segments', () => {
-    expect(() => meshFromStrip('a', 'character', [])).toThrow(/^segments$/)
-    expect(() => meshFromCappedTube('a', 'part', [])).toThrow(/^segments$/)
+    expect(() => meshFromStrip('a', 'character', [], { r: 0, g: 0, b: 0 })).toThrow(/^segments$/)
+    expect(() => meshFromCappedTube('a', 'part', [], { r: 0, g: 0, b: 0 })).toThrow(/^segments$/)
   })
 
   it('骨架不一致时拒绝', () => {

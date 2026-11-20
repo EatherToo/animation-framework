@@ -5,6 +5,7 @@ import { readDiagnostics, type DiagnosticReadout } from '../diag/diag'
 import { recordContacts, type ContactLog, createContactLog } from '../event/event'
 import { evaluateFk } from '../fk/evaluate'
 import { fillProjected } from '../fill/fill'
+import { textureProjected } from '../texture/bind'
 import { createParams } from '../params/params'
 import { clearRecovery } from '../recover/recover'
 import { reachStance } from '../reach/reach'
@@ -61,8 +62,9 @@ export function presentEngine(engine: Engine, alpha: number, view: ViewIndex): v
     projected,
     compiled.parts.parts.map((part) => part.fill),
   )
+  const textured = textureProjected(compiled, projected)
   const order = depthOrder(new Array<string>(projected.length), projected, sampled.order)
-  updateBinding(engine.binding, filled, strokeContours(filled, true), order)
+  updateBinding(engine.binding, filled, textured, strokeContours(filled, true), order)
 }
 
 export function resetEngine(engine: Engine, stand: Pose): void {

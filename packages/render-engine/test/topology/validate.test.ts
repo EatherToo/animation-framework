@@ -13,6 +13,9 @@ function mesh(
     space: 'part',
     positions: new Float32Array(positions),
     indices: new Uint16Array(indices),
+    textures: [],
+    triangleTexture: new Uint16Array(),
+    uvs: new Float32Array(),
   }
 }
 

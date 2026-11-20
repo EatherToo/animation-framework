@@ -50,13 +50,13 @@ describe('snapshot', () => {
 
     const layer = createMemoryLayer()
     const binding = createBinding(layer)
-    const { filled, order } = presentPose(solver.compiled, solver.pose, 0)
-    updateBinding(binding, filled, strokeContours(filled, true), order)
+    const { filled, textured, order } = presentPose(solver.compiled, solver.pose, 0)
+    updateBinding(binding, filled, textured, strokeContours(filled, true), order)
     const bent = createPose(solver.pose.skeleton)
     bent.data.set(solver.pose.data)
     setPoseRotation(bent, findBone(solver.pose.skeleton, 'shinL'), -0.6)
     const next = presentPose(solver.compiled, bent, 200)
-    updateBinding(binding, next.filled, strokeContours(next.filled, true), next.order)
+    updateBinding(binding, next.filled, next.textured, strokeContours(next.filled, true), next.order)
     const shown = Array.from(layer.objects[0]!.positions)
 
     setPlacement(solver.placement, 4, 1, 0, generation + 1)

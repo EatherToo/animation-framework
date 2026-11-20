@@ -5,12 +5,14 @@ import { skinMesh } from '@/skin/skin'
 import type { Pose } from '@/skeleton/pose'
 import { drawOrder } from '@/slot/slot'
 import type { Facing } from '@/space/facing'
+import { textureProjected, type TexturedPart } from '@/texture/bind'
 import { depthOrder, projectParts, type ProjectedPart, type ViewIndex, type ViewSource } from '@/view/project'
 
 export type Presented = {
   readonly skinned: ViewSource[]
   readonly projected: ProjectedPart[]
   readonly filled: FilledPart[]
+  readonly textured: TexturedPart[]
   readonly tie: string[]
   readonly order: string[]
 }
@@ -40,7 +42,8 @@ export function presentPose(
     projected,
     compiled.parts.parts.map((part) => part.fill),
   )
+  const textured = textureProjected(compiled, projected)
   const tie = drawOrder(new Array<string>(compiled.slots.slots.length), compiled.slots, facing)
   const order = depthOrder(new Array<string>(projected.length), projected, tie)
-  return { skinned, projected, filled, tie, order }
+  return { skinned, projected, filled, textured, tie, order }
 }
