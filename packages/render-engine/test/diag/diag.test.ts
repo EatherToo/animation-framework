@@ -77,13 +77,13 @@ describe('diagnostics', () => {
       }
     }
 
-    const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-    evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
-    const hip = thighL * 9
+    const fk = new Float32Array(solver.compiled.skeleton.boneCount * 12)
+    evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
+    const hip = thighL * 12
     const radius = solver.compiled.proportions.legLength
     expect(view.envelope.length).toBeGreaterThanOrEqual(8)
     const end = view.envelope[0]!
-    const used = Math.hypot(end.x0 - fk[hip + 6]!, end.y0 - fk[hip + 7]!)
+    const used = Math.hypot(end.x0 - fk[hip + 9]!, end.y0 - fk[hip + 10]!)
     expect(used).toBeCloseTo(radius, 5)
 
     expect(layer.objects).toEqual(kept)

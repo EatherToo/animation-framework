@@ -17,22 +17,22 @@ function footY(solver: Solver, poseData: Float32Array, foot: 'left' | 'right'): 
   const pose = solver.pose
   const saved = pose.data.slice()
   pose.data.set(poseData)
-  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, pose, solver.compiled.skeleton.boneCount)
+  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, solver.compiled, pose, solver.compiled.skeleton.boneCount)
   pose.data.set(saved)
   const bone = findBone(pose.skeleton, foot === 'left' ? 'footL' : 'footR')
-  return fk[bone * 9 + 7]!
+  return fk[bone * 12 + 10]!
 }
 
 function footX(solver: Solver, poseData: Float32Array, foot: 'left' | 'right'): number {
   const pose = solver.pose
   const saved = pose.data.slice()
   pose.data.set(poseData)
-  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, pose, solver.compiled.skeleton.boneCount)
+  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, solver.compiled, pose, solver.compiled.skeleton.boneCount)
   pose.data.set(saved)
   const bone = findBone(pose.skeleton, foot === 'left' ? 'footL' : 'footR')
-  return fk[bone * 9 + 6]!
+  return fk[bone * 12 + 9]!
 }
 
 describe('render sample', () => {

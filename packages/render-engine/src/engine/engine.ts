@@ -127,8 +127,8 @@ function live(engine: Engine): void {
 
 function stanceHolds(solver: Solver, stand: Pose): boolean {
   if (stand.skeleton !== solver.pose.skeleton) throw new Error('pose')
-  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, stand, solver.compiled.skeleton.boneCount)
+  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, solver.compiled, stand, solver.compiled.skeleton.boneCount)
   const left = characterSole(solver, fk, solver.legL.end)
   const right = characterSole(solver, fk, solver.legR.end)
   const pelvis = joint(fk, 0)
@@ -150,8 +150,8 @@ function stanceHolds(solver: Solver, stand: Pose): boolean {
 }
 
 function rig(solver: Solver): Float32Array {
-  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, new Float32Array(solver.compiled.skeleton.boneCount), solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
+  const fk = new Float32Array(solver.compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, solver.compiled, solver.pose, solver.compiled.skeleton.boneCount)
   return fk
 }
 
@@ -172,7 +172,7 @@ function characterSole(solver: Solver, fk: Float32Array, bone: number): { x: num
 }
 
 function joint(fk: Float32Array, bone: number): { x: number; y: number } {
-  return { x: fk[bone * 9 + 6]!, y: fk[bone * 9 + 7]! }
+  return { x: fk[bone * 12 + 9]!, y: fk[bone * 12 + 10]! }
 }
 
 function setVec(out: ReturnType<typeof createVec2>, x: number, y: number) {

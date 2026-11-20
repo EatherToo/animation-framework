@@ -156,10 +156,10 @@ function chainRoot(
   pose: Pose,
   chain: IkChain,
 ): { x: number; y: number } {
-  const fk = new Float32Array(compiled.skeleton.boneCount * 9)
-  evaluateFk(fk, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount)
-  const index = chain.root * 9
-  return { x: fk[index + 6]!, y: fk[index + 7]! }
+  const fk = new Float32Array(compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  const index = chain.root * 12
+  return { x: fk[index + 9]!, y: fk[index + 10]! }
 }
 
 function assertPoint(a: number, b: number, c: number, d: number): void {

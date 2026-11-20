@@ -9,8 +9,8 @@ import { expectClose } from '../math/assert'
 
 function origins(compiled: ReturnType<typeof compileHumanoid>, pose: ReturnType<typeof createPose>) {
   const fk = new Float32Array(compiled.bindRig.length)
-  evaluateFk(fk, new Float32Array(compiled.skeleton.boneCount), compiled, pose, compiled.skeleton.boneCount)
-  return (bone: number) => ({ x: fk[bone * 9 + 6]!, y: fk[bone * 9 + 7]! })
+  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
+  return (bone: number) => ({ x: fk[bone * 12 + 9]!, y: fk[bone * 12 + 10]! })
 }
 
 describe('two-bone ik', () => {

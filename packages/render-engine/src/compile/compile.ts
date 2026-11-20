@@ -1,17 +1,18 @@
 import type { Humanoid } from '../body/assemble'
+import type { JointDof } from '../body/joints'
 import type { BodyProportions } from '../body/proportions'
 import { createHumanoidMeshes } from '../mesh/humanoid'
 import type { MeshSet } from '../mesh/strip'
 import { createHumanoidParts } from '../part/humanoid'
 import type { PartSet } from '../part/set'
 import { createFootShape, type FootShape } from '../foot/shape'
-import { createMat3, invertMat3, multiplyMat3, type Mat3 } from '../math/mat3'
 import { createVec2 } from '../math/vec2'
 import { createCorrection, type Correction } from '../correction/correction'
 import { createHumanoidSlots } from '../slot/humanoid'
 import { findSlot, type SlotSet } from '../slot/slot'
 import { LENGTH_EPSILON } from '../space/tolerance'
-import { setBindParentFromBone } from '../skeleton/parent-from-bone'
+import { createPose } from '../skeleton/pose'
+import { multiplyRigid, RIGID_STRIDE, setRigidParentFromBone } from '../skeleton/rigid'
 import { bindLength, bindTranslation, type Skeleton } from '../skeleton/skeleton'
 import { validateMesh } from '../topology/validate'
 import { createHumanoidWeights, type WeightSet } from '../weight/humanoid'
@@ -28,8 +29,7 @@ export type CompiledRig = {
   readonly correction: Correction
   readonly bindRig: Float32Array
   readonly inverseBind: Float32Array
-  /** 各骨在绑定姿态下的角色空间横向位置：`bindLateral` 沿父链加总。 */
-  readonly lateralBind: Float32Array
+  readonly joints: readonly JointDof[]
 }
 
 /** `compileRig` 的源数据。 */
@@ -72,7 +72,7 @@ export function compileRig(input: CompileInput): CompiledRig {
   assertMeshes(parts, meshes)
   assertWeights(parts, meshes, weights)
   assertChains(humanoid)
-  const bindRig = writeBindRig(humanoid.skeleton)
+  const bindRig = writeBindRig(humanoid)
   const inverseBind = invertAll(bindRig, humanoid.skeleton.boneCount)
   const foot = createFootShape(humanoid.proportions.footLength, humanoid.proportions.ankleHeight)
   return {
@@ -86,7 +86,7 @@ export function compileRig(input: CompileInput): CompiledRig {
     correction,
     bindRig,
     inverseBind,
-    lateralBind: writeLateralBind(humanoid.skeleton),
+    joints: humanoid.joints,
   }
 }
 
@@ -151,52 +151,68 @@ function assertLink(skeleton: Skeleton, parent: number, child: number): void {
   }
 }
 
-function writeBindRig(skeleton: Skeleton): Float32Array {
-  const rig = new Float32Array(skeleton.boneCount * 9)
-  const local = createMat3()
-  const parent = createMat3()
-  const combined = createMat3()
+function writeBindRig(humanoid: Humanoid): Float32Array {
+  const skeleton = humanoid.skeleton
+  const pose = createPose(skeleton)
+  const rig = new Float32Array(skeleton.boneCount * RIGID_STRIDE)
+  const local = new Float32Array(RIGID_STRIDE)
+  const parent = new Float32Array(RIGID_STRIDE)
+  const combined = new Float32Array(RIGID_STRIDE)
   for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
-    setBindParentFromBone(local, skeleton, bone)
+    const joint = humanoid.joints[bone]!
+    setRigidParentFromBone(local, skeleton, pose, bone, joint.swingSign, joint.twistSign)
     const parentIndex = skeleton.parent[bone]!
-    const source = parentIndex < 0 ? local : combine(combined, parent, rig, parentIndex, local)
-    const dst = bone * 9
-    for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k]!
+    const dst = bone * RIGID_STRIDE
+    if (parentIndex < 0) {
+      rig.set(local, dst)
+      continue
+    }
+    parent.set(rig.subarray(parentIndex * RIGID_STRIDE, parentIndex * RIGID_STRIDE + RIGID_STRIDE))
+    multiplyRigid(combined, parent, local)
+    rig.set(combined, dst)
   }
   return rig
 }
 
-function writeLateralBind(skeleton: Skeleton): Float32Array {
-  const lateral = new Float32Array(skeleton.boneCount)
-  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
-    const parentIndex = skeleton.parent[bone]!
-    const own = skeleton.bindLateral[bone]!
-    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
-  }
-  return lateral
-}
-
-function combine(
-  combined: Mat3,
-  parent: Mat3,
-  rig: Float32Array,
-  parentIndex: number,
-  local: Mat3,
-): Mat3 {
-  const src = parentIndex * 9
-  for (let k = 0; k < 9; k += 1) parent[k] = rig[src + k]!
-  return multiplyMat3(combined, parent, local)
-}
-
 function invertAll(bindRig: Float32Array, boneCount: number): Float32Array {
   const inverse = new Float32Array(bindRig.length)
-  const source = createMat3()
-  const inv = createMat3()
+  const source = new Float32Array(RIGID_STRIDE)
+  const inv = new Float32Array(RIGID_STRIDE)
   for (let bone = 0; bone < boneCount; bone += 1) {
-    const dst = bone * 9
-    for (let k = 0; k < 9; k += 1) source[k] = bindRig[dst + k]!
-    if (!invertMat3(inv, source)) throw new Error('bind')
-    for (let k = 0; k < 9; k += 1) inverse[dst + k] = inv[k]!
+    const dst = bone * RIGID_STRIDE
+    source.set(bindRig.subarray(dst, dst + RIGID_STRIDE))
+    if (!invertRigid(inv, source)) throw new Error('bind')
+    inverse.set(inv, dst)
   }
   return inverse
+}
+
+function invertRigid(out: Float32Array, src: Float32Array): boolean {
+  for (let i = 0; i < RIGID_STRIDE; i += 1) {
+    if (!Number.isFinite(src[i])) return false
+  }
+  out[0] = src[0]!
+  out[1] = src[3]!
+  out[2] = src[6]!
+  out[3] = src[1]!
+  out[4] = src[4]!
+  out[5] = src[7]!
+  out[6] = src[2]!
+  out[7] = src[5]!
+  out[8] = src[8]!
+  const tx = src[9]!
+  const ty = src[10]!
+  const tz = src[11]!
+  out[9] = -(out[0]! * tx + out[3]! * ty + out[6]! * tz)
+  out[10] = -(out[1]! * tx + out[4]! * ty + out[7]! * tz)
+  out[11] = -(out[2]! * tx + out[5]! * ty + out[8]! * tz)
+  let error = 0
+  for (let col = 0; col < 3; col += 1) {
+    for (let row = 0; row < 3; row += 1) {
+      let sum = 0
+      for (let k = 0; k < 3; k += 1) sum += src[k * 3 + row]! * out[col * 3 + k]!
+      error = Math.max(error, Math.abs(sum - (row === col ? 1 : 0)))
+    }
+  }
+  return error <= 1e-4
 }

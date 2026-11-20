@@ -1,5 +1,7 @@
 import type { CompiledRig } from '../compile/compile'
 import { evaluateFk } from '../fk/evaluate'
+import { createMat3, type Mat3 } from '../math/mat3'
+import { RIGID_STRIDE } from '../skeleton/rigid'
 import { normalizeAngle } from '../math/angle'
 import { createVec2 } from '../math/vec2'
 import type { Pose } from '../skeleton/pose'
@@ -54,8 +56,8 @@ export function solveTwoBone(
   if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) throw new Error('target')
 
   const parent = parentOf(skeleton, chain.root)
-  const fk = new Float32Array(skeleton.boneCount * 9)
-  const parentMatrix = parentMatrixOf(fk, compiled, pose, parent)
+  const fk = new Float32Array(skeleton.boneCount * RIGID_STRIDE)
+  const parentMatrix = parentMatrixOf(compiled, pose, parent)
   const bind = bindTranslation(createVec2(), skeleton, chain.root)
   const hipX = parentMatrix[0]! * bind[0]! + parentMatrix[3]! * bind[1]! + parentMatrix[6]!
   const hipY = parentMatrix[1]! * bind[0]! + parentMatrix[4]! * bind[1]! + parentMatrix[7]!
@@ -84,9 +86,9 @@ export function solveTwoBone(
   setPoseRotation(pose, chain.root, solved.root)
   setPoseRotation(pose, chain.mid, solved.mid)
 
-  evaluateFk(fk, new Float32Array(skeleton.boneCount), compiled, pose, skeleton.boneCount)
-  const end = chain.end * 9
-  const error = Math.hypot(fk[end + 6]! - targetX, fk[end + 7]! - targetY)
+  evaluateFk(fk, compiled, pose, skeleton.boneCount)
+  const end = chain.end * RIGID_STRIDE
+  const error = Math.hypot(fk[end + 9]! - targetX, fk[end + 10]! - targetY)
   return { reached: error <= HIT }
 }
 
@@ -112,21 +114,22 @@ function assertChain(skeleton: Skeleton, chain: IkChain): void {
 }
 
 function parentMatrixOf(
-  fk: Float32Array,
   compiled: CompiledRig,
   pose: Pose,
   parent: number,
-): Float32Array {
-  if (parent < 0) {
-    const identity = new Float32Array(9)
-    identity[0] = 1
-    identity[4] = 1
-    identity[8] = 1
-    return identity
-  }
-  const view = fk.subarray(0, (parent + 1) * 9)
-  evaluateFk(view, new Float32Array(parent + 1), compiled, pose, parent + 1)
-  return view.subarray(parent * 9, parent * 9 + 9)
+): Mat3 {
+  const out = createMat3()
+  if (parent < 0) return out
+  const fk = new Float32Array((parent + 1) * RIGID_STRIDE)
+  evaluateFk(fk, compiled, pose, parent + 1)
+  const base = parent * RIGID_STRIDE
+  out[0] = fk[base]!
+  out[1] = fk[base + 1]!
+  out[3] = fk[base + 3]!
+  out[4] = fk[base + 4]!
+  out[6] = fk[base + 9]!
+  out[7] = fk[base + 10]!
+  return out
 }
 
 function choose(

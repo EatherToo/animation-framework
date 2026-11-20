@@ -2,8 +2,8 @@ import { normalizeAngle } from '../math/angle'
 import type { Vec2 } from '../math/vec2'
 import type { Skeleton } from './skeleton'
 
-/** 每根骨头在姿态缓冲中占用的分量数：`tx, ty, rotation`。 */
-export const POSE_STRIDE = 3
+/** 每根骨头在姿态缓冲中占用的分量数：`tx, ty, rotation, swing, twist`。 */
+export const POSE_STRIDE = 5
 
 /**
  * 一份实例上、相对绑定的当前偏移。
@@ -54,6 +54,26 @@ export function setPoseRotation(pose: Pose, bone: number, rotation: number): voi
 }
 
 /**
+ * 写入绕局部 `+Y` 的侧摆（折到 (-π, π]），不改其余分量。
+ * @param pose 姿态
+ * @param bone 骨头下标
+ * @param swing 侧摆（弧度）
+ */
+export function setPoseSwing(pose: Pose, bone: number, swing: number): void {
+  pose.data[bone * POSE_STRIDE + 3] = normalizeAngle(swing)
+}
+
+/**
+ * 写入绕骨轴的转动（折到 (-π, π]），不改其余分量。
+ * @param pose 姿态
+ * @param bone 骨头下标
+ * @param twist 绕局部 `+X` 的角（弧度）
+ */
+export function setPoseTwist(pose: Pose, bone: number, twist: number): void {
+  pose.data[bone * POSE_STRIDE + 4] = normalizeAngle(twist)
+}
+
+/**
  * 写出偏移平移到 `out`。
  * @param out 输出缓冲
  * @param pose 姿态
@@ -74,6 +94,24 @@ export function poseTranslation(out: Vec2, pose: Pose, bone: number): Vec2 {
  */
 export function poseRotation(pose: Pose, bone: number): number {
   return pose.data[bone * POSE_STRIDE + 2]!
+}
+
+/**
+ * 读出侧摆（弧度）。
+ * @param pose 姿态
+ * @param bone 骨头下标
+ */
+export function poseSwing(pose: Pose, bone: number): number {
+  return pose.data[bone * POSE_STRIDE + 3]!
+}
+
+/**
+ * 读出绕骨轴的角（弧度）。
+ * @param pose 姿态
+ * @param bone 骨头下标
+ */
+export function poseTwist(pose: Pose, bone: number): number {
+  return pose.data[bone * POSE_STRIDE + 4]!
 }
 
 /**

@@ -15,6 +15,7 @@ import {
   makeTwoBoneChain,
   type TwoBoneChain,
 } from './chains'
+import { createJointDofs, type JointDof } from './joints'
 import { createProportions, type BodyProportions } from './proportions'
 
 /** 首版人形 17 根骨头的固定名字。 */
@@ -70,6 +71,7 @@ export type Humanoid = {
     readonly armL: TwoBoneChain
     readonly armR: TwoBoneChain
   }
+  readonly joints: readonly JointDof[]
 }
 
 /**
@@ -307,5 +309,6 @@ export function createHumanoidFromProportions(p: BodyProportions): Humanoid {
         romMax: ARM_ROM_MAX,
       }),
     },
+    joints: createJointDofs(boneIndex),
   }
 }

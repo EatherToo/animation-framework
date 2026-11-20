@@ -16,6 +16,9 @@ export {
 } from './chains'
 export type { TwoBoneChain, TwoBoneChainSpec } from './chains'
 
+export { createJointDofs, clampJointPose } from './joints'
+export type { JointDof, JointLimit } from './joints'
+
 export {
   BONE_NAMES,
   createHumanoid,

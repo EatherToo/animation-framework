@@ -207,12 +207,11 @@ function reSolve(compiled: CompiledRig, before: RenderFrame, after: RenderFrame,
 }
 
 function present(compiled: CompiledRig, pose: Pose, facing: Facing, snapped: boolean): SampledView {
-  const fk = new Float32Array(compiled.skeleton.boneCount * 9)
-  const lateral = new Float32Array(compiled.skeleton.boneCount)
-  evaluateFk(fk, lateral, compiled, pose, compiled.skeleton.boneCount)
+  const fk = new Float32Array(compiled.skeleton.boneCount * 12)
+  evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
   const parts = compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, compiled, fk, lateral, index)
+    skinMesh(positions, compiled, fk, index)
     return { partId: mesh.partId, positions, indices: mesh.indices }
   })
   const order = drawOrder(new Array<string>(compiled.slots.slots.length), compiled.slots, facing)

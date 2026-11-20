@@ -1,20 +1,17 @@
-import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
 import type { CompiledRig } from '../compile/compile'
-import { setParentFromBone } from '../skeleton/parent-from-bone'
+import { multiplyRigid, RIGID_STRIDE, setRigidParentFromBone } from '../skeleton/rigid'
 import type { Pose } from '../skeleton/pose'
 
 /**
- * 计算拓扑序前缀里每根骨头的角色空间矩阵和横向位置。
- * 矩阵仍是矢状面里的 9 个数。横向只沿父链加总绑定偏移，姿态偏移不改它。
- * @param out 长度 `count * 9`
- * @param lateral 长度 `count`，各骨在角色空间的 `z`
- * @param compiled 编译结果
+ * 计算拓扑序前缀里每根骨头的角色空间刚体。
+ * 每根骨头 12 个数。零偏移时与 `bindRig` 按位相同。
+ * @param out 长度 `count * 12`
+ * @param compiled 编译结果，提供左右符号
  * @param pose 当前偏移
  * @param count 从骨盆起的骨头数
  */
 export function evaluateFk(
   out: Float32Array,
-  lateral: Float32Array,
   compiled: CompiledRig,
   pose: Pose,
   count: number,
@@ -22,32 +19,29 @@ export function evaluateFk(
   if (pose.skeleton !== compiled.skeleton) throw new Error('pose')
   const boneCount = compiled.skeleton.boneCount
   if (!Number.isInteger(count) || count < 1 || count > boneCount) throw new Error('count')
-  if (out.length !== count * 9) throw new Error('out')
-  if (lateral.length !== count) throw new Error('lateral')
+  if (out.length !== count * RIGID_STRIDE) throw new Error('out')
 
-  const local = createMat3()
-  const parent = createMat3()
-  const combined = createMat3()
+  const local = new Float32Array(RIGID_STRIDE)
+  const parent = new Float32Array(RIGID_STRIDE)
+  const combined = new Float32Array(RIGID_STRIDE)
   for (let bone = 0; bone < count; bone += 1) {
-    setParentFromBone(local, compiled.skeleton, pose, bone)
+    const joint = compiled.joints[bone]!
+    setRigidParentFromBone(
+      local,
+      compiled.skeleton,
+      pose,
+      bone,
+      joint.swingSign,
+      joint.twistSign,
+    )
     const parentIndex = compiled.skeleton.parent[bone]!
-    const source =
-      parentIndex < 0 ? local : combine(combined, parent, out, parentIndex, local)
-    const dst = bone * 9
-    for (let k = 0; k < 9; k += 1) out[dst + k] = source[k]!
-    const own = compiled.skeleton.bindLateral[bone]!
-    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
+    const dst = bone * RIGID_STRIDE
+    if (parentIndex < 0) {
+      out.set(local, dst)
+      continue
+    }
+    parent.set(out.subarray(parentIndex * RIGID_STRIDE, parentIndex * RIGID_STRIDE + RIGID_STRIDE))
+    multiplyRigid(combined, parent, local)
+    out.set(combined, dst)
   }
-}
-
-function combine(
-  combined: Mat3,
-  parent: Mat3,
-  rig: Float32Array,
-  parentIndex: number,
-  local: Mat3,
-): Mat3 {
-  const src = parentIndex * 9
-  for (let k = 0; k < 9; k += 1) parent[k] = rig[src + k]!
-  return multiplyMat3(combined, parent, local)
 }
