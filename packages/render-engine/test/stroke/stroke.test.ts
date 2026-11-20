@@ -15,7 +15,7 @@ function source(
     partId,
     positions: Float32Array.from(positions),
     indices: Uint16Array.from(indices),
-    seam: seam === undefined ? undefined : Uint8Array.from(seam),
+    ...(seam === undefined ? {} : { seam: Uint8Array.from(seam) }),
   }
 }
 

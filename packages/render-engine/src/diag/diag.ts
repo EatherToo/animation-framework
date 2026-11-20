@@ -154,7 +154,7 @@ function circle(solver: Solver, fk: Float32Array, bone: number): DebugSegment[] 
 function wire(solver: Solver, current: Rig): DebugWire[] {
   return solver.compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, solver.compiled, current.fk, index)
+    skinMesh(positions, solver.compiled, current.fk, index, solver.pose)
     return { partId: mesh.partId, positions, indices: mesh.indices }
   })
 }
@@ -164,7 +164,7 @@ function weights(solver: Solver, current: Rig): DebugWeight[] {
     const index = solver.compiled.meshes.meshes.findIndex((mesh) => mesh.partId === entry.partId)
     const mesh = solver.compiled.meshes.meshes[index]!
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, solver.compiled, current.fk, index)
+    skinMesh(positions, solver.compiled, current.fk, index, solver.pose)
     const values = new Float32Array(positions.length / 3)
     for (let vertex = 0; vertex < values.length; vertex += 1) {
       let best = 0

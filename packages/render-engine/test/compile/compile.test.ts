@@ -17,7 +17,8 @@ describe('compile', () => {
     expect(compiled.foot.heelBack).toBeGreaterThan(0)
     expect(compiled.bindRig.length).toBe(humanoid.skeleton.boneCount * 12)
     expect(compiled.inverseBind.length).toBe(compiled.bindRig.length)
-    expect(compiled.correction.enabled).toBe(false)
+    expect(compiled.correction.enabled).toBe(true)
+    expect(compiled.correction.twistGain).toBeCloseTo(0.35)
     expect(compiled.joints).toHaveLength(17)
     const lateral = (bone: number) => compiled.bindRig[bone * 12 + 11]
     expect(lateral(humanoid.boneIndex.footL)).toBeCloseTo(humanoid.proportions.hipOffsetZ, 6)

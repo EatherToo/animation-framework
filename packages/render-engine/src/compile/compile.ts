@@ -126,7 +126,8 @@ function assertWeights(parts: PartSet, meshes: MeshSet, weights: WeightSet): voi
     if (
       found === undefined ||
       found.influences !== part.bones.length ||
-      found.weights.length !== vertexCount * part.bones.length
+      found.weights.length !== vertexCount * part.bones.length ||
+      found.twistU.length !== vertexCount
     ) {
       throw new Error('weight')
     }

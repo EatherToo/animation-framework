@@ -33,6 +33,7 @@ describe('weights', () => {
     expect(torsoWeights.influences).toBe(5)
     const vertexCount = arm.positions.length / 3
     expect(armWeights.weights.length).toBe(vertexCount * 4)
+    expect(armWeights.twistU.length).toBe(vertexCount)
     for (let v = 0; v < vertexCount; v += 1) {
       let sum = 0
       for (let c = 0; c < 4; c += 1) {
@@ -41,6 +42,8 @@ describe('weights', () => {
         sum += weight
       }
       expectClose(sum, 1)
+      expect(armWeights.twistU[v]!).toBeGreaterThanOrEqual(0)
+      expect(armWeights.twistU[v]!).toBeLessThanOrEqual(1)
     }
 
     const p = humanoid.proportions
@@ -59,6 +62,7 @@ describe('weights', () => {
       const tail = arm.endShare[v * 2 + 1]!
       if (arm.seam[v] === 1 && head > 0.99) {
         expect(column(0)).toBeCloseTo(1, 5)
+        expect(armWeights.twistU[v]!).toBeCloseTo(0, 5)
         chest += 1
       }
       if (Math.abs(head - 0.5) <= 1e-5) {
@@ -70,6 +74,7 @@ describe('weights', () => {
       if (Math.abs(y - elbowY) <= 1e-5) {
         expect(column(1)).toBeCloseTo(0.5, 5)
         expect(column(2)).toBeCloseTo(0.5, 5)
+        expect([0, 1]).toContain(Math.round(armWeights.twistU[v]!))
         elbow += 1
       }
       if (Math.abs(y - forearmY) <= 1e-5) {
@@ -79,6 +84,7 @@ describe('weights', () => {
       }
       if (arm.seam[v] === 1 && tail > 0.99) {
         expect(column(3)).toBeCloseTo(1, 5)
+        expect(armWeights.twistU[v]!).toBeCloseTo(1, 5)
         hand += 1
       }
     }

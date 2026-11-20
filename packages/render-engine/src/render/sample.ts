@@ -212,7 +212,7 @@ function present(compiled: CompiledRig, pose: Pose, facing: Facing, snapped: boo
   evaluateFk(fk, compiled, pose, compiled.skeleton.boneCount)
   const parts = compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, compiled, fk, index)
+    skinMesh(positions, compiled, fk, index, pose)
     return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam }
   })
   const order = drawOrder(new Array<string>(compiled.slots.slots.length), compiled.slots, facing)

@@ -130,6 +130,9 @@
   function setPoseTwist(pose2, bone, twist) {
     pose2.data[bone * POSE_STRIDE + 4] = normalizeAngle(twist);
   }
+  function poseTwist(pose2, bone) {
+    return pose2.data[bone * POSE_STRIDE + 4];
+  }
 
   // packages/render-engine/src/body/joints.ts
   var LOCKED = { min: 0, max: 0 };
@@ -2340,15 +2343,150 @@
     };
   }
 
-  // packages/render-engine/src/correction/correction.ts
-  function createCorrection() {
-    return { enabled: false };
+  // packages/render-engine/src/skeleton/rigid.ts
+  var RIGID_STRIDE = 12;
+  function setRigidParentFromBone(out, skeleton, pose2, bone, swingSign, twistSign, twistScale = 1) {
+    const poseIndex = bone * POSE_STRIDE;
+    const translation = bone * 2;
+    const ptx = pose2.data[poseIndex];
+    const pty = pose2.data[poseIndex + 1];
+    const rotation = pose2.data[poseIndex + 2];
+    const swing = pose2.data[poseIndex + 3];
+    const twist = pose2.data[poseIndex + 4];
+    const bindRotation2 = skeleton.bindRotation[bone];
+    const btx = skeleton.bindTranslation[translation];
+    const bty = skeleton.bindTranslation[translation + 1];
+    const a = swingSign * swing;
+    const b = twistSign * twist * twistScale;
+    const g = bindRotation2 + rotation;
+    const ca = Math.cos(a);
+    const sa = Math.sin(a);
+    const cb = Math.cos(b);
+    const sb = Math.sin(b);
+    const cg = Math.cos(g);
+    const sg = Math.sin(g);
+    const bindCos = Math.cos(bindRotation2);
+    const bindSin = Math.sin(bindRotation2);
+    out[0] = cg * ca;
+    out[1] = sg * ca;
+    out[2] = -sa;
+    out[3] = cg * sa * sb - sg * cb;
+    out[4] = sg * sa * sb + cg * cb;
+    out[5] = ca * sb;
+    out[6] = cg * sa * cb + sg * sb;
+    out[7] = sg * sa * cb - cg * sb;
+    out[8] = ca * cb;
+    out[9] = btx + bindCos * ptx - bindSin * pty;
+    out[10] = bty + bindSin * ptx + bindCos * pty;
+    out[11] = skeleton.bindLateral[bone];
   }
-  function applyCorrection(out, positions, correction) {
-    if (correction.enabled !== false) throw new Error("correction");
+  function multiplyRigid(out, parent, local) {
+    const p0 = parent[0];
+    const p1 = parent[1];
+    const p2 = parent[2];
+    const p3 = parent[3];
+    const p4 = parent[4];
+    const p5 = parent[5];
+    const p6 = parent[6];
+    const p7 = parent[7];
+    const p8 = parent[8];
+    const ptx = parent[9];
+    const pty = parent[10];
+    const ptz = parent[11];
+    const l0 = local[0];
+    const l1 = local[1];
+    const l2 = local[2];
+    const l3 = local[3];
+    const l4 = local[4];
+    const l5 = local[5];
+    const l6 = local[6];
+    const l7 = local[7];
+    const l8 = local[8];
+    const lx = local[9];
+    const ly = local[10];
+    const lz = local[11];
+    out[0] = p0 * l0 + p3 * l1 + p6 * l2;
+    out[1] = p1 * l0 + p4 * l1 + p7 * l2;
+    out[2] = p2 * l0 + p5 * l1 + p8 * l2;
+    out[3] = p0 * l3 + p3 * l4 + p6 * l5;
+    out[4] = p1 * l3 + p4 * l4 + p7 * l5;
+    out[5] = p2 * l3 + p5 * l4 + p8 * l5;
+    out[6] = p0 * l6 + p3 * l7 + p6 * l8;
+    out[7] = p1 * l6 + p4 * l7 + p7 * l8;
+    out[8] = p2 * l6 + p5 * l7 + p8 * l8;
+    out[9] = p0 * lx + p3 * ly + p6 * lz + ptx;
+    out[10] = p1 * lx + p4 * ly + p7 * lz + pty;
+    out[11] = p2 * lx + p5 * ly + p8 * lz + ptz;
+  }
+
+  // packages/render-engine/src/correction/correction.ts
+  function createCorrection(options = {}) {
+    return {
+      enabled: options.enabled ?? true,
+      twistGain: options.twistGain ?? 0.35,
+      bendGain: options.bendGain ?? 0
+    };
+  }
+  function applyCorrection(out, positions, correction, context) {
     if (out.length !== positions.length) throw new Error("out");
     out.set(positions);
+    if (!correction.enabled) return out;
+    if (context === void 0) throw new Error("correction");
+    pushTwist(out, positions, correction, context);
     return out;
+  }
+  function pushTwist(out, positions, correction, context) {
+    const { bones, weights, influences, bindRig, pose: pose2 } = context;
+    const gain = correction.twistGain;
+    if (gain === 0) return;
+    const vertexCount = positions.length / 3;
+    for (let v = 0; v < vertexCount; v += 1) {
+      let bestBone = -1;
+      let bestWeight = 0;
+      let bestAbsTwist = 0;
+      for (let i = 0; i < influences; i += 1) {
+        const w = weights[v * influences + i];
+        if (w <= 0 || w >= 1) continue;
+        const twist = poseTwist(pose2, bones[i]);
+        const abs = Math.abs(twist);
+        if (abs > bestAbsTwist) {
+          bestAbsTwist = abs;
+          bestBone = bones[i];
+          bestWeight = w;
+        }
+      }
+      if (bestBone < 0 || bestAbsTwist === 0) continue;
+      const x = positions[v * 3];
+      const y = positions[v * 3 + 1];
+      const z = positions[v * 3 + 2];
+      const axis = bindAxis(bindRig, bestBone);
+      const dx = x - axis.ox;
+      const dy = y - axis.oy;
+      const dz = z - axis.oz;
+      const along = dx * axis.ax + dy * axis.ay + dz * axis.az;
+      const px = dx - axis.ax * along;
+      const py = dy - axis.ay * along;
+      const pz = dz - axis.az * along;
+      const r = Math.hypot(px, py, pz);
+      if (r < 1e-12) continue;
+      const blend2 = 4 * bestWeight * (1 - bestWeight);
+      const push = r * gain * (1 - Math.cos(bestAbsTwist)) * blend2;
+      const inv = 1 / r;
+      out[v * 3] = x + px * inv * push;
+      out[v * 3 + 1] = y + py * inv * push;
+      out[v * 3 + 2] = z + pz * inv * push;
+    }
+  }
+  function bindAxis(bindRig, bone) {
+    const base = bone * RIGID_STRIDE;
+    return {
+      ox: bindRig[base + 9],
+      oy: bindRig[base + 10],
+      oz: bindRig[base + 11],
+      ax: bindRig[base],
+      ay: bindRig[base + 1],
+      az: bindRig[base + 2]
+    };
   }
 
   // packages/render-engine/src/space/facing.ts
@@ -2450,82 +2588,6 @@
 
   // packages/render-engine/src/space/tolerance.ts
   var LENGTH_EPSILON = 1e-5;
-
-  // packages/render-engine/src/skeleton/rigid.ts
-  var RIGID_STRIDE = 12;
-  function setRigidParentFromBone(out, skeleton, pose2, bone, swingSign, twistSign) {
-    const poseIndex = bone * POSE_STRIDE;
-    const translation = bone * 2;
-    const ptx = pose2.data[poseIndex];
-    const pty = pose2.data[poseIndex + 1];
-    const rotation = pose2.data[poseIndex + 2];
-    const swing = pose2.data[poseIndex + 3];
-    const twist = pose2.data[poseIndex + 4];
-    const bindRotation2 = skeleton.bindRotation[bone];
-    const btx = skeleton.bindTranslation[translation];
-    const bty = skeleton.bindTranslation[translation + 1];
-    const a = swingSign * swing;
-    const b = twistSign * twist;
-    const g = bindRotation2 + rotation;
-    const ca = Math.cos(a);
-    const sa = Math.sin(a);
-    const cb = Math.cos(b);
-    const sb = Math.sin(b);
-    const cg = Math.cos(g);
-    const sg = Math.sin(g);
-    const bindCos = Math.cos(bindRotation2);
-    const bindSin = Math.sin(bindRotation2);
-    out[0] = cg * ca;
-    out[1] = sg * ca;
-    out[2] = -sa;
-    out[3] = cg * sa * sb - sg * cb;
-    out[4] = sg * sa * sb + cg * cb;
-    out[5] = ca * sb;
-    out[6] = cg * sa * cb + sg * sb;
-    out[7] = sg * sa * cb - cg * sb;
-    out[8] = ca * cb;
-    out[9] = btx + bindCos * ptx - bindSin * pty;
-    out[10] = bty + bindSin * ptx + bindCos * pty;
-    out[11] = skeleton.bindLateral[bone];
-  }
-  function multiplyRigid(out, parent, local) {
-    const p0 = parent[0];
-    const p1 = parent[1];
-    const p2 = parent[2];
-    const p3 = parent[3];
-    const p4 = parent[4];
-    const p5 = parent[5];
-    const p6 = parent[6];
-    const p7 = parent[7];
-    const p8 = parent[8];
-    const ptx = parent[9];
-    const pty = parent[10];
-    const ptz = parent[11];
-    const l0 = local[0];
-    const l1 = local[1];
-    const l2 = local[2];
-    const l3 = local[3];
-    const l4 = local[4];
-    const l5 = local[5];
-    const l6 = local[6];
-    const l7 = local[7];
-    const l8 = local[8];
-    const lx = local[9];
-    const ly = local[10];
-    const lz = local[11];
-    out[0] = p0 * l0 + p3 * l1 + p6 * l2;
-    out[1] = p1 * l0 + p4 * l1 + p7 * l2;
-    out[2] = p2 * l0 + p5 * l1 + p8 * l2;
-    out[3] = p0 * l3 + p3 * l4 + p6 * l5;
-    out[4] = p1 * l3 + p4 * l4 + p7 * l5;
-    out[5] = p2 * l3 + p5 * l4 + p8 * l5;
-    out[6] = p0 * l6 + p3 * l7 + p6 * l8;
-    out[7] = p1 * l6 + p4 * l7 + p7 * l8;
-    out[8] = p2 * l6 + p5 * l7 + p8 * l8;
-    out[9] = p0 * lx + p3 * ly + p6 * lz + ptx;
-    out[10] = p1 * lx + p4 * ly + p7 * lz + pty;
-    out[11] = p2 * lx + p5 * ly + p8 * lz + ptz;
-  }
 
   // packages/render-engine/src/topology/validate.ts
   var AREA_EPSILON = 1e-8;
@@ -2658,6 +2720,7 @@
     const influences = part.bones.length;
     const vertexCount = positions.length / 3;
     const weights = new Float32Array(vertexCount * influences);
+    const twistU = new Float32Array(vertexCount);
     const headSlot = 0;
     const tailSlot = influences - 1;
     for (let v = 0; v < vertexCount; v += 1) {
@@ -2680,11 +2743,19 @@
       const tail = endShare[v * 2 + 1];
       const e = head > 0 ? head : tail;
       const endSlot = head > 0 ? headSlot : tail > 0 ? tailSlot : -1;
-      if (endSlot < 0 || e <= 0) continue;
-      for (let i = 0; i < influences; i += 1) column[i] *= 1 - e;
-      column[endSlot] += e;
+      if (endSlot >= 0 && e > 0) {
+        for (let i = 0; i < influences; i += 1) column[i] *= 1 - e;
+        column[endSlot] += e;
+      }
+      const seg = segments[best];
+      const name = boneName(skeleton, part.bones[seg.slot]);
+      if (name.startsWith("lowerArm")) {
+        twistU[v] = bestT;
+      } else if (name.startsWith("upperArm") || name.startsWith("thigh")) {
+        twistU[v] = bestT * (1 - head);
+      }
     }
-    return { partId: part.id, influences, weights };
+    return { partId: part.id, influences, weights, twistU };
   }
   function borrowed(partId, name) {
     if (partId === "torso") return name === "pelvis" || name === "head";
@@ -2821,7 +2892,7 @@
       }
       const mesh = meshes.meshes[i];
       const vertexCount = mesh.positions.length / 3;
-      if (found === void 0 || found.influences !== part.bones.length || found.weights.length !== vertexCount * part.bones.length) {
+      if (found === void 0 || found.influences !== part.bones.length || found.weights.length !== vertexCount * part.bones.length || found.twistU.length !== vertexCount) {
         throw new Error("weight");
       }
     }
@@ -3039,26 +3110,41 @@
   }
 
   // packages/render-engine/src/skin/skin.ts
-  function skinMesh(out, compiled2, fk2, meshIndex) {
+  function skinMesh(out, compiled2, fk2, meshIndex, pose2) {
     const mesh = compiled2.meshes.meshes[meshIndex];
     if (mesh === void 0) throw new Error("mesh");
     if (fk2.length !== compiled2.skeleton.boneCount * RIGID_STRIDE) throw new Error("fk");
     if (out.length !== mesh.positions.length) throw new Error("out");
-    const corrected = new Float32Array(mesh.positions.length);
-    applyCorrection(corrected, mesh.positions, compiled2.correction);
+    if (pose2.skeleton !== compiled2.skeleton) throw new Error("pose");
     const part = compiled2.parts.parts[meshIndex];
-    if (part.kind === "skinned") skinSkinned(out, compiled2, fk2, corrected, part);
-    else skinRigid(out, fk2, corrected, part);
+    const corrected = new Float32Array(mesh.positions.length);
+    if (part.kind === "skinned") {
+      const found = compiled2.weights.weights.find((item) => item.partId === part.id);
+      if (found === void 0) throw new Error("weight");
+      applyCorrection(corrected, mesh.positions, compiled2.correction, {
+        bones: part.bones,
+        weights: found.weights,
+        influences: found.influences,
+        bindRig: compiled2.bindRig,
+        pose: pose2
+      });
+      skinSkinned(out, compiled2, fk2, corrected, part, found, pose2);
+    } else {
+      applyCorrection(corrected, mesh.positions, { enabled: false, twistGain: 0, bendGain: 0 });
+      skinRigid(out, fk2, corrected, part);
+    }
   }
-  function skinSkinned(out, compiled2, fk2, positions, part) {
-    const found = compiled2.weights.weights.find((item) => item.partId === part.id);
-    if (found === void 0) throw new Error("weight");
+  function skinSkinned(out, compiled2, fk2, positions, part, found, pose2) {
     const inverse2 = compiled2.inverseBind;
     const vertexCount = positions.length / 3;
+    const local = new Float32Array(RIGID_STRIDE);
+    const scaled = new Float32Array(RIGID_STRIDE);
+    const parent = new Float32Array(RIGID_STRIDE);
     for (let v = 0; v < vertexCount; v += 1) {
       const x = positions[v * 3];
       const y = positions[v * 3 + 1];
       const z = positions[v * 3 + 2];
+      const twistScale = found.twistU[v];
       let sx = 0;
       let sy = 0;
       let sz = 0;
@@ -3066,8 +3152,20 @@
         const weight = found.weights[v * found.influences + i];
         if (weight === 0) continue;
         const bone = part.bones[i];
-        const local = applyRigid(inverse2, bone, x, y, z);
-        const world = applyRigid(fk2, bone, local.x, local.y, local.z);
+        const bindLocal = applyRigid(inverse2, bone, x, y, z);
+        const world = isTwistDistributed(boneName(compiled2.skeleton, bone)) ? applyScaled(
+          scaled,
+          local,
+          parent,
+          fk2,
+          compiled2,
+          pose2,
+          bone,
+          twistScale,
+          bindLocal.x,
+          bindLocal.y,
+          bindLocal.z
+        ) : applyRigid(fk2, bone, bindLocal.x, bindLocal.y, bindLocal.z);
         sx += weight * world.x;
         sy += weight * world.y;
         sz += weight * world.z;
@@ -3076,6 +3174,30 @@
       out[v * 3 + 1] = sy;
       out[v * 3 + 2] = sz;
     }
+  }
+  function applyScaled(scaled, local, parent, fk2, compiled2, pose2, bone, twistScale, x, y, z) {
+    const joint = compiled2.joints[bone];
+    setRigidParentFromBone(
+      local,
+      compiled2.skeleton,
+      pose2,
+      bone,
+      joint.swingSign,
+      joint.twistSign,
+      twistScale
+    );
+    const parentIndex = compiled2.skeleton.parent[bone];
+    if (parentIndex < 0) {
+      scaled.set(local);
+    } else {
+      parent.set(fk2.subarray(parentIndex * RIGID_STRIDE, parentIndex * RIGID_STRIDE + RIGID_STRIDE));
+      multiplyRigid(scaled, parent, local);
+    }
+    return {
+      x: scaled[0] * x + scaled[3] * y + scaled[6] * z + scaled[9],
+      y: scaled[1] * x + scaled[4] * y + scaled[7] * z + scaled[10],
+      z: scaled[2] * x + scaled[5] * y + scaled[8] * z + scaled[11]
+    };
   }
   function skinRigid(out, fk2, positions, part) {
     const vertexCount = positions.length / 3;
@@ -3099,6 +3221,9 @@
       y: rigid[base + 1] * x + rigid[base + 4] * y + rigid[base + 7] * z + rigid[base + 10],
       z: rigid[base + 2] * x + rigid[base + 5] * y + rigid[base + 8] * z + rigid[base + 11]
     };
+  }
+  function isTwistDistributed(name) {
+    return name.startsWith("upperArm") || name.startsWith("lowerArm") || name.startsWith("thigh");
   }
 
   // packages/render-engine/src/stroke/stroke.ts
@@ -3594,7 +3719,7 @@
     evaluateFk(rigFromBone, rig, current, rig.skeleton.boneCount);
     return rig.meshes.meshes.map((mesh, index) => {
       const positions = new Float32Array(mesh.positions.length);
-      skinMesh(positions, rig, rigFromBone, index);
+      skinMesh(positions, rig, rigFromBone, index, current);
       return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam };
     });
   }
