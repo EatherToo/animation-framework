@@ -14,6 +14,24 @@ export type Mesh = {
   readonly textures: readonly Texture[]
   readonly triangleTexture: Uint16Array
   readonly uvs: Float32Array
+  /** 每个顶点一项：1 表示落在部件接缝上。 */
+  readonly seam: Uint8Array
+  /**
+   * 蒙皮网格每个顶点两项：链首份额、链尾份额。
+   * 刚性网格长度为 0。
+   */
+  readonly endShare: Float32Array
+}
+
+/** 按空间写出空的接缝与链端份额。 */
+export function emptyMeshMeta(
+  vertexCount: number,
+  space: MeshSpace,
+): { seam: Uint8Array; endShare: Float32Array } {
+  return {
+    seam: new Uint8Array(vertexCount),
+    endShare: space === 'character' ? new Float32Array(vertexCount * 2) : new Float32Array(0),
+  }
 }
 
 /** 与部件顺序一致的网格集合。 */
@@ -67,7 +85,14 @@ export function meshFromStrip(
   const positions = new Float32Array(stations * TUBE_SIDES * 3)
   const indices = new Uint16Array(intervals * TUBE_SIDES * 6)
   writeTube(positions, indices, segments)
-  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
+  return {
+    partId,
+    space,
+    positions,
+    indices,
+    ...createMeshTextures(indices, fill),
+    ...emptyMeshMeta(positions.length / 3, space),
+  }
 }
 
 /**
@@ -114,7 +139,14 @@ export function meshFromCappedTube(
     indices[t + 4] = tail + j
     indices[t + 5] = tail + next
   }
-  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
+  return {
+    partId,
+    space,
+    positions,
+    indices,
+    ...createMeshTextures(indices, fill),
+    ...emptyMeshMeta(positions.length / 3, space),
+  }
 }
 
 /**
@@ -157,7 +189,14 @@ export function meshFromCappedSection(
   writeIntervals(indices, AXIAL_STEPS)
   writeCap(positions, indices, 0, ring, sides, false)
   writeCap(positions, indices, AXIAL_STEPS, ring + 1, sides + TUBE_SIDES * 3, true)
-  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
+  return {
+    partId,
+    space,
+    positions,
+    indices,
+    ...createMeshTextures(indices, fill),
+    ...emptyMeshMeta(positions.length / 3, space),
+  }
 }
 
 function writeTube(
@@ -327,5 +366,12 @@ export function meshFromRectangle(
     0, 4, 6, 0, 6, 2,
     1, 3, 7, 1, 7, 5,
   ])
-  return { partId, space: 'part', positions, indices, ...createMeshTextures(indices, fill) }
+  return {
+    partId,
+    space: 'part',
+    positions,
+    indices,
+    ...createMeshTextures(indices, fill),
+    ...emptyMeshMeta(positions.length / 3, 'part'),
+  }
 }

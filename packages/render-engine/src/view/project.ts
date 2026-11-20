@@ -18,6 +18,7 @@ export type ViewSource = {
   readonly partId: string
   readonly positions: Float32Array
   readonly indices: Uint16Array
+  readonly seam: Uint8Array
 }
 
 /**
@@ -30,6 +31,7 @@ export type ProjectedPart = {
   readonly positions: Float32Array
   readonly indices: Uint16Array
   readonly depth: number
+  readonly seam: Uint8Array
 }
 
 const QUARTER = VIEW_COUNT / 4
@@ -156,7 +158,7 @@ export function projectParts(parts: readonly ViewSource[], view: ViewIndex): Pro
     const positions = new Float32Array((part.positions.length / 3) * 2)
     const depth = projectPositions(positions, part.positions, view)
     const indices = windIndices(new Uint16Array(part.indices.length), part.indices, positions)
-    projected.push({ partId: part.partId, positions, indices, depth })
+    projected.push({ partId: part.partId, positions, indices, depth, seam: part.seam })
   }
   return projected
 }

@@ -1,9 +1,9 @@
 import type { Humanoid } from '../body/assemble'
 import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
-import type { MeshSet } from '../mesh/strip'
+import type { Mesh, MeshSet } from '../mesh/strip'
 import type { PartSet, SkinnedPart } from '../part/set'
 import { setBindParentFromBone } from '../skeleton/parent-from-bone'
-import { bindLength, type Skeleton } from '../skeleton/skeleton'
+import { bindLength, boneName, type Skeleton } from '../skeleton/skeleton'
 
 const BAND_RATIO = 0.25
 
@@ -29,7 +29,7 @@ type Segment = {
 }
 
 /**
- * 按骨轴过渡带为蒙皮网格写权重。不改网格。
+ * 按骨轴过渡带为蒙皮网格写权重。链端两列取网格上的 `endShare`。
  * @param humanoid 体型与骨架
  * @param parts 部件
  * @param meshes 与部件对齐的网格
@@ -48,22 +48,24 @@ export function createHumanoidWeights(
     const mesh = meshes.meshes[i]!
     if (mesh.partId !== part.id) throw new Error('mesh')
     if (part.kind !== 'skinned') continue
-    weights.push(weightPart(part, mesh.positions, rig, humanoid.skeleton))
+    weights.push(weightPart(part, mesh, rig, humanoid.skeleton))
   }
   return { weights }
 }
 
 function weightPart(
   part: SkinnedPart,
-  positions: Float32Array,
+  mesh: Mesh,
   rig: Float32Array,
   skeleton: Skeleton,
 ): SkinWeights {
+  const positions = mesh.positions
+  const endShare = mesh.endShare
   const segments: Segment[] = []
   for (let i = 0; i < part.bones.length; i += 1) {
     const bone = part.bones[i]!
     const length = bindLength(skeleton, bone)
-    if (length <= 1e-5) continue
+    if (length <= 1e-5 || borrowed(part.id, boneName(skeleton, bone))) continue
     const base = bone * 9
     const x0 = rig[base + 6]!
     const y0 = rig[base + 7]!
@@ -79,6 +81,8 @@ function weightPart(
   const influences = part.bones.length
   const vertexCount = positions.length / 3
   const weights = new Float32Array(vertexCount * influences)
+  const headSlot = 0
+  const tailSlot = influences - 1
   for (let v = 0; v < vertexCount; v += 1) {
     const x = positions[v * 3]!
     const y = positions[v * 3 + 1]!
@@ -95,8 +99,24 @@ function weightPart(
     }
     const column = weights.subarray(v * influences, (v + 1) * influences)
     blend(column, segments, best, bestT)
+    const head = endShare[v * 2]!
+    const tail = endShare[v * 2 + 1]!
+    const e = head > 0 ? head : tail
+    const endSlot = head > 0 ? headSlot : tail > 0 ? tailSlot : -1
+    if (endSlot < 0 || e <= 0) continue
+    for (let i = 0; i < influences; i += 1) column[i]! *= 1 - e
+    column[endSlot]! += e
   }
   return { partId: part.id, influences, weights }
+}
+
+function borrowed(partId: string, name: string): boolean {
+  if (partId === 'torso') return name === 'pelvis' || name === 'head'
+  if (partId === 'armL') return name === 'chest' || name === 'handL'
+  if (partId === 'armR') return name === 'chest' || name === 'handR'
+  if (partId === 'legL') return name === 'pelvis' || name === 'footL'
+  if (partId === 'legR') return name === 'pelvis' || name === 'footR'
+  return false
 }
 
 function blend(column: Float32Array, segments: Segment[], best: number, t: number): void {
@@ -127,11 +147,7 @@ function blend(column: Float32Array, segments: Segment[], best: number, t: numbe
   }
 }
 
-function project(
-  x: number,
-  y: number,
-  seg: Segment,
-): { t: number; dist: number } {
+function project(x: number, y: number, seg: Segment): { t: number; dist: number } {
   const dx = seg.x1 - seg.x0
   const dy = seg.y1 - seg.y0
   const len2 = dx * dx + dy * dy

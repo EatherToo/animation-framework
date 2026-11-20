@@ -5,11 +5,17 @@ import { createPose } from '@/skeleton/pose'
 import { STROKE_WIDTH, strokeContours, type StrokeSource } from '@/stroke/stroke'
 import { presentPose } from '../view/present'
 
-function source(partId: string, positions: number[], indices: number[]): StrokeSource {
+function source(
+  partId: string,
+  positions: number[],
+  indices: number[],
+  seam?: number[],
+): StrokeSource {
   return {
     partId,
     positions: Float32Array.from(positions),
     indices: Uint16Array.from(indices),
+    seam: seam === undefined ? undefined : Uint8Array.from(seam),
   }
 }
 
@@ -110,10 +116,11 @@ describe('stroke', () => {
         bottom = Math.min(bottom, leg.positions[i + 1]!)
         top = Math.max(top, leg.positions[i + 1]!)
       }
-      expect(max - min).toBeCloseTo(2 * p.thighProfile[0]!.radius, 4)
+      expect(max - min).toBeGreaterThanOrEqual(2 * p.thighProfile[p.thighProfile.length - 1]!.radius - 1e-4)
 
       let left = false
       let right = false
+      const mid = (min + max) / 2
       for (const quad of stroked[index]!.quads) {
         const x0 = (quad.positions[0]! + quad.positions[6]!) / 2
         const y0 = (quad.positions[1]! + quad.positions[7]!) / 2
@@ -124,13 +131,20 @@ describe('stroke', () => {
           expect(x).toBeLessThanOrEqual(max + 1e-5)
           expect(y).toBeGreaterThanOrEqual(bottom - 1e-5)
           expect(y).toBeLessThanOrEqual(top + 1e-5)
-          if (Math.abs(x - min) < 1e-4) left = true
-          if (Math.abs(x - max) < 1e-4) right = true
+          if (x < mid) left = true
+          if (x > mid) right = true
         }
       }
       expect(left).toBe(true)
       expect(right).toBe(true)
     }
+  })
+
+  it('两端都是接缝标记的边不描', () => {
+    const stroked = strokeContours([source('a', [0, 0, 1, 0, 0, 1], [0, 1, 2], [1, 1, 0])], true)
+    expect(stroked[0]!.quads).toHaveLength(2)
+    const allSeam = strokeContours([source('a', [0, 0, 1, 0, 0, 1], [0, 1, 2], [1, 1, 1])], true)
+    expect(allSeam[0]!.quads).toHaveLength(0)
   })
 
   it('关闭描边时不改顶点', () => {

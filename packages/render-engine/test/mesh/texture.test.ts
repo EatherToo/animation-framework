@@ -29,9 +29,10 @@ describe('mesh texture', () => {
     const meshes = createHumanoidMeshes(humanoid, createHumanoidParts(humanoid.skeleton))
     const arm = meshes.meshes.find((mesh) => mesh.partId === 'armL')
     expect(arm).toBeDefined()
-    expect(arm!.textures).toHaveLength(512)
+    const triangles = arm!.indices.length / 3
+    expect(arm!.textures).toHaveLength(triangles)
     expect(arm!.triangleTexture[0]).toBe(0)
-    expect(arm!.triangleTexture[511]).toBe(511)
+    expect(arm!.triangleTexture[triangles - 1]).toBe(triangles - 1)
     expect(Array.from(arm!.uvs.subarray(0, 6))).toEqual([0, 0, 2, 0, 0, 2])
   })
 

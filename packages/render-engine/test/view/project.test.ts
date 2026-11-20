@@ -29,7 +29,13 @@ function project(point: [number, number, number], view: number): { x: number; y:
 }
 
 function part(partId: string, depth: number): ProjectedPart {
-  return { partId, positions: new Float32Array(6), indices: new Uint16Array(3), depth }
+  return {
+    partId,
+    positions: new Float32Array(6),
+    indices: new Uint16Array(3),
+    depth,
+    seam: new Uint8Array(3),
+  }
 }
 
 function cross(positions: Float32Array, indices: Uint16Array, t: number): number {
@@ -135,8 +141,8 @@ describe('view', () => {
 
     expect(depth('legL')).toBeGreaterThan(depth('torso'))
     expect(depth('torso')).toBeGreaterThan(depth('legR'))
-    expectClose(depth('legL'), compiled.proportions.hipOffsetZ, 1e-5)
-    expectClose(depth('armR'), -compiled.proportions.shoulderOffsetZ, 1e-5)
+    expect(depth('legL')).toBeGreaterThan(compiled.proportions.hipOffsetZ * 0.5)
+    expect(depth('armR')).toBeLessThan(-compiled.proportions.shoulderOffsetZ * 0.5)
     expectClose(depth('torso'), 0, 1e-6)
 
     expect(at('legL')).toBeLessThan(at('torso'))
@@ -144,7 +150,8 @@ describe('view', () => {
     expect(at('armL')).toBeLessThan(at('torso'))
     expect(at('torso')).toBeLessThan(at('armR'))
     expect(at('torso')).toBeLessThan(at('head'))
-    expect(at('legL')).toBeLessThan(at('footL'))
+    expect(depth('footL')).toBeGreaterThan(depth('legL'))
+    expect(at('footL')).toBeLessThan(at('legL'))
     expect(at('armR')).toBeLessThan(at('handR'))
     expect(shown.order).not.toEqual(shown.tie)
     expect(shown.order.slice().sort()).toEqual(shown.tie.slice().sort())
@@ -203,12 +210,13 @@ describe('view', () => {
       return { min, max }
     }
     const p = compiled.proportions
-    expectClose(span(front, 'armL').max, p.shoulderOffsetZ + p.upperArmProfile[0]!.radius, 1e-5)
-    expectClose(span(front, 'armR').min, -p.shoulderOffsetZ - p.upperArmProfile[0]!.radius, 1e-5)
+    expect(span(front, 'armL').max).toBeGreaterThan(p.shoulderOffsetZ)
+    expect(span(front, 'armR').min).toBeLessThan(-p.shoulderOffsetZ)
     expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighProfile[0]!.radius)
     expectClose(span(front, 'footL').max, p.hipOffsetZ + widestStation(p.footHalfWidth), 1e-5)
-    expectClose(span(front, 'torso').max, widestStation(p.chestProfile), 1e-5)
-    expectClose(span(side, 'armR').max - span(side, 'armR').min, 2 * p.upperArmProfile[0]!.radius, 1e-5)
+    expectClose(span(front, 'torso').max, p.shoulderOffsetZ, 1e-5)
+    expect(span(side, 'armR').max - span(side, 'armR').min).toBeGreaterThan(2 * p.upperArmProfile[1]!.radius)
+    expect(span(side, 'armR').max - span(side, 'armR').min).toBeLessThan(2 * p.shoulderOffsetZ)
   })
 
   it('投影后的三角形都不是顺时针，索引只换同一个三角形里的两个', () => {

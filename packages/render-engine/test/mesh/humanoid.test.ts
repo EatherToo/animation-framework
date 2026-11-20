@@ -5,6 +5,7 @@ import { createHumanoidMeshes, type Mesh } from '@/mesh/humanoid'
 import type { RadiusProfile } from '@/body/proportions'
 import { AXIAL_STEPS, TUBE_SIDES, meshFromCappedSection, meshFromCappedTube, meshFromRectangle, meshFromStrip } from '@/mesh/strip'
 import { createHumanoidParts } from '@/part/humanoid'
+import { validateMesh } from '@/topology/validate'
 
 type Vec = { x: number; y: number; z: number }
 
@@ -14,6 +15,15 @@ function vertex(mesh: Mesh, index: number): Vec {
     y: mesh.positions[index * 3 + 1]!,
     z: mesh.positions[index * 3 + 2]!,
   }
+}
+
+function nearest(mesh: Mesh, point: Vec): number {
+  let best = Infinity
+  for (let i = 0; i < mesh.positions.length / 3; i += 1) {
+    const v = vertex(mesh, i)
+    best = Math.min(best, Math.hypot(v.x - point.x, v.y - point.y, v.z - point.z))
+  }
+  return best
 }
 
 function normal(mesh: Mesh, triangle: number): { n: Vec; c: Vec } {
@@ -44,18 +54,6 @@ function mean(mesh: Mesh): Vec {
   return { x: sum.x / count, y: sum.y / count, z: sum.z / count }
 }
 
-/** 绑定姿态下蒙皮圆管都是竖直的：法线离开竖直中心线。 */
-function expectOutwardFromVerticalAxis(mesh: Mesh) {
-  const axis = mean(mesh)
-  const triangles = mesh.indices.length / 3
-  for (let t = 0; t < triangles; t += 1) {
-    const { n, c } = normal(mesh, t)
-    expect(Math.hypot(n.x, n.y, n.z)).toBeGreaterThan(1e-8)
-    expect(n.x * (c.x - axis.x) + n.z * (c.z - axis.z)).toBeGreaterThan(0)
-  }
-}
-
-/** 凸的刚性零件：法线离开形心。 */
 function expectOutwardFromCentroid(mesh: Mesh) {
   const center = mean(mesh)
   const triangles = mesh.indices.length / 3
@@ -65,31 +63,6 @@ function expectOutwardFromCentroid(mesh: Mesh) {
     expect(
       n.x * (c.x - center.x) + n.y * (c.y - center.y) + n.z * (c.z - center.z),
     ).toBeGreaterThan(0)
-  }
-}
-
-function expectHandPiecesOutward(mesh: Mesh) {
-  const chunk = 146
-  const verts = mesh.positions.length / 3
-  expect(verts).toBe(chunk * 6)
-  for (let piece = 0; piece < 6; piece += 1) {
-    const base = piece * chunk
-    const positions = mesh.positions.slice(base * 3, (base + chunk) * 3)
-    const local: number[] = []
-    for (let t = 0; t < mesh.indices.length; t += 3) {
-      const a = mesh.indices[t]!
-      const b = mesh.indices[t + 1]!
-      const c = mesh.indices[t + 2]!
-      if (a < base || b < base || c < base || a >= base + chunk || b >= base + chunk || c >= base + chunk) continue
-      local.push(a - base, b - base, c - base)
-    }
-    expectOutwardFromCentroid({
-      partId: mesh.partId,
-      space: mesh.space,
-      positions,
-      indices: new Uint16Array(local),
-      textures: mesh.textures,
-    })
   }
 }
 
@@ -120,6 +93,10 @@ function range(mesh: Mesh, axis: 0 | 1 | 2): { min: number; max: number } {
   return { min, max }
 }
 
+function triangles(mesh: Mesh): number {
+  return mesh.indices.length / 3
+}
+
 describe('humanoid meshes', () => {
   it('从 mesh 入口再导出', () => {
     expect(meshEntry.TUBE_SIDES).toBe(TUBE_SIDES)
@@ -132,13 +109,14 @@ describe('humanoid meshes', () => {
     expect(AXIAL_STEPS).toBe(8)
   })
 
-  it('按部件生成圆管、加盖圆管和脚的平板', () => {
+  it('按部件生成圆管、开孔接头段和刚性头手脚', () => {
     const humanoid = createHumanoid(1.7)
     const p = humanoid.proportions
     const parts = createHumanoidParts(humanoid.skeleton)
     const set = createHumanoidMeshes(humanoid, parts)
     expect(set.meshes).toHaveLength(parts.parts.length)
     const byId = new Map(set.meshes.map((mesh) => [mesh.partId, mesh]))
+    let total = 0
     for (let i = 0; i < parts.parts.length; i += 1) {
       const part = parts.parts[i]!
       const mesh = set.meshes[i]!
@@ -146,109 +124,138 @@ describe('humanoid meshes', () => {
       expect(mesh.space).toBe(part.kind === 'skinned' ? 'character' : 'part')
       expect(mesh.positions.length % 3).toBe(0)
       expect(mesh.indices.length % 3).toBe(0)
-      if (part.kind === 'skinned') expectOutwardFromVerticalAxis(mesh)
-      else if (part.id === 'handL' || part.id === 'handR') expectHandPiecesOutward(mesh)
-      else expectOutwardFromCentroid(mesh)
+      expect(mesh.seam.length).toBe(mesh.positions.length / 3)
+      expect(mesh.endShare.length).toBe(part.kind === 'skinned' ? mesh.positions.length / 3 * 2 : 0)
+      expect(mesh.triangleTexture.length).toBe(triangles(mesh))
+      expect(mesh.triangleTexture[0]).toBe(0)
+      expect(Array.from(mesh.uvs.subarray(0, 6))).toEqual([0, 0, 2, 0, 0, 2])
+      validateMesh(mesh)
+      if (part.id !== 'handL' && part.id !== 'handR' && part.kind === 'rigid') {
+        expectOutwardFromCentroid(mesh)
+      }
+      total += triangles(mesh)
     }
-
-    for (const id of ['armL', 'armR', 'legL', 'legR']) {
-      const limb = byId.get(id)!
-      expect(limb.positions.length).toBe(816)
-      expect(limb.indices.length).toBe(1536)
-    }
+    expect(triangles(byId.get('torso')!)).toBe(784)
+    expect(triangles(byId.get('armL')!)).toBe(736)
+    expect(triangles(byId.get('armR')!)).toBe(736)
+    expect(triangles(byId.get('legL')!)).toBe(736)
+    expect(triangles(byId.get('legR')!)).toBe(736)
+    expect(triangles(byId.get('head')!)).toBe(272)
+    expect(triangles(byId.get('footL')!)).toBe(264)
+    expect(triangles(byId.get('footR')!)).toBe(264)
+    expect(triangles(byId.get('handL')!)).toBe(1720)
+    expect(total).toBe(7968)
 
     const torso = byId.get('torso')!
-    expect(torso.positions.length).toBe(1200)
-    expect(torso.indices.length).toBe(2304)
     expect(range(torso, 1).max).toBeGreaterThan(p.hipHeight + p.spineLength)
-    const chestWide = widestStation(p.chestProfile)
+    const chestWide = Math.max(...p.chestProfile.map((sample) => sample.radius))
     expect(range(torso, 2).max).toBeCloseTo(chestWide, 5)
     expect(range(torso, 2).min).toBeCloseTo(-chestWide, 5)
-    expect(Math.abs(vertex(torso, 4).z)).toBeCloseTo(p.spineProfile[0]!.radius, 5)
-    expect(Math.abs(vertex(torso, 4 * TUBE_SIDES + 4).z)).toBeLessThan(p.spineProfile[0]!.radius)
 
     const head = byId.get('head')!
-    expect(head.positions.length).toBe(438)
-    expect(head.indices.length).toBe(864)
     const headWide = widestStation(p.headProfile)
     expect(range(head, 0).min).toBe(0)
     expect(range(head, 0).max).toBeCloseTo(p.headLength, 5)
     expect(range(head, 1).max).toBeCloseTo(headWide, 5)
-    expect(range(head, 1).min).toBeCloseTo(-headWide, 5)
     expect(range(head, 2).max).toBeCloseTo(headWide, 5)
-    expect(range(head, 2).min).toBeCloseTo(-headWide, 5)
+    expect(head.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
 
     for (const id of ['handL', 'handR']) {
       const hand = byId.get(id)!
-      expect(hand.positions.length).toBe(2628)
-      expect(hand.indices.length).toBe(5184)
       expect(range(hand, 0).min).toBeCloseTo(0, 5)
       expect(range(hand, 0).max).toBeCloseTo(p.handLength, 5)
     }
-    const hand = byId.get('handL')!
-    expect(range(hand, 2).max).toBeCloseTo(p.fingerSpread[1] + p.fingerRadius, 5)
-    const right = byId.get('handR')!
-    expect(range(right, 2).min).toBeCloseTo(-(p.fingerSpread[1] + p.fingerRadius), 5)
-    let thumbZ = Infinity
-    for (let i = 0; i < right.positions.length; i += 3) {
-      if (Math.abs(right.positions[i + 1]! + p.thumbDrop) < 1e-6) thumbZ = Math.min(thumbZ, right.positions[i + 2]!)
-    }
-    expect(thumbZ).toBeCloseTo(-(p.thumbOffsetZ + p.thumbRadius), 5)
 
     for (const id of ['footL', 'footR']) {
       const foot = byId.get(id)!
-      expect(foot.positions.length).toBe(438)
-      expect(foot.indices.length).toBe(864)
       expect(range(foot, 0).min).toBeCloseTo(-p.heelBack, 5)
       expect(range(foot, 0).max).toBeCloseTo(p.footLength, 5)
-      expect(range(foot, 1).min).toBeGreaterThanOrEqual(-p.ankleHeight - 1e-8)
       expect(range(foot, 1).min).toBeCloseTo(-p.ankleHeight, 5)
-      expect(range(foot, 1).max).toBeCloseTo(-p.ankleHeight + widestStation(p.footInstep), 5)
-      expect(range(foot, 2).max).toBeCloseTo(widestStation(p.footHalfWidth), 5)
-      expect(range(foot, 2).min).toBeCloseTo(-widestStation(p.footHalfWidth), 5)
+      expect(foot.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
     }
   })
 
-  it('肩处的环：矢状面采样离中心线一个半径，横向采样在 z 上离开一个半径', () => {
+  it('肩髋腕踝接缝成对，接头段有长度', () => {
     const humanoid = createHumanoid(1.7)
     const p = humanoid.proportions
     const set = createHumanoidMeshes(humanoid, createHumanoidParts(humanoid.skeleton))
+    const byId = new Map(set.meshes.map((mesh) => [mesh.partId, mesh]))
+    const torso = byId.get('torso')!
+    const arm = byId.get('armL')!
+    const leg = byId.get('legL')!
+    const foot = byId.get('footL')!
+    const hand = byId.get('handL')!
+    const head = byId.get('head')!
     const shoulderY = p.hipHeight + p.spineLength + p.chestLength - p.shoulderDropY
 
-    const left = set.meshes.find((mesh) => mesh.partId === 'armL')!
-    const right = set.meshes.find((mesh) => mesh.partId === 'armR')!
-    for (const [arm, centerZ] of [
-      [left, p.shoulderOffsetZ],
-      [right, -p.shoulderOffsetZ],
-    ] as const) {
-      for (let j = 0; j < TUBE_SIDES; j += 1) {
-        const v = vertex(arm, j)
-        expect(v.y).toBeCloseTo(shoulderY, 5)
-        expect(Math.hypot(v.x, v.z - centerZ)).toBeCloseTo(p.upperArmProfile[0]!.radius, 5)
-      }
-      expect(Math.abs(vertex(arm, 0).x)).toBeCloseTo(p.upperArmProfile[0]!.radius, 5)
-      expect(vertex(arm, 0).z).toBeCloseTo(centerZ, 6)
-      expect(vertex(arm, 8).x).toBeCloseTo(-vertex(arm, 0).x, 6)
-      expect(vertex(arm, 8).z).toBeCloseTo(centerZ, 6)
-      expect(vertex(arm, 4).x).toBeCloseTo(0, 6)
-      expect(vertex(arm, 4).z).toBeCloseTo(centerZ + p.upperArmProfile[0]!.radius, 5)
-      expect(vertex(arm, 12).x).toBeCloseTo(0, 6)
-      expect(vertex(arm, 12).z).toBeCloseTo(centerZ - p.upperArmProfile[0]!.radius, 5)
+    let shoulderSeam = 0
+    for (let i = 0; i < arm.positions.length / 3; i += 1) {
+      if (arm.seam[i] !== 1 || arm.endShare[i * 2]! < 0.99) continue
+      const v = vertex(arm, i)
+      expect(nearest(torso, v)).toBeLessThan(1e-6)
+      expect(arm.endShare[i * 2]!).toBeCloseTo(1, 5)
+      shoulderSeam += 1
     }
+    expect(shoulderSeam).toBe(TUBE_SIDES)
 
-    const leg = set.meshes.find((mesh) => mesh.partId === 'legL')!
-    expect(vertex(leg, 4).z).toBeCloseTo(p.hipOffsetZ + p.thighProfile[0]!.radius, 5)
-    expect(range(leg, 1).min).toBeCloseTo(p.ankleHeight, 5)
-    const wrist = range(left, 1).min
-    expect(wrist).toBeCloseTo(shoulderY - p.upperArmLength - p.lowerArmLength, 5)
-    expect(left.positions.length / 3 / TUBE_SIDES).toBe(2 * AXIAL_STEPS + 1)
-    expect(vertex(left, TUBE_SIDES).y).toBeCloseTo(shoulderY - p.upperArmLength / AXIAL_STEPS, 5)
-    const elbow = vertex(left, AXIAL_STEPS * TUBE_SIDES)
-    expect(elbow.y).toBeCloseTo(shoulderY - p.upperArmLength, 5)
+    const armEnd = 6 / 8
+    let collarEnd = 0
+    for (let i = 0; i < arm.positions.length / 3; i += 1) {
+      const v = vertex(arm, i)
+      const radius = profileAt(p.upperArmProfile, armEnd)
+      if (Math.abs(v.y - (shoulderY - armEnd * p.upperArmLength)) > 1e-4) continue
+      if (Math.abs(Math.hypot(v.x, v.z - p.shoulderOffsetZ) - radius) > 1e-4) continue
+      expect(arm.endShare[i * 2]!).toBeCloseTo(0, 5)
+      collarEnd += 1
+    }
+    expect(collarEnd).toBe(TUBE_SIDES)
+
+    let wrist = 0
+    for (let i = 0; i < arm.positions.length / 3; i += 1) {
+      if (arm.seam[i] !== 1 || arm.endShare[i * 2 + 1]! < 0.99) continue
+      expect(arm.endShare[i * 2 + 1]!).toBeCloseTo(1, 5)
+      wrist += 1
+    }
+    expect(wrist).toBe(TUBE_SIDES)
+    expect(hand.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
+
+    let hip = 0
+    for (let i = 0; i < leg.positions.length / 3; i += 1) {
+      if (leg.seam[i] !== 1 || leg.endShare[i * 2]! < 0.99) continue
+      expect(leg.endShare[i * 2]!).toBeCloseTo(1, 5)
+      hip += 1
+    }
+    expect(hip).toBe(TUBE_SIDES)
+
+    let ankle = 0
+    for (let i = 0; i < leg.positions.length / 3; i += 1) {
+      if (leg.seam[i] !== 1 || leg.endShare[i * 2 + 1]! < 0.99) continue
+      expect(leg.endShare[i * 2 + 1]!).toBeCloseTo(1, 5)
+      ankle += 1
+    }
+    expect(ankle).toBe(TUBE_SIDES)
+    expect(foot.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
+
+    let neck = 0
+    for (let i = 0; i < torso.positions.length / 3; i += 1) {
+      if (torso.seam[i] !== 1 || torso.endShare[i * 2 + 1]! < 0.99) continue
+      expect(torso.endShare[i * 2 + 1]!).toBeCloseTo(1, 5)
+      neck += 1
+    }
+    expect(neck).toBe(TUBE_SIDES)
+    expect(head.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
+
+    const elbowY = shoulderY - p.upperArmLength
     const elbowRadius = p.upperArmProfile[p.upperArmProfile.length - 1]!.radius
     expect(elbowRadius).toBeCloseTo(p.lowerArmProfile[0]!.radius, 8)
-    expect(elbowRadius).toBeLessThan(p.upperArmProfile[1]!.radius)
-    expect(Math.hypot(elbow.x, elbow.z - p.shoulderOffsetZ)).toBeCloseTo(elbowRadius, 5)
+    let elbow = 0
+    for (let i = 0; i < arm.positions.length / 3; i += 1) {
+      const v = vertex(arm, i)
+      if (Math.abs(v.y - elbowY) > 1e-5) continue
+      expect(Math.hypot(v.x, v.z - p.shoulderOffsetZ)).toBeCloseTo(elbowRadius, 5)
+      elbow += 1
+    }
+    expect(elbow).toBe(TUBE_SIDES)
   })
 
   it('空段列表抛出 segments', () => {

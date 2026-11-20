@@ -9,6 +9,8 @@ export type StrokeSource = {
   readonly partId: string
   readonly positions: Float32Array
   readonly indices: Uint16Array
+  /** 每个顶点一项；两端都是 1 的开口边不描。 */
+  readonly seam?: Uint8Array
 }
 
 export type StrokeQuad = {
@@ -78,11 +80,13 @@ function boundary(part: number, source: StrokeSource): Edge[] {
     add(nets, b, c, turn)
     add(nets, c, a, turn)
   }
+  const seam = source.seam
   const edges: Edge[] = []
   for (const item of nets.values()) {
     if (item.net === 0) continue
     const from = item.net > 0 ? item.lo : item.hi
     const to = item.net > 0 ? item.hi : item.lo
+    if (seam !== undefined && seam[from] === 1 && seam[to] === 1) continue
     const x0 = positions[from * 2]!
     const y0 = positions[from * 2 + 1]!
     const x1 = positions[to * 2]!

@@ -147,8 +147,12 @@ describe('render sample', () => {
     }
     const legL = first.parts.find((part) => part.partId === 'legL')!
     const legR = first.parts.find((part) => part.partId === 'legR')!
-    expect(legL.positions[2]!).toBeGreaterThan(0)
-    expect(legR.positions[2]!).toBeLessThan(0)
+    let leftZ = -Infinity
+    let rightZ = Infinity
+    for (let i = 2; i < legL.positions.length; i += 3) leftZ = Math.max(leftZ, legL.positions[i]!)
+    for (let i = 2; i < legR.positions.length; i += 3) rightZ = Math.min(rightZ, legR.positions[i]!)
+    expect(leftZ).toBeGreaterThan(0)
+    expect(rightZ).toBeLessThan(0)
   })
 
   it('非法比例不改求解器', () => {

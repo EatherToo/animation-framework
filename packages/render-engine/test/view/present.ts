@@ -25,7 +25,7 @@ export function skinPose(compiled: CompiledRig, pose: Pose): ViewSource[] {
   return compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
     skinMesh(positions, compiled, fk, index)
-    return { partId: mesh.partId, positions, indices: mesh.indices }
+    return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam }
   })
 }
 

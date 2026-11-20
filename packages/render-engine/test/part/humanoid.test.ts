@@ -28,17 +28,38 @@ const EXPECTED: readonly {
   kind: Part['kind']
   bones: readonly string[]
 }[] = [
-  { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck'] },
+  { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck', 'head'] },
   { id: 'head', kind: 'rigid', bones: ['head'] },
-  { id: 'armL', kind: 'skinned', bones: ['upperArmL', 'lowerArmL'] },
+  { id: 'armL', kind: 'skinned', bones: ['chest', 'upperArmL', 'lowerArmL', 'handL'] },
   { id: 'handL', kind: 'rigid', bones: ['handL'] },
-  { id: 'armR', kind: 'skinned', bones: ['upperArmR', 'lowerArmR'] },
+  { id: 'armR', kind: 'skinned', bones: ['chest', 'upperArmR', 'lowerArmR', 'handR'] },
   { id: 'handR', kind: 'rigid', bones: ['handR'] },
-  { id: 'legL', kind: 'skinned', bones: ['thighL', 'shinL'] },
+  { id: 'legL', kind: 'skinned', bones: ['pelvis', 'thighL', 'shinL', 'footL'] },
   { id: 'footL', kind: 'rigid', bones: ['footL'] },
-  { id: 'legR', kind: 'skinned', bones: ['thighR', 'shinR'] },
+  { id: 'legR', kind: 'skinned', bones: ['pelvis', 'thighR', 'shinR', 'footR'] },
   { id: 'footR', kind: 'rigid', bones: ['footR'] },
 ]
+
+/** 整段体积只属于主部件；这些骨头还可以再出现在邻件链端。 */
+const SHARED_BONE_COUNT: Readonly<Record<BoneId, number>> = {
+  pelvis: 3,
+  spine: 1,
+  chest: 3,
+  neck: 1,
+  head: 2,
+  upperArmL: 1,
+  lowerArmL: 1,
+  handL: 2,
+  upperArmR: 1,
+  lowerArmR: 1,
+  handR: 2,
+  thighL: 1,
+  shinL: 1,
+  footL: 2,
+  thighR: 1,
+  shinR: 1,
+  footR: 2,
+}
 
 function bone(name: string, parent: number): BoneSpec {
   return {
@@ -123,7 +144,7 @@ describe('humanoid', () => {
     expect(part.HUMANOID_FILL).toBe(HUMANOID_FILL)
   })
 
-  it('10 件按登记顺序覆盖 17 根骨头，每根恰好一次', () => {
+  it('10 件按登记顺序覆盖 17 根骨头，整段体积只出现一次', () => {
     const skeleton = createHumanoid(1.7).skeleton
     const set = createHumanoidParts(skeleton)
     expect(set.skeleton).toBe(skeleton)
@@ -159,7 +180,7 @@ describe('humanoid', () => {
 
     expect(seen.size).toBe(BONE_NAMES.length)
     for (const name of BONE_NAMES) {
-      expect(seen.get(findBone(skeleton, name))).toBe(1)
+      expect(seen.get(findBone(skeleton, name))).toBe(SHARED_BONE_COUNT[name])
     }
 
     const armL = partAt(set, 2)
@@ -171,11 +192,24 @@ describe('humanoid', () => {
     }
     if (head.kind !== 'rigid') throw new Error('kind')
     expect(armL.bones).toEqual([
+      findBone(skeleton, 'chest'),
       findBone(skeleton, 'upperArmL'),
       findBone(skeleton, 'lowerArmL'),
+      findBone(skeleton, 'handL'),
     ])
-    expect(legL.bones).not.toContain(findBone(skeleton, 'footL'))
-    expect(torso.bones).not.toContain(findBone(skeleton, 'head'))
+    expect(legL.bones).toEqual([
+      findBone(skeleton, 'pelvis'),
+      findBone(skeleton, 'thighL'),
+      findBone(skeleton, 'shinL'),
+      findBone(skeleton, 'footL'),
+    ])
+    expect(torso.bones).toEqual([
+      findBone(skeleton, 'pelvis'),
+      findBone(skeleton, 'spine'),
+      findBone(skeleton, 'chest'),
+      findBone(skeleton, 'neck'),
+      findBone(skeleton, 'head'),
+    ])
     expect(head.bone).toBe(findBone(skeleton, 'head'))
   })
 

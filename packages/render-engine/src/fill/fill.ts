@@ -7,6 +7,8 @@ export type FilledPart = {
   readonly positions: Float32Array
   readonly indices: Uint16Array
   readonly fill: Fill
+  /** 与 08 网格上同一份 `seam` 引用。 */
+  readonly seam: Uint8Array
 }
 
 /**
@@ -28,6 +30,7 @@ export function fillProjected(
       positions: part.positions.slice(),
       indices: part.indices,
       fill: fills[i]!,
+      seam: part.seam,
     })
   }
   return filled

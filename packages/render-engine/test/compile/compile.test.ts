@@ -73,5 +73,7 @@ function collinearMesh(partId: string): Mesh {
     textures: [],
     triangleTexture: new Uint16Array(),
     uvs: new Float32Array(),
+    seam: new Uint8Array(3),
+    endShare: new Float32Array(6),
   }
 }

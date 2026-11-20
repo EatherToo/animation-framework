@@ -87,7 +87,7 @@ describe('bind', () => {
     expect(Array.from(fill.positions)).toEqual(
       Array.from(other.filled.find((part) => part.partId === 'legL')!.positions),
     )
-    expect(fill.positions.length).toBe(544)
+    expect(fill.positions.length).toBe(other.filled.find((part) => part.partId === 'legL')!.positions.length)
   })
 
   it('贴图与部件对不上时不改已有对象', () => {
