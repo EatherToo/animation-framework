@@ -27,6 +27,7 @@ describe('fill', () => {
       expect(Array.from(part.positions)).toEqual(before[i])
       expect(Array.from(projected[i]!.positions)).toEqual(before[i])
       expect(part.indices).toBe(projected[i]!.indices)
+      expect(part.seam).toBe(compiled.meshes.meshes[i]!.seam)
       expect(part.fill).toBe(compiled.parts.parts[i]!.fill)
     }
 

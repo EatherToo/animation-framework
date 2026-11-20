@@ -359,7 +359,7 @@ function sample(rig: CompiledRig, current: Pose, rigFromBone: Float32Array): Vie
   return rig.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
     skinMesh(positions, rig, rigFromBone, index)
-    return { partId: mesh.partId, positions, indices: mesh.indices }
+    return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam }
   })
 }
 

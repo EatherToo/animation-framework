@@ -8,6 +8,7 @@ function mesh(
   positions: number[],
   indices: number[],
 ): Mesh {
+  const vertexCount = positions.length / 3
   return {
     partId: 'sample',
     space: 'part',
@@ -16,6 +17,8 @@ function mesh(
     textures: [],
     triangleTexture: new Uint16Array(),
     uvs: new Float32Array(),
+    seam: new Uint8Array(vertexCount),
+    endShare: new Float32Array(0),
   }
 }
 
@@ -69,12 +72,12 @@ describe('topology', () => {
     validateMesh(mesh(TRIANGLE, [0, 2, 1]))
   })
 
-  it('闭合的网格通过', () => {
-    validateMesh(
-      mesh(
-        [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1],
-        [0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2],
-      ),
-    )
+  it('一个闭合四面体通过，两个分开的闭合四面体被拒绝', () => {
+    const tet = [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    const faces = [0, 2, 1, 0, 1, 3, 1, 2, 3, 0, 3, 2]
+    validateMesh(mesh(tet, faces))
+    const second = [3, 0, 0, 4, 0, 0, 3, 1, 0, 3, 0, 1]
+    const offset = faces.map((index) => index + 4)
+    expect(() => validateMesh(mesh([...tet, ...second], [...faces, ...offset]))).toThrow(/^connectivity$/)
   })
 })

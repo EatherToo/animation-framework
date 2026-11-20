@@ -102,7 +102,12 @@ function assertMeshes(parts: PartSet, meshes: MeshSet): void {
   if (meshes.meshes.length !== parts.parts.length) throw new Error('mesh')
   for (let i = 0; i < parts.parts.length; i += 1) {
     const mesh = meshes.meshes[i]!
-    if (mesh.partId !== parts.parts[i]!.id) throw new Error('mesh')
+    const part = parts.parts[i]!
+    if (mesh.partId !== part.id) throw new Error('mesh')
+    const vertexCount = mesh.positions.length / 3
+    if (mesh.seam.length !== vertexCount) throw new Error('mesh')
+    const shareLength = part.kind === 'skinned' ? vertexCount * 2 : 0
+    if (mesh.endShare.length !== shareLength) throw new Error('mesh')
     validateMesh(mesh)
     validateMeshTextures(mesh.indices, mesh.textures, mesh.triangleTexture, mesh.uvs)
   }

@@ -34,15 +34,15 @@ type HumanoidEntry = {
 
 /** 登记顺序。蒙皮链从近端排到远端。 */
 const HUMANOID_PARTS: readonly HumanoidEntry[] = [
-  { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck'] },
+  { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck', 'head'] },
   { id: 'head', kind: 'rigid', bones: ['head'] },
-  { id: 'armL', kind: 'skinned', bones: ['upperArmL', 'lowerArmL'] },
+  { id: 'armL', kind: 'skinned', bones: ['chest', 'upperArmL', 'lowerArmL', 'handL'] },
   { id: 'handL', kind: 'rigid', bones: ['handL'] },
-  { id: 'armR', kind: 'skinned', bones: ['upperArmR', 'lowerArmR'] },
+  { id: 'armR', kind: 'skinned', bones: ['chest', 'upperArmR', 'lowerArmR', 'handR'] },
   { id: 'handR', kind: 'rigid', bones: ['handR'] },
-  { id: 'legL', kind: 'skinned', bones: ['thighL', 'shinL'] },
+  { id: 'legL', kind: 'skinned', bones: ['pelvis', 'thighL', 'shinL', 'footL'] },
   { id: 'footL', kind: 'rigid', bones: ['footL'] },
-  { id: 'legR', kind: 'skinned', bones: ['thighR', 'shinR'] },
+  { id: 'legR', kind: 'skinned', bones: ['pelvis', 'thighR', 'shinR', 'footR'] },
   { id: 'footR', kind: 'rigid', bones: ['footR'] },
 ]
 
