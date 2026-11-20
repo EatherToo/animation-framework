@@ -36,11 +36,11 @@ export const LEG_ROM_MIN = -2.618
 /** 膝 pose 旋转上限（弧度，≈ +2°）。 */
 export const LEG_ROM_MAX = 0.035
 
-/** 肘 pose 旋转下限（弧度，≈ −140°）。 */
-export const ARM_ROM_MIN = -2.443
+/** 肘 pose 旋转下限（弧度，≈ −10°）。直臂后再向身后微过伸。 */
+export const ARM_ROM_MIN = -0.175
 
-/** 肘 pose 旋转上限（弧度，≈ +10°）。 */
-export const ARM_ROM_MAX = 0.175
+/** 肘 pose 旋转上限（弧度，≈ +140°）。正角把前臂弯向身前，与膝相反。 */
+export const ARM_ROM_MAX = 2.443
 
 /**
  * 校验并返回只读二骨链。装配阶段调用。
