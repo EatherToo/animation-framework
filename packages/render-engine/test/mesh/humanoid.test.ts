@@ -2,7 +2,8 @@ import { describe, expect, it } from '@jest/globals'
 import { createHumanoid } from '@/body/assemble'
 import * as meshEntry from '@/mesh'
 import { createHumanoidMeshes, type Mesh } from '@/mesh/humanoid'
-import { AXIAL_STEPS, TUBE_SIDES, meshFromCappedTube, meshFromRectangle, meshFromStrip } from '@/mesh/strip'
+import type { RadiusProfile } from '@/body/proportions'
+import { AXIAL_STEPS, TUBE_SIDES, meshFromCappedSection, meshFromCappedTube, meshFromRectangle, meshFromStrip } from '@/mesh/strip'
 import { createHumanoidParts } from '@/part/humanoid'
 
 type Vec = { x: number; y: number; z: number }
@@ -67,6 +68,48 @@ function expectOutwardFromCentroid(mesh: Mesh) {
   }
 }
 
+function expectHandPiecesOutward(mesh: Mesh) {
+  const chunk = 146
+  const verts = mesh.positions.length / 3
+  expect(verts).toBe(chunk * 6)
+  for (let piece = 0; piece < 6; piece += 1) {
+    const base = piece * chunk
+    const positions = mesh.positions.slice(base * 3, (base + chunk) * 3)
+    const local: number[] = []
+    for (let t = 0; t < mesh.indices.length; t += 3) {
+      const a = mesh.indices[t]!
+      const b = mesh.indices[t + 1]!
+      const c = mesh.indices[t + 2]!
+      if (a < base || b < base || c < base || a >= base + chunk || b >= base + chunk || c >= base + chunk) continue
+      local.push(a - base, b - base, c - base)
+    }
+    expectOutwardFromCentroid({
+      partId: mesh.partId,
+      space: mesh.space,
+      positions,
+      indices: new Uint16Array(local),
+      textures: mesh.textures,
+    })
+  }
+}
+
+function widestStation(profile: RadiusProfile): number {
+  let max = 0
+  for (let k = 0; k <= AXIAL_STEPS; k += 1) max = Math.max(max, profileAt(profile, k / AXIAL_STEPS))
+  return max
+}
+
+function profileAt(profile: RadiusProfile, t: number): number {
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const span = right.t - left.t
+    return left.radius * (1 - (t - left.t) / span) + right.radius * ((t - left.t) / span)
+  }
+  throw new Error('radius')
+}
+
 function range(mesh: Mesh, axis: 0 | 1 | 2): { min: number; max: number } {
   let min = Infinity
   let max = -Infinity
@@ -83,6 +126,7 @@ describe('humanoid meshes', () => {
     expect(meshEntry.AXIAL_STEPS).toBe(AXIAL_STEPS)
     expect(meshEntry.meshFromStrip).toBe(meshFromStrip)
     expect(meshEntry.meshFromCappedTube).toBe(meshFromCappedTube)
+    expect(meshEntry.meshFromCappedSection).toBe(meshFromCappedSection)
     expect(meshEntry.meshFromRectangle).toBe(meshFromRectangle)
     expect(TUBE_SIDES).toBe(16)
     expect(AXIAL_STEPS).toBe(8)
@@ -103,6 +147,7 @@ describe('humanoid meshes', () => {
       expect(mesh.positions.length % 3).toBe(0)
       expect(mesh.indices.length % 3).toBe(0)
       if (part.kind === 'skinned') expectOutwardFromVerticalAxis(mesh)
+      else if (part.id === 'handL' || part.id === 'handR') expectHandPiecesOutward(mesh)
       else expectOutwardFromCentroid(mesh)
     }
 
@@ -116,36 +161,51 @@ describe('humanoid meshes', () => {
     expect(torso.positions.length).toBe(1200)
     expect(torso.indices.length).toBe(2304)
     expect(range(torso, 1).max).toBeGreaterThan(p.hipHeight + p.spineLength)
-    expect(range(torso, 2).max).toBeCloseTo(p.chestRadius, 5)
-    expect(range(torso, 2).min).toBeCloseTo(-p.chestRadius, 5)
+    const chestWide = widestStation(p.chestProfile)
+    expect(range(torso, 2).max).toBeCloseTo(chestWide, 5)
+    expect(range(torso, 2).min).toBeCloseTo(-chestWide, 5)
+    expect(Math.abs(vertex(torso, 4).z)).toBeCloseTo(p.spineProfile[0]!.radius, 5)
+    expect(Math.abs(vertex(torso, 4 * TUBE_SIDES + 4).z)).toBeLessThan(p.spineProfile[0]!.radius)
 
-    for (const id of ['head', 'handL', 'handR']) {
-      const capped = byId.get(id)!
-      expect(capped.positions.length).toBe(438)
-      expect(capped.indices.length).toBe(864)
-    }
     const head = byId.get('head')!
+    expect(head.positions.length).toBe(438)
+    expect(head.indices.length).toBe(864)
+    const headWide = widestStation(p.headProfile)
     expect(range(head, 0).min).toBe(0)
     expect(range(head, 0).max).toBeCloseTo(p.headLength, 5)
-    expect(range(head, 1).max).toBeCloseTo(p.headRadius, 5)
-    expect(range(head, 1).min).toBeCloseTo(-p.headRadius, 5)
-    expect(range(head, 2).max).toBeCloseTo(p.headRadius, 5)
-    expect(range(head, 2).min).toBeCloseTo(-p.headRadius, 5)
+    expect(range(head, 1).max).toBeCloseTo(headWide, 5)
+    expect(range(head, 1).min).toBeCloseTo(-headWide, 5)
+    expect(range(head, 2).max).toBeCloseTo(headWide, 5)
+    expect(range(head, 2).min).toBeCloseTo(-headWide, 5)
+
+    for (const id of ['handL', 'handR']) {
+      const hand = byId.get(id)!
+      expect(hand.positions.length).toBe(2628)
+      expect(hand.indices.length).toBe(5184)
+      expect(range(hand, 0).min).toBeCloseTo(0, 5)
+      expect(range(hand, 0).max).toBeCloseTo(p.handLength, 5)
+    }
     const hand = byId.get('handL')!
-    expect(range(hand, 0).max).toBeCloseTo(p.handLength, 5)
-    expect(range(hand, 2).max).toBeCloseTo(p.handRadius, 5)
+    expect(range(hand, 2).max).toBeCloseTo(p.fingerSpread[1] + p.fingerRadius, 5)
+    const right = byId.get('handR')!
+    expect(range(right, 2).min).toBeCloseTo(-(p.fingerSpread[1] + p.fingerRadius), 5)
+    let thumbZ = Infinity
+    for (let i = 0; i < right.positions.length; i += 3) {
+      if (Math.abs(right.positions[i + 1]! + p.thumbDrop) < 1e-6) thumbZ = Math.min(thumbZ, right.positions[i + 2]!)
+    }
+    expect(thumbZ).toBeCloseTo(-(p.thumbOffsetZ + p.thumbRadius), 5)
 
     for (const id of ['footL', 'footR']) {
       const foot = byId.get(id)!
-      expect(foot.positions.length).toBe(24)
-      expect(foot.indices.length).toBe(36)
-      expect(range(foot, 0).min).toBe(0)
+      expect(foot.positions.length).toBe(438)
+      expect(foot.indices.length).toBe(864)
+      expect(range(foot, 0).min).toBeCloseTo(-p.heelBack, 5)
       expect(range(foot, 0).max).toBeCloseTo(p.footLength, 5)
+      expect(range(foot, 1).min).toBeGreaterThanOrEqual(-p.ankleHeight - 1e-8)
       expect(range(foot, 1).min).toBeCloseTo(-p.ankleHeight, 5)
-      expect(range(foot, 1).min).toBeLessThan(0)
-      expect(range(foot, 1).max).toBeCloseTo(p.footRadius, 5)
-      expect(range(foot, 2).min).toBeCloseTo(-p.footRadius, 5)
-      expect(range(foot, 2).max).toBeCloseTo(p.footRadius, 5)
+      expect(range(foot, 1).max).toBeCloseTo(-p.ankleHeight + widestStation(p.footInstep), 5)
+      expect(range(foot, 2).max).toBeCloseTo(widestStation(p.footHalfWidth), 5)
+      expect(range(foot, 2).min).toBeCloseTo(-widestStation(p.footHalfWidth), 5)
     }
   })
 
@@ -164,20 +224,20 @@ describe('humanoid meshes', () => {
       for (let j = 0; j < TUBE_SIDES; j += 1) {
         const v = vertex(arm, j)
         expect(v.y).toBeCloseTo(shoulderY, 5)
-        expect(Math.hypot(v.x, v.z - centerZ)).toBeCloseTo(p.upperArmRadius, 5)
+        expect(Math.hypot(v.x, v.z - centerZ)).toBeCloseTo(p.upperArmProfile[0]!.radius, 5)
       }
-      expect(Math.abs(vertex(arm, 0).x)).toBeCloseTo(p.upperArmRadius, 5)
+      expect(Math.abs(vertex(arm, 0).x)).toBeCloseTo(p.upperArmProfile[0]!.radius, 5)
       expect(vertex(arm, 0).z).toBeCloseTo(centerZ, 6)
       expect(vertex(arm, 8).x).toBeCloseTo(-vertex(arm, 0).x, 6)
       expect(vertex(arm, 8).z).toBeCloseTo(centerZ, 6)
       expect(vertex(arm, 4).x).toBeCloseTo(0, 6)
-      expect(vertex(arm, 4).z).toBeCloseTo(centerZ + p.upperArmRadius, 5)
+      expect(vertex(arm, 4).z).toBeCloseTo(centerZ + p.upperArmProfile[0]!.radius, 5)
       expect(vertex(arm, 12).x).toBeCloseTo(0, 6)
-      expect(vertex(arm, 12).z).toBeCloseTo(centerZ - p.upperArmRadius, 5)
+      expect(vertex(arm, 12).z).toBeCloseTo(centerZ - p.upperArmProfile[0]!.radius, 5)
     }
 
     const leg = set.meshes.find((mesh) => mesh.partId === 'legL')!
-    expect(vertex(leg, 4).z).toBeCloseTo(p.hipOffsetZ + p.thighRadius, 5)
+    expect(vertex(leg, 4).z).toBeCloseTo(p.hipOffsetZ + p.thighProfile[0]!.radius, 5)
     expect(range(leg, 1).min).toBeCloseTo(p.ankleHeight, 5)
     const wrist = range(left, 1).min
     expect(wrist).toBeCloseTo(shoulderY - p.upperArmLength - p.lowerArmLength, 5)
@@ -185,12 +245,34 @@ describe('humanoid meshes', () => {
     expect(vertex(left, TUBE_SIDES).y).toBeCloseTo(shoulderY - p.upperArmLength / AXIAL_STEPS, 5)
     const elbow = vertex(left, AXIAL_STEPS * TUBE_SIDES)
     expect(elbow.y).toBeCloseTo(shoulderY - p.upperArmLength, 5)
-    expect(Math.hypot(elbow.x, elbow.z - p.shoulderOffsetZ)).toBeCloseTo(p.upperArmRadius, 5)
+    const elbowRadius = p.upperArmProfile[p.upperArmProfile.length - 1]!.radius
+    expect(elbowRadius).toBeCloseTo(p.lowerArmProfile[0]!.radius, 8)
+    expect(elbowRadius).toBeLessThan(p.upperArmProfile[1]!.radius)
+    expect(Math.hypot(elbow.x, elbow.z - p.shoulderOffsetZ)).toBeCloseTo(elbowRadius, 5)
   })
 
   it('空段列表抛出 segments', () => {
     expect(() => meshFromStrip('a', 'character', [], { r: 0, g: 0, b: 0 })).toThrow(/^segments$/)
     expect(() => meshFromCappedTube('a', 'part', [], { r: 0, g: 0, b: 0 })).toThrow(/^segments$/)
+    const flat = [
+      { t: 0, radius: 0.1 },
+      { t: 1, radius: 0.1 },
+    ]
+    const wide = [
+      { t: 0, radius: 0.2 },
+      { t: 1, radius: 0.2 },
+    ]
+    expect(() =>
+      meshFromStrip(
+        'a',
+        'character',
+        [
+          { x0: 0, y0: 0, z0: 0, x1: 0, y1: 1, z1: 0, px: 1, py: 0, profile: flat },
+          { x0: 0, y0: 1, z0: 0, x1: 0, y1: 2, z1: 0, px: 1, py: 0, profile: wide },
+        ],
+        { r: 0, g: 0, b: 0 },
+      ),
+    ).toThrow(/^radius$/)
   })
 
   it('骨架不一致时拒绝', () => {

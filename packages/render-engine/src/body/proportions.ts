@@ -1,4 +1,13 @@
-/** 由站立身高导出的体型比例量（米；`reachMargin` 无量纲）。 */
+/** 沿骨轴或脚底的一个截面样本。`t` 从 0 到 1，`radius` 为米。 */
+export type RadiusSample = {
+  readonly t: number
+  readonly radius: number
+}
+
+/** 严格按 `t` 递增的截面轮廓。 */
+export type RadiusProfile = readonly RadiusSample[]
+
+/** 由站立身高导出的体型比例量（米；`reachMargin` 和无量纲分数除外）。 */
 export type BodyProportions = {
   readonly height: number
   /** 骨盆高度（脚底 → 髋关节），米 */
@@ -18,16 +27,27 @@ export type BodyProportions = {
   readonly footLength: number
   /** thigh + shin */
   readonly legLength: number
-  readonly spineRadius: number
-  readonly chestRadius: number
-  readonly neckRadius: number
-  readonly headRadius: number
-  readonly upperArmRadius: number
-  readonly lowerArmRadius: number
-  readonly handRadius: number
-  readonly thighRadius: number
-  readonly shinRadius: number
-  readonly footRadius: number
+  readonly spineProfile: RadiusProfile
+  readonly chestProfile: RadiusProfile
+  readonly neckProfile: RadiusProfile
+  readonly headProfile: RadiusProfile
+  readonly upperArmProfile: RadiusProfile
+  readonly lowerArmProfile: RadiusProfile
+  readonly thighProfile: RadiusProfile
+  readonly shinProfile: RadiusProfile
+  readonly palmRadius: number
+  readonly palmFraction: number
+  readonly fingerRadius: number
+  readonly fingerFraction: number
+  readonly fingerSpread: readonly [number, number]
+  readonly thumbRadius: number
+  readonly thumbFraction: number
+  readonly thumbAlong: number
+  readonly thumbDrop: number
+  readonly thumbOffsetZ: number
+  readonly heelBack: number
+  readonly footHalfWidth: RadiusProfile
+  readonly footInstep: RadiusProfile
   /** 左右踝绑定位置在角色 z 上的间距，米 */
   readonly stanceWidth: number
   /** 半髋宽：髋相对骨盆中线沿角色 z 的偏移绝对值，米。左侧为正 */
@@ -67,7 +87,11 @@ export function createProportions(height: number): BodyProportions {
   const ankleHeight = 0.039 * H
   const thighLength = 0.245 * H
   const shinLength = 0.246 * H
+  const footLength = 0.152 * H
+  const chestLength = 0.144 * H
+  const shoulderDropY = 0.02 * H
   const stanceWidth = 0.12 * H
+  const shoulderOffsetZ = 0.11 * H
 
   return {
     height: H,
@@ -75,7 +99,7 @@ export function createProportions(height: number): BodyProportions {
     ankleHeight,
     pelvisLength: 0.05 * H,
     spineLength: 0.144 * H,
-    chestLength: 0.144 * H,
+    chestLength,
     neckLength: 0.052 * H,
     headLength: 0.13 * H,
     upperArmLength: 0.186 * H,
@@ -83,23 +107,43 @@ export function createProportions(height: number): BodyProportions {
     handLength: 0.108 * H,
     thighLength,
     shinLength,
-    footLength: 0.152 * H,
+    footLength,
     legLength: thighLength + shinLength,
-    spineRadius: 0.058 * H,
-    chestRadius: 0.072 * H,
-    neckRadius: 0.032 * H,
-    headRadius: 0.046 * H,
-    upperArmRadius: 0.030 * H,
-    lowerArmRadius: 0.024 * H,
-    handRadius: 0.026 * H,
-    thighRadius: 0.050 * H,
-    shinRadius: 0.036 * H,
-    footRadius: 0.030 * H,
+    spineProfile: profile(H, [[0, 0.09], [0.55, 0.062], [1, 0.062]]),
+    chestProfile: profile(H, [
+      [0, 0.062],
+      [0.45, 0.08],
+      [1 - shoulderDropY / chestLength, 0.11],
+      [1, 0.036],
+    ]),
+    neckProfile: profile(H, [[0, 0.036], [1, 0.032]]),
+    headProfile: profile(H, [[0, 0.032], [0.45, 0.078], [1, 0.028]]),
+    upperArmProfile: profile(H, [[0, 0.04], [0.5, 0.032], [1, 0.018]]),
+    lowerArmProfile: profile(H, [[0, 0.018], [0.5, 0.026], [1, 0.016]]),
+    thighProfile: profile(H, [[0, 0.072], [0.4, 0.06], [1, 0.026]]),
+    shinProfile: profile(H, [[0, 0.026], [0.5, 0.038], [1, 0.02]]),
+    palmRadius: 0.028 * H,
+    palmFraction: 0.42,
+    fingerRadius: 0.0065 * H,
+    fingerFraction: 0.58,
+    fingerSpread: [0.008 * H, 0.022 * H],
+    thumbRadius: 0.008 * H,
+    thumbFraction: 0.36,
+    thumbAlong: 0.2,
+    thumbDrop: 0.012 * H,
+    thumbOffsetZ: 0.02 * H,
+    heelBack: 0.3 * footLength,
+    footHalfWidth: profile(H, [[0, 0.022], [0.65, 0.032], [1, 0.016]]),
+    footInstep: profile(H, [[0, 0.04], [0.5, 0.052], [1, 0.022]]),
     stanceWidth,
     hipOffsetZ: stanceWidth / 2,
-    shoulderOffsetZ: 0.102 * H,
+    shoulderOffsetZ,
     hipDropY: hipHeight - thighLength - shinLength - ankleHeight,
-    shoulderDropY: 0.02 * H,
+    shoulderDropY,
     reachMargin: REACH_MARGIN,
   }
+}
+
+function profile(height: number, samples: readonly (readonly [number, number])[]): RadiusProfile {
+  return samples.map(([t, coefficient]) => ({ t, radius: coefficient * height }))
 }

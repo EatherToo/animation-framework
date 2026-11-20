@@ -1,12 +1,13 @@
 import type { Humanoid } from '../body/assemble'
-import type { BodyProportions } from '../body/proportions'
+import type { BodyProportions, RadiusProfile, RadiusSample } from '../body/proportions'
 import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
 import type { Fill, PartSet, SkinnedPart } from '../part/set'
 import { bindLength, boneName, type Skeleton } from '../skeleton/skeleton'
 import { setBindParentFromBone } from '../skeleton/parent-from-bone'
+import { createMeshTextures } from './texture'
 import {
+  meshFromCappedSection,
   meshFromCappedTube,
-  meshFromRectangle,
   meshFromStrip,
   type Mesh,
   type MeshSet,
@@ -57,7 +58,6 @@ function tubeMesh(
     const oy = rig[base + 7]!
     const ax = rig[base]!
     const ay = rig[base + 1]!
-    const radius = radiusOf(name, proportions)
     const x1 = ox + ax * length
     const y1 = oy + ay * length
     const next = i + 1 < part.bones.length ? part.bones[i + 1]! : -1
@@ -69,7 +69,7 @@ function tubeMesh(
       if (dx * dx + dy * dy > JOIN_DISTANCE_SQ) continue
     }
     const z = lateral[bone]!
-    segments.push(segment(ox, oy, z, x1, y1, z, radius))
+    segments.push(segment(ox, oy, z, x1, y1, z, profileOf(name, proportions)))
   }
   return meshFromStrip(part.id, 'character', segments, part.fill)
 }
@@ -81,12 +81,12 @@ function segment(
   x1: number,
   y1: number,
   z1: number,
-  radius: number,
+  profile: RadiusProfile,
 ): StripSegment {
   const dx = x1 - x0
   const dy = y1 - y0
   const len = Math.hypot(dx, dy)
-  return { x0, y0, z0, x1, y1, z1, px: -dy / len, py: dx / len, radius }
+  return { x0, y0, z0, x1, y1, z1, px: -dy / len, py: dx / len, profile }
 }
 
 function rigidMesh(
@@ -99,49 +99,137 @@ function rigidMesh(
   const length = bindLength(skeleton, bone)
   const name = boneName(skeleton, bone)
   if (name === 'head') {
-    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.headRadius)], fill)
+    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.headProfile)], fill)
   }
-  if (name === 'handL' || name === 'handR') {
-    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.handRadius)], fill)
-  }
-  if (name === 'footL' || name === 'footR') {
-    return meshFromRectangle(
-      partId,
-      0,
-      length,
-      proportions.footRadius,
-      -proportions.ankleHeight,
-      proportions.footRadius,
-      fill,
-    )
-  }
+  if (name === 'handL' || name === 'handR') return handMesh(partId, name === 'handL' ? 1 : -1, length, proportions, fill)
+  if (name === 'footL' || name === 'footR') return footMesh(partId, proportions, fill)
   throw new Error('part')
 }
 
-function radiusOf(name: string, proportions: BodyProportions): number {
+function handMesh(partId: string, side: number, length: number, proportions: BodyProportions, fill: Fill): Mesh {
+  const palmEnd = proportions.palmFraction * length
+  const pieces = [
+    meshFromCappedTube(partId, 'part', [segment(0, 0, 0, palmEnd, 0, 0, constantProfile(proportions.palmRadius))], fill),
+  ]
+  for (const spread of [-proportions.fingerSpread[1], -proportions.fingerSpread[0], proportions.fingerSpread[0], proportions.fingerSpread[1]]) {
+    pieces.push(
+      meshFromCappedTube(
+        partId,
+        'part',
+        [segment(palmEnd, 0, spread, length, 0, spread, constantProfile(proportions.fingerRadius))],
+        fill,
+      ),
+    )
+  }
+  const thumbX = proportions.thumbAlong * length
+  const thumbZ = side * proportions.thumbOffsetZ
+  pieces.push(
+    meshFromCappedTube(
+      partId,
+      'part',
+      [
+        segment(
+          thumbX,
+          -proportions.thumbDrop,
+          thumbZ,
+          thumbX + proportions.thumbFraction * length,
+          -proportions.thumbDrop,
+          thumbZ,
+          constantProfile(proportions.thumbRadius),
+        ),
+      ],
+      fill,
+    ),
+  )
+  return concatenate(partId, pieces, fill)
+}
+
+function footMesh(partId: string, proportions: BodyProportions, fill: Fill): Mesh {
+  return meshFromCappedSection(
+    partId,
+    'part',
+    -proportions.heelBack,
+    0,
+    0,
+    proportions.footLength,
+    0,
+    0,
+    (t, theta) => {
+      const lifted = Math.max(0, (Math.sin(theta) + 1) / 2)
+      return {
+        along: -proportions.ankleHeight + radiusAt(proportions.footInstep, t) * lifted,
+        lateral: -radiusAt(proportions.footHalfWidth, t) * Math.cos(theta),
+      }
+    },
+    fill,
+  )
+}
+
+function concatenate(partId: string, pieces: readonly Mesh[], fill: Fill): Mesh {
+  let floats = 0
+  let indexCount = 0
+  for (const piece of pieces) {
+    floats += piece.positions.length
+    indexCount += piece.indices.length
+  }
+  const positions = new Float32Array(floats)
+  const indices = new Uint16Array(indexCount)
+  let floatOffset = 0
+  let indexOffset = 0
+  let vertexBase = 0
+  for (const piece of pieces) {
+    positions.set(piece.positions, floatOffset)
+    for (let i = 0; i < piece.indices.length; i += 1) indices[indexOffset + i] = piece.indices[i]! + vertexBase
+    floatOffset += piece.positions.length
+    indexOffset += piece.indices.length
+    vertexBase += piece.positions.length / 3
+  }
+  return { partId, space: 'part', positions, indices, ...createMeshTextures(indices, fill) }
+}
+
+function constantProfile(radius: number): RadiusProfile {
+  return [
+    { t: 0, radius },
+    { t: 1, radius },
+  ]
+}
+
+function profileOf(name: string, proportions: BodyProportions): RadiusProfile {
   switch (name) {
     case 'pelvis':
     case 'spine':
-      return proportions.spineRadius
+      return proportions.spineProfile
     case 'chest':
-      return proportions.chestRadius
+      return proportions.chestProfile
     case 'neck':
-      return proportions.neckRadius
+      return proportions.neckProfile
     case 'upperArmL':
     case 'upperArmR':
-      return proportions.upperArmRadius
+      return proportions.upperArmProfile
     case 'lowerArmL':
     case 'lowerArmR':
-      return proportions.lowerArmRadius
+      return proportions.lowerArmProfile
     case 'thighL':
     case 'thighR':
-      return proportions.thighRadius
+      return proportions.thighProfile
     case 'shinL':
     case 'shinR':
-      return proportions.shinRadius
+      return proportions.shinProfile
     default:
       throw new Error('bone')
   }
+}
+
+function radiusAt(profile: readonly RadiusSample[], t: number): number {
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const span = right.t - left.t
+    const u = span === 0 ? 0 : (t - left.t) / span
+    return left.radius * (1 - u) + right.radius * u
+  }
+  throw new Error('radius')
 }
 
 function writeBindRig(skeleton: Skeleton): Float32Array {

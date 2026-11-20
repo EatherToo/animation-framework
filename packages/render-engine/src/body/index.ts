@@ -3,7 +3,7 @@
  * 依赖 01 数学与 03 骨架；不导入 space / gl-matrix。
  */
 export { createProportions } from './proportions'
-export type { BodyProportions } from './proportions'
+export type { BodyProportions, RadiusProfile, RadiusSample } from './proportions'
 
 export {
   LEG_BEND_SIGN,
