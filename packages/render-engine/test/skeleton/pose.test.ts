@@ -15,9 +15,13 @@ import {
   copyPose,
   createPose,
   poseRotation,
+  poseSwing,
   poseTranslation,
+  poseTwist,
   setPoseRotation,
+  setPoseSwing,
   setPoseTranslation,
+  setPoseTwist,
   zeroPose,
 } from '@/skeleton/pose'
 import { expectClose, expectSameBits } from '../math/assert'
@@ -80,9 +84,31 @@ describe('pose', () => {
     expectSameBits(t, new Float32Array([1, 2]))
     expectClose(poseRotation(pose, 0), -0.4)
 
-    expect(Object.is(pose.data[3], 0)).toBe(true)
-    expect(Object.is(pose.data[4], 0)).toBe(true)
+    setPoseSwing(pose, 0, 0.2)
+    setPoseTwist(pose, 0, -0.3)
+    expectClose(poseRotation(pose, 0), -0.4)
+    expectClose(poseSwing(pose, 0), 0.2)
+    expectClose(poseTwist(pose, 0), -0.3)
+    poseTranslation(t, pose, 0)
+    expectSameBits(t, new Float32Array([1, 2]))
     expect(Object.is(pose.data[5], 0)).toBe(true)
+  })
+
+  it('侧摆和扭转折角；±π 读回按位相同', () => {
+    const sk = twoBoneSkeleton()
+    const pose = createPose(sk)
+    setPoseSwing(pose, 0, 3 * Math.PI)
+    expectClose(poseSwing(pose, 0), Math.PI)
+    setPoseTwist(pose, 0, -3 * Math.PI)
+    expectClose(poseTwist(pose, 0), Math.PI)
+    setPoseSwing(pose, 0, Math.PI)
+    const a = poseSwing(pose, 0)
+    setPoseSwing(pose, 0, -Math.PI)
+    expect(Object.is(a, poseSwing(pose, 0))).toBe(true)
+    setPoseTwist(pose, 1, Math.PI)
+    const b = poseTwist(pose, 1)
+    setPoseTwist(pose, 1, -Math.PI)
+    expect(Object.is(b, poseTwist(pose, 1))).toBe(true)
   })
 
   it('setPoseRotation 折角；±π 读回按位相同', () => {

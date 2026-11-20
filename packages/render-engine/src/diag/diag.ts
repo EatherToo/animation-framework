@@ -57,7 +57,6 @@ export type DebugView = {
 
 type Rig = {
   readonly fk: Float32Array
-  readonly lateral: Float32Array
 }
 
 export function readDiagnostics(solver: Solver): DiagnosticReadout {
@@ -94,10 +93,9 @@ export function debugView(solver: Solver): DebugView {
 
 function rig(solver: Solver): Rig {
   const count = solver.compiled.skeleton.boneCount
-  const fk = new Float32Array(count * 9)
-  const lateral = new Float32Array(count)
-  evaluateFk(fk, lateral, solver.compiled, solver.pose, count)
-  return { fk, lateral }
+  const fk = new Float32Array(count * 12)
+  evaluateFk(fk, solver.compiled, solver.pose, count)
+  return { fk }
 }
 
 function residual(solver: Solver, fk: Float32Array): number {
@@ -115,7 +113,7 @@ function margin(solver: Solver, fk: Float32Array): number {
 }
 
 function bones(solver: Solver, current: Rig): DebugBone[] {
-  const { fk, lateral } = current
+  const { fk } = current
   const segments: DebugBone[] = []
   const parent = solver.compiled.skeleton.parent
   for (let bone = 0; bone < parent.length; bone += 1) {
@@ -126,10 +124,10 @@ function bones(solver: Solver, current: Rig): DebugBone[] {
     segments.push({
       x0: start.x,
       y0: start.y,
-      z0: lateral[from]!,
+      z0: fk[from * 12 + 11]!,
       x1: end.x,
       y1: end.y,
-      z1: lateral[bone]!,
+      z1: fk[bone * 12 + 11]!,
     })
   }
   return segments
@@ -156,7 +154,7 @@ function circle(solver: Solver, fk: Float32Array, bone: number): DebugSegment[] 
 function wire(solver: Solver, current: Rig): DebugWire[] {
   return solver.compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, solver.compiled, current.fk, current.lateral, index)
+    skinMesh(positions, solver.compiled, current.fk, index)
     return { partId: mesh.partId, positions, indices: mesh.indices }
   })
 }
@@ -166,7 +164,7 @@ function weights(solver: Solver, current: Rig): DebugWeight[] {
     const index = solver.compiled.meshes.meshes.findIndex((mesh) => mesh.partId === entry.partId)
     const mesh = solver.compiled.meshes.meshes[index]!
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, solver.compiled, current.fk, current.lateral, index)
+    skinMesh(positions, solver.compiled, current.fk, index)
     const values = new Float32Array(positions.length / 3)
     for (let vertex = 0; vertex < values.length; vertex += 1) {
       let best = 0
@@ -180,7 +178,7 @@ function weights(solver: Solver, current: Rig): DebugWeight[] {
 }
 
 function joint(fk: Float32Array, bone: number): { x: number; y: number } {
-  return { x: fk[bone * 9 + 6]!, y: fk[bone * 9 + 7]! }
+  return { x: fk[bone * 12 + 9]!, y: fk[bone * 12 + 10]! }
 }
 
 function footSole(compiled: CompiledRig, fk: Float32Array, bone: number): { x: number; y: number } {

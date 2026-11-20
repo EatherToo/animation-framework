@@ -18,12 +18,11 @@ export type Presented = {
 /** 当前姿态下各部件的角色空间顶点，步长 3。 */
 export function skinPose(compiled: CompiledRig, pose: Pose): ViewSource[] {
   const count = compiled.skeleton.boneCount
-  const fk = new Float32Array(count * 9)
-  const lateral = new Float32Array(count)
-  evaluateFk(fk, lateral, compiled, pose, count)
+  const fk = new Float32Array(count * 12)
+  evaluateFk(fk, compiled, pose, count)
   return compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
-    skinMesh(positions, compiled, fk, lateral, index)
+    skinMesh(positions, compiled, fk, index)
     return { partId: mesh.partId, positions, indices: mesh.indices }
   })
 }

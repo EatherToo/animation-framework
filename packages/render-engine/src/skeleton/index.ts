@@ -23,11 +23,17 @@ export {
   createPose,
   setPoseTranslation,
   setPoseRotation,
+  setPoseSwing,
+  setPoseTwist,
   poseTranslation,
   poseRotation,
+  poseSwing,
+  poseTwist,
   zeroPose,
   copyPose,
 } from './pose'
 export type { Pose } from './pose'
 
 export { setParentFromBone, setBindParentFromBone } from './parent-from-bone'
+
+export { RIGID_STRIDE, setRigidParentFromBone, multiplyRigid } from './rigid'

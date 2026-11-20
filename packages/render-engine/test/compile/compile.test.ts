@@ -15,16 +15,14 @@ describe('compile', () => {
     expect(compiled.parts.parts).toHaveLength(10)
     expect(compiled.foot.toeForward).toBe(humanoid.proportions.footLength)
     expect(compiled.foot.heelBack).toBeGreaterThan(0)
-    expect(compiled.bindRig.length).toBe(humanoid.skeleton.boneCount * 9)
+    expect(compiled.bindRig.length).toBe(humanoid.skeleton.boneCount * 12)
     expect(compiled.inverseBind.length).toBe(compiled.bindRig.length)
     expect(compiled.correction.enabled).toBe(false)
-    expect(compiled.lateralBind.length).toBe(humanoid.skeleton.boneCount)
-    expect(compiled.lateralBind[humanoid.boneIndex.footL]).toBeCloseTo(humanoid.proportions.hipOffsetZ, 6)
-    expect(compiled.lateralBind[humanoid.boneIndex.handR]).toBeCloseTo(
-      -humanoid.proportions.shoulderOffsetZ,
-      6,
-    )
-    expect(compiled.lateralBind[humanoid.boneIndex.head]).toBe(0)
+    expect(compiled.joints).toHaveLength(17)
+    const lateral = (bone: number) => compiled.bindRig[bone * 12 + 11]
+    expect(lateral(humanoid.boneIndex.footL)).toBeCloseTo(humanoid.proportions.hipOffsetZ, 6)
+    expect(lateral(humanoid.boneIndex.handR)).toBeCloseTo(-humanoid.proportions.shoulderOffsetZ, 6)
+    expect(lateral(humanoid.boneIndex.head)).toBe(0)
   })
 
   it('骨架、槽位不一致或网格不合法时整份拒绝', () => {
