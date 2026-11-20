@@ -1,5 +1,5 @@
 /**
- * 11 关节修正：首版求值为空操作。
+ * 11 关节修正：扭转径向外推，减轻 LBS 糖纸塌缩。
  */
 export { createCorrection, applyCorrection } from './correction'
-export type { Correction } from './correction'
+export type { Correction, CorrectionContext, CorrectionOptions } from './correction'

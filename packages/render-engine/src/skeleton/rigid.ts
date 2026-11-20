@@ -7,6 +7,7 @@ export const RIGID_STRIDE = 12
 /**
  * 把绑定和三轴偏移写成父空间刚体。
  * `swing`、`twist` 先乘符号。符号为 0 时该轴不转。
+ * `twistScale` 把通道扭转角缩到 `[0, 1]` 份额（蒙皮沿骨分布用）。
  * 两个角都是 0 时，旋转退回绕 `+Z`，平移 `x, y` 与矢状公式一致，`z` 是绑定横向。
  * @param out 长度 {@link RIGID_STRIDE}
  * @param skeleton 绑定
@@ -14,6 +15,7 @@ export const RIGID_STRIDE = 12
  * @param bone 骨头下标
  * @param swingSign 乘到 `swing` 上
  * @param twistSign 乘到 `twist` 上
+ * @param twistScale 乘到已带符号的扭转角上，默认 `1`
  */
 export function setRigidParentFromBone(
   out: Float32Array,
@@ -22,6 +24,7 @@ export function setRigidParentFromBone(
   bone: number,
   swingSign: -1 | 0 | 1,
   twistSign: -1 | 0 | 1,
+  twistScale = 1,
 ): void {
   const poseIndex = bone * POSE_STRIDE
   const translation = bone * 2
@@ -34,7 +37,7 @@ export function setRigidParentFromBone(
   const btx = skeleton.bindTranslation[translation]!
   const bty = skeleton.bindTranslation[translation + 1]!
   const a = swingSign * swing
-  const b = twistSign * twist
+  const b = twistSign * twist * twistScale
   const g = bindRotation + rotation
   const ca = Math.cos(a)
   const sa = Math.sin(a)

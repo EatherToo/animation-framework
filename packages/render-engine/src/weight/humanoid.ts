@@ -12,6 +12,8 @@ export type SkinWeights = {
   readonly partId: string
   readonly influences: number
   readonly weights: Float32Array
+  /** 每个顶点一项，上臂/前臂/大腿轴向扭转份额；其余为 0。 */
+  readonly twistU: Float32Array
 }
 
 /** 只含蒙皮部件，顺序与部件登记一致。 */
@@ -81,6 +83,7 @@ function weightPart(
   const influences = part.bones.length
   const vertexCount = positions.length / 3
   const weights = new Float32Array(vertexCount * influences)
+  const twistU = new Float32Array(vertexCount)
   const headSlot = 0
   const tailSlot = influences - 1
   for (let v = 0; v < vertexCount; v += 1) {
@@ -103,11 +106,20 @@ function weightPart(
     const tail = endShare[v * 2 + 1]!
     const e = head > 0 ? head : tail
     const endSlot = head > 0 ? headSlot : tail > 0 ? tailSlot : -1
-    if (endSlot < 0 || e <= 0) continue
-    for (let i = 0; i < influences; i += 1) column[i]! *= 1 - e
-    column[endSlot]! += e
+    if (endSlot >= 0 && e > 0) {
+      for (let i = 0; i < influences; i += 1) column[i]! *= 1 - e
+      column[endSlot]! += e
+    }
+    const seg = segments[best]!
+    const name = boneName(skeleton, part.bones[seg.slot]!)
+    if (name.startsWith('lowerArm')) {
+      twistU[v] = bestT
+    } else if (name.startsWith('upperArm') || name.startsWith('thigh')) {
+      // 肩/髋接缝不在骨原点：用 (1−head) 把接缝映到 0，肘/膝仍为 1。
+      twistU[v] = bestT * (1 - head)
+    }
   }
-  return { partId: part.id, influences, weights }
+  return { partId: part.id, influences, weights, twistU }
 }
 
 function borrowed(partId: string, name: string): boolean {
