@@ -51,6 +51,11 @@ describe('compile', () => {
       index === 0 ? { ...mesh, positions: new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]) } : mesh,
     )
     expect(() => compileRig({ ...base, meshes: { meshes: planar } })).toThrow(/^mesh$/)
+
+    const shortUv = meshes.meshes.map((mesh, index) =>
+      index === 0 ? { ...mesh, uvs: mesh.uvs.slice(0, mesh.uvs.length - 1) } : mesh,
+    )
+    expect(() => compileRig({ ...base, meshes: { meshes: shortUv } })).toThrow(/^uv$/)
   })
 })
 
@@ -65,5 +70,8 @@ function collinearMesh(partId: string): Mesh {
     space: 'character',
     positions: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0]),
     indices: new Uint16Array([0, 1, 2]),
+    textures: [],
+    triangleTexture: new Uint16Array(),
+    uvs: new Float32Array(),
   }
 }

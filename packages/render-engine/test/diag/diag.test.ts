@@ -46,8 +46,8 @@ describe('diagnostics', () => {
     const pose = Array.from(solver.pose.data)
     const layer = createMemoryLayer()
     const binding = createBinding(layer)
-    const { filled, order } = presentPose(solver.compiled, solver.pose, 0)
-    updateBinding(binding, filled, strokeContours(filled, true), order)
+    const { filled, textured, order } = presentPose(solver.compiled, solver.pose, 0)
+    updateBinding(binding, filled, textured, strokeContours(filled, true), order)
     const kept = layer.objects.slice()
     const positions = Array.from(kept[0]!.positions)
 

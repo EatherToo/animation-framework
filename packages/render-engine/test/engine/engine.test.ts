@@ -22,7 +22,7 @@ describe('engine', () => {
     const stepTime = engine.solver.stepTime
     const pending = engine.log.pending.length
     presentEngine(engine, 0.5, 0)
-    expect(layer.objects).toHaveLength(engine.solver.compiled.meshes.meshes.length * 2)
+    expect(layer.objects).toHaveLength(engine.solver.compiled.meshes.meshes.length * 3)
     const identity = layer.objects.slice()
     expect(Array.from(engine.solver.pose.data)).toEqual(pose)
     expect(engine.solver.stepTime).toBe(stepTime)
@@ -122,8 +122,8 @@ describe('engine', () => {
     const engine = createEngine(createHumanoid(1.7), layer)
     presentEngine(engine, 1, 0)
     const other = createBinding(layer)
-    const { filled, order } = presentPose(engine.solver.compiled, engine.solver.pose, 0)
-    updateBinding(other, filled, strokeContours(filled, false), order)
+    const { filled, textured, order } = presentPose(engine.solver.compiled, engine.solver.pose, 0)
+    updateBinding(other, filled, textured, strokeContours(filled, false), order)
     const foreign = other.objects[0]
     destroyEngine(engine)
     expect(layer.objects).toContain(foreign)

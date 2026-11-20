@@ -2,6 +2,7 @@ import type { Humanoid } from '../body/assemble'
 import type { JointDof } from '../body/joints'
 import type { BodyProportions } from '../body/proportions'
 import { createHumanoidMeshes } from '../mesh/humanoid'
+import { validateMeshTextures } from '../mesh/texture'
 import type { MeshSet } from '../mesh/strip'
 import { createHumanoidParts } from '../part/humanoid'
 import type { PartSet } from '../part/set'
@@ -103,6 +104,7 @@ function assertMeshes(parts: PartSet, meshes: MeshSet): void {
     const mesh = meshes.meshes[i]!
     if (mesh.partId !== parts.parts[i]!.id) throw new Error('mesh')
     validateMesh(mesh)
+    validateMeshTextures(mesh.indices, mesh.textures, mesh.triangleTexture, mesh.uvs)
   }
 }
 

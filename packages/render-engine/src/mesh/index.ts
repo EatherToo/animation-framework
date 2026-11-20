@@ -5,4 +5,7 @@
 export { AXIAL_STEPS, TUBE_SIDES, meshFromStrip, meshFromCappedTube, meshFromRectangle } from './strip'
 export type { Mesh, MeshSet, MeshSpace, StripSegment } from './strip'
 
+export { TEXTURE_EDGE, createTriangleTexture, createMeshTextures, validateMeshTextures } from './texture'
+export type { Texture } from './texture'
+
 export { createHumanoidMeshes } from './humanoid'

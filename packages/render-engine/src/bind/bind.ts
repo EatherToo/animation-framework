@@ -1,4 +1,6 @@
 import type { StrokePart } from '../stroke/stroke'
+import type { Texture } from '../mesh/texture'
+import type { TexturedPart } from '../texture/bind'
 
 export type SceneColor = {
   readonly r: number
@@ -8,11 +10,14 @@ export type SceneColor = {
 
 export type SceneObject = {
   id: string
-  kind: 'fill' | 'stroke'
+  kind: 'fill' | 'stroke' | 'texture'
   partId: string
   positions: Float32Array
   indices: Uint16Array
   color: SceneColor | null
+  textures: readonly Texture[] | null
+  triangleTexture: Uint16Array | null
+  uvs: Float32Array | null
   order: number
   destroyed: boolean
 }
@@ -94,32 +99,58 @@ function strokeMesh(part: StrokePart | undefined): { positions: Float32Array; in
 export function updateBinding(
   binding: RenderBinding,
   fills: readonly FillSource[],
+  textured: readonly TexturedPart[],
   strokes: readonly StrokePart[],
   order: readonly string[],
 ): void {
   if (binding.destroyed) throw new Error('destroyed')
+  assertAligned(fills, textured)
   if (binding.lost || binding.layer.lost) return
   if (binding.objects.length === 0) {
     const created: SceneObject[] = []
-    for (const fill of fills) {
+    for (let i = 0; i < fills.length; i += 1) {
+      const fill = fills[i]!
+      const image = textured[i]!
       const placed = rank(order, fill.partId)
+      const textureObject = object(
+        'texture',
+        fill.partId,
+        image.positions.slice(),
+        image.indices,
+        null,
+        placed,
+        image.textures,
+        image.triangleTexture,
+        image.uvs.slice(),
+      )
       const fillObject = object('fill', fill.partId, fill.positions.slice(), fill.indices.slice(), fill.fill, placed)
       const stroke = strokeMesh(strokes.find((item) => item.partId === fill.partId))
       const strokeObject = object('stroke', fill.partId, stroke.positions, stroke.indices, null, placed + 0.5)
+      binding.layer.add(textureObject)
       binding.layer.add(fillObject)
       binding.layer.add(strokeObject)
-      created.push(fillObject, strokeObject)
+      created.push(textureObject, fillObject, strokeObject)
     }
     binding.objects = created
     return
   }
-  for (const fill of fills) {
+  for (let i = 0; i < fills.length; i += 1) {
+    const fill = fills[i]!
+    const image = textured[i]!
     const target = binding.objects.find((item) => item.kind === 'fill' && item.partId === fill.partId)
     if (target === undefined) throw new Error('part')
     target.positions = writeBuffer(target.positions, fill.positions)
     target.indices = writeIndices(target.indices, fill.indices)
     target.color = fill.fill
     target.order = rank(order, fill.partId)
+    const texture = binding.objects.find((item) => item.kind === 'texture' && item.partId === fill.partId)
+    if (texture === undefined) throw new Error('texture')
+    texture.positions = writeBuffer(texture.positions, image.positions)
+    texture.indices = image.indices
+    texture.textures = image.textures
+    texture.triangleTexture = image.triangleTexture
+    texture.uvs = writeBuffer(texture.uvs ?? new Float32Array(), image.uvs)
+    texture.order = target.order
     const stroke = binding.objects.find((item) => item.kind === 'stroke' && item.partId === fill.partId)
     if (stroke === undefined) throw new Error('stroke')
     const mesh = strokeMesh(strokes.find((item) => item.partId === fill.partId))
@@ -129,13 +160,23 @@ export function updateBinding(
   }
 }
 
+function assertAligned(fills: readonly FillSource[], textured: readonly TexturedPart[]): void {
+  if (textured.length !== fills.length) throw new Error('texture')
+  for (let i = 0; i < fills.length; i += 1) {
+    if (textured[i]!.partId !== fills[i]!.partId) throw new Error('texture')
+  }
+}
+
 function object(
-  kind: 'fill' | 'stroke',
+  kind: 'fill' | 'stroke' | 'texture',
   partId: string,
   positions: Float32Array,
   indices: Uint16Array,
   color: SceneColor | null,
   order: number,
+  textures: readonly Texture[] | null = null,
+  triangleTexture: Uint16Array | null = null,
+  uvs: Float32Array | null = null,
 ): SceneObject {
   const created: SceneObject = {
     id: `${kind}:${partId}:${nextId}`,
@@ -144,6 +185,9 @@ function object(
     positions,
     indices,
     color,
+    textures,
+    triangleTexture,
+    uvs,
     order,
     destroyed: false,
   }

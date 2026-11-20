@@ -1,3 +1,6 @@
+import type { Fill } from '../part/set'
+import { createMeshTextures, type Texture } from './texture'
+
 /** 顶点所在的空间。蒙皮网格在绑定角色空间，刚性零件在零件局部。 */
 export type MeshSpace = 'character' | 'part'
 
@@ -7,6 +10,9 @@ export type Mesh = {
   readonly space: MeshSpace
   readonly positions: Float32Array
   readonly indices: Uint16Array
+  readonly textures: readonly Texture[]
+  readonly triangleTexture: Uint16Array
+  readonly uvs: Float32Array
 }
 
 /** 与部件顺序一致的网格集合。 */
@@ -46,6 +52,7 @@ export function meshFromStrip(
   partId: string,
   space: MeshSpace,
   segments: readonly StripSegment[],
+  fill: Fill,
 ): Mesh {
   if (segments.length === 0) throw new Error('segments')
   const intervals = segments.length * AXIAL_STEPS
@@ -53,7 +60,7 @@ export function meshFromStrip(
   const positions = new Float32Array(stations * TUBE_SIDES * 3)
   const indices = new Uint16Array(intervals * TUBE_SIDES * 6)
   writeTube(positions, indices, segments)
-  return { partId, space, positions, indices }
+  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
 }
 
 /**
@@ -67,6 +74,7 @@ export function meshFromCappedTube(
   partId: string,
   space: MeshSpace,
   segments: readonly StripSegment[],
+  fill: Fill,
 ): Mesh {
   if (segments.length === 0) throw new Error('segments')
   const intervals = segments.length * AXIAL_STEPS
@@ -99,7 +107,7 @@ export function meshFromCappedTube(
     indices[t + 4] = tail + j
     indices[t + 5] = tail + next
   }
-  return { partId, space, positions, indices }
+  return { partId, space, positions, indices, ...createMeshTextures(indices, fill) }
 }
 
 function writeTube(
@@ -188,6 +196,7 @@ export function meshFromRectangle(
   yTop: number,
   yBottom: number,
   halfWidth: number,
+  fill: Fill,
 ): Mesh {
   const near = -halfWidth
   const far = halfWidth
@@ -209,5 +218,5 @@ export function meshFromRectangle(
     0, 4, 6, 0, 6, 2,
     1, 3, 7, 1, 7, 5,
   ])
-  return { partId, space: 'part', positions, indices }
+  return { partId, space: 'part', positions, indices, ...createMeshTextures(indices, fill) }
 }

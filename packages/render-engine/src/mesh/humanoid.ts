@@ -1,7 +1,7 @@
 import type { Humanoid } from '../body/assemble'
 import type { BodyProportions } from '../body/proportions'
 import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
-import type { PartSet, SkinnedPart } from '../part/set'
+import type { Fill, PartSet, SkinnedPart } from '../part/set'
 import { bindLength, boneName, type Skeleton } from '../skeleton/skeleton'
 import { setBindParentFromBone } from '../skeleton/parent-from-bone'
 import {
@@ -33,7 +33,7 @@ export function createHumanoidMeshes(humanoid: Humanoid, parts: PartSet): MeshSe
     if (part.kind === 'skinned') {
       meshes.push(tubeMesh(part, humanoid.skeleton, humanoid.proportions, rig, lateral))
     } else {
-      meshes.push(rigidMesh(part.id, part.bone, humanoid.skeleton, humanoid.proportions))
+      meshes.push(rigidMesh(part.id, part.bone, humanoid.skeleton, humanoid.proportions, part.fill))
     }
   }
   return { meshes }
@@ -71,7 +71,7 @@ function tubeMesh(
     const z = lateral[bone]!
     segments.push(segment(ox, oy, z, x1, y1, z, radius))
   }
-  return meshFromStrip(part.id, 'character', segments)
+  return meshFromStrip(part.id, 'character', segments, part.fill)
 }
 
 function segment(
@@ -94,14 +94,15 @@ function rigidMesh(
   bone: number,
   skeleton: Skeleton,
   proportions: BodyProportions,
+  fill: Fill,
 ): Mesh {
   const length = bindLength(skeleton, bone)
   const name = boneName(skeleton, bone)
   if (name === 'head') {
-    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.headRadius)])
+    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.headRadius)], fill)
   }
   if (name === 'handL' || name === 'handR') {
-    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.handRadius)])
+    return meshFromCappedTube(partId, 'part', [segment(0, 0, 0, length, 0, 0, proportions.handRadius)], fill)
   }
   if (name === 'footL' || name === 'footR') {
     return meshFromRectangle(
@@ -111,6 +112,7 @@ function rigidMesh(
       proportions.footRadius,
       -proportions.ankleHeight,
       proportions.footRadius,
+      fill,
     )
   }
   throw new Error('part')
