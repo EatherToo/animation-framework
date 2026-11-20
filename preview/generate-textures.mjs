@@ -1,9 +1,11 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { crc32, deflateSync } from 'node:zlib'
-import { createHumanoid } from '@animation-framework/render-engine/body'
-import { createHumanoidMeshes } from '@animation-framework/render-engine/mesh'
-import { createHumanoidParts } from '@animation-framework/render-engine/part'
+import {
+  createHumanoid,
+  createHumanoidMeshes,
+  createHumanoidParts,
+} from '@animation-framework/render-engine'
 
 const HEIGHT = 1.8
 const EDGE = 16
@@ -29,6 +31,9 @@ for (const mesh of meshes.meshes) {
 }
 
 await writeFile(join(textureRoot, 'manifest.json'), `${JSON.stringify({ edge: EDGE, parts }, null, 2)}\n`)
+
+const total = parts.reduce((sum, part) => sum + part.count, 0)
+console.log(`纹理已生成：${parts.length} 件，共 ${total} 张（${EDGE}×${EDGE}）`)
 
 function assignGrays(indices) {
   const triangleCount = indices.length / 3

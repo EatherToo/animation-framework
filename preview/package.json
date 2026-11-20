@@ -5,5 +5,12 @@
   "type": "module",
   "dependencies": {
     "@animation-framework/render-engine": "workspace:*"
+  },
+  "scripts": {
+    "build:engine": "pnpm -C .. build",
+    "textures": "node build-textures.mjs",
+    "bundle": "node build.mjs",
+    "build": "pnpm run build:engine && pnpm run textures && pnpm run bundle",
+    "serve": "python3 -m http.server 5173"
   }
 }

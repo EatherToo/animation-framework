@@ -14,12 +14,12 @@ import { skinMesh } from '@animation-framework/render-engine/skin'
 import { drawOrder } from '@animation-framework/render-engine/slot'
 import { strokeContours, type StrokePart } from '@animation-framework/render-engine/stroke'
 import { depthOrder, projectParts, type ProjectedPart, type ViewSource } from '@animation-framework/render-engine/view'
+import { beginFrame, flatTriangle, shadedTriangle, type Surface } from './raster'
 
 const HEIGHT = 1.8
 const FRONT_VIEW = 90
 const FACING = 1
 const BACKGROUND = '#5c5c5c'
-const STROKE = '#141414'
 const STEP = 5
 
 type Axis = 'rotation' | 'swing' | 'twist'
@@ -78,10 +78,23 @@ const readouts = new Map<string, HTMLElement>()
 
 mountPose(panel)
 new ResizeObserver(() => draw()).observe(canvas.parentElement ?? canvas)
-void loadGrayTextures().then(() => {
-  texturesReady = true
-  draw()
-})
+void loadGrayTextures()
+  .then(() => {
+    texturesReady = true
+    draw()
+  })
+  .catch((error: unknown) => showLoadError(error))
+
+function showLoadError(error: unknown): void {
+  const stage = canvas!.parentElement
+  if (stage === null) return
+  const note = document.createElement('pre')
+  note.className = 'error'
+  note.textContent =
+    `${error instanceof Error ? error.message : String(error)}\n\n` +
+    '纹理是按网格逐三角形生成的。先重建：pnpm --dir preview run build（或分步 build:engine / textures / bundle）。'
+  stage.append(note)
+}
 
 function mountPose(root: HTMLElement): void {
   const title = document.createElement('h1')
@@ -183,7 +196,13 @@ async function loadGrayTextures(): Promise<void> {
   const jobs: { partId: string; index: number }[] = []
   for (const part of manifest.parts) {
     const mesh = byId.get(part.partId)
-    if (mesh === undefined || mesh.indices.length / 3 !== part.count) throw new Error('texture')
+    if (mesh === undefined) throw new Error(`纹理清单里有未知部件：${part.partId}`)
+    const triangles = mesh.indices.length / 3
+    if (triangles !== part.count) {
+      throw new Error(
+        `纹理与网格对不上：${part.partId} 清单 ${part.count} 张，网格 ${triangles} 个三角形`,
+      )
+    }
     for (let index = 0; index < part.count; index += 1) jobs.push({ partId: part.partId, index })
   }
   const decoded = new Map<string, InstalledTexture[]>()
@@ -222,9 +241,17 @@ async function loadGrayTextures(): Promise<void> {
   }
   for (const part of manifest.parts) {
     const textures = decoded.get(part.partId)!
-    ;(byId.get(part.partId) as { textures: InstalledTexture[] }).textures = textures
+    ;(byId.get(part.partId) as unknown as { textures: InstalledTexture[] }).textures = textures
   }
 }
+
+/** 描边相对所属表面的深度偏置，让它压在自己的面上、又压不过更近的部件。 */
+const DEPTH_BIAS = 1e-4
+const VIEW_ANGLE = (FRONT_VIEW * Math.PI) / 180
+const VIEW_COS = Math.cos(VIEW_ANGLE)
+const VIEW_SIN = Math.sin(VIEW_ANGLE)
+const STROKE_RGB = [20, 20, 20] as const
+const BACKGROUND_RGB = [92, 92, 92] as const
 
 function draw(): void {
   if (!texturesReady) return
@@ -233,8 +260,10 @@ function draw(): void {
   const cssHeight = stage?.clientHeight ?? window.innerHeight
   if (cssWidth < 2 || cssHeight < 2) return
   const dpr = window.devicePixelRatio || 1
-  canvas!.width = Math.max(1, Math.round(cssWidth * dpr))
-  canvas!.height = Math.max(1, Math.round(cssHeight * dpr))
+  const width = Math.max(1, Math.round(cssWidth * dpr))
+  const height = Math.max(1, Math.round(cssHeight * dpr))
+  canvas!.width = width
+  canvas!.height = height
   canvas!.style.width = `${cssWidth}px`
   canvas!.style.height = `${cssHeight}px`
 
@@ -248,43 +277,53 @@ function draw(): void {
   const textured = textureProjected(compiled, projected)
   const stroked = strokeContours(filled, true)
   const order = depthOrder(new Array<string>(projected.length), projected, tie)
-  const frame = fit(restFrame, canvas!.width, canvas!.height)
+  const frame = framing(projected, width, height)
+  const depths = sampled.map((part) => vertexDepths(part.positions))
+  const rawIndices = sampled.map((part) => part.indices)
+  const partIndex = new Map(projected.map((part, index) => [part.partId, index]))
 
-  ctx!.setTransform(1, 0, 0, 1, 0, 0)
-  ctx!.fillStyle = BACKGROUND
-  ctx!.fillRect(0, 0, canvas!.width, canvas!.height)
-  const pixels = ctx!.getImageData(0, 0, canvas!.width, canvas!.height)
-  paintTextures(textured, order, frame, pixels)
-  ctx!.putImageData(pixels, 0, 0)
-  const byFill = new Map(filled.map((part) => [part.partId, part]))
-  const byStroke = new Map(stroked.map((part) => [part.partId, part]))
-  for (let i = 0; i < order.length; i += 1) {
-    const id = order[i]!
-    const part = byFill.get(id)
-    if (part === undefined) continue
-    const contour = byStroke.get(id)
-    if (contour !== undefined) paintStroke(contour, frame)
+  const image = ctx!.getImageData(0, 0, width, height)
+  const surface = beginFrame(width, height, image.data, BACKGROUND_RGB)
+  paintTextures(textured, order, frame, surface, depths, rawIndices, partIndex)
+  paintStrokes(stroked, order, frame, surface, projected, depths, partIndex)
+  ctx!.putImageData(image, 0, 0)
+}
+
+/** 每个顶点的视图深度，越大越远；与 36 的正交投影用同一条公式。 */
+function vertexDepths(positions: Float32Array): Float32Array {
+  const out = new Float32Array(positions.length / 3)
+  for (let v = 0; v < out.length; v += 1) {
+    const x = positions[v * 3]!
+    const z = positions[v * 3 + 2]!
+    out[v] = z * VIEW_COS - x * VIEW_SIN
   }
+  return out
 }
 
 function paintTextures(
   parts: readonly TexturedPart[],
   order: readonly string[],
   frame: Frame,
-  image: ImageData,
+  surface: Surface,
+  depths: readonly Float32Array[],
+  rawIndices: readonly Uint16Array[],
+  partIndex: ReadonlyMap<string, number>,
 ): void {
   const uv = new Float32Array(2)
   const corners = new Float32Array(6)
   const byId = new Map(parts.map((part) => [part.partId, part]))
-  const width = image.width
-  const height = image.height
-  const data = image.data
-  for (let i = 0; i < order.length; i += 1) {
-    const part = byId.get(order[i]!)
+  for (let oi = 0; oi < order.length; oi += 1) {
+    const id = order[oi]!
+    const part = byId.get(id)
     if (part === undefined || part.textures.length === 0) continue
+    const index = partIndex.get(id)
+    if (index === undefined) continue
+    const partDepth = depths[index]!
+    const raw = rawIndices[index]!
     const positions = part.positions
     const indices = part.indices
     for (let t = 0; t < indices.length; t += 3) {
+      if (backFacing(positions, raw, t)) continue
       const ia = indices[t]!
       const ib = indices[t + 1]!
       const ic = indices[t + 2]!
@@ -294,33 +333,109 @@ function paintTextures(
       const by = frame.originY - positions[ib * 2 + 1]! * frame.scale
       const cx = frame.originX + positions[ic * 2]! * frame.scale
       const cy = frame.originY - positions[ic * 2 + 1]! * frame.scale
-      const denom = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
-      if (Math.abs(denom) <= 1e-8) continue
-      const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)))
-      const maxX = Math.min(width - 1, Math.ceil(Math.max(ax, bx, cx)))
-      const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)))
-      const maxY = Math.min(height - 1, Math.ceil(Math.max(ay, by, cy)))
-      corners.set(part.uvs.subarray(t * 2, t * 2 + 6))
       const texture = part.textures[part.triangleTexture[t / 3]!]
       if (texture === undefined) continue
-      for (let y = minY; y <= maxY; y += 1) {
-        for (let x = minX; x <= maxX; x += 1) {
-          const px = x + 0.5
-          const py = y + 0.5
-          const w0 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / denom
-          const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom
-          const w2 = 1 - w0 - w1
-          if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue
+      corners.set(part.uvs.subarray(t * 2, t * 2 + 6))
+      shadedTriangle(
+        surface,
+        [ax, ay, bx, by, cx, cy],
+        [partDepth[ia]!, partDepth[ib]!, partDepth[ic]!],
+        (px, py) => {
           triangleUv(uv, ax, ay, bx, by, cx, cy, px, py, corners)
           const color = sampleTexture(texture, uv[0]!, uv[1]!)
-          const pixel = (y * width + x) * 4
-          data[pixel] = Math.round(color.r * 255)
-          data[pixel + 1] = Math.round(color.g * 255)
-          data[pixel + 2] = Math.round(color.b * 255)
-          data[pixel + 3] = 255
-        }
-      }
+          return [Math.round(color.r * 255), Math.round(color.g * 255), Math.round(color.b * 255)]
+        },
+      )
     }
+  }
+}
+
+/** 用原始索引判朝向：`indices` 已被 36 翻成逆时针，不能用来判断正反面。 */
+function backFacing(positions: Float32Array, raw: Uint16Array, t: number): boolean {
+  const a = raw[t]!
+  const b = raw[t + 1]!
+  const c = raw[t + 2]!
+  const ax = positions[a * 2]!
+  const ay = positions[a * 2 + 1]!
+  const bx = positions[b * 2]!
+  const by = positions[b * 2 + 1]!
+  const cx = positions[c * 2]!
+  const cy = positions[c * 2 + 1]!
+  return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) <= 0
+}
+
+function paintStrokes(
+  parts: readonly StrokePart[],
+  order: readonly string[],
+  frame: Frame,
+  surface: Surface,
+  projected: readonly ProjectedPart[],
+  depths: readonly Float32Array[],
+  partIndex: ReadonlyMap<string, number>,
+): void {
+  const byId = new Map(parts.map((part) => [part.partId, part]))
+  for (let oi = 0; oi < order.length; oi += 1) {
+    const id = order[oi]!
+    const part = byId.get(id)
+    if (part === undefined) continue
+    const index = partIndex.get(id)
+    if (index === undefined) continue
+    const screen = projected[index]!.positions
+    const partDepth = depths[index]!
+    for (const quad of part.quads) {
+      const z = quadDepth(quad.positions, screen, partDepth) - DEPTH_BIAS
+      const q = quad.indices
+      const points = quad.positions
+      const at = (i: number): [number, number] => [
+        frame.originX + points[i * 2]! * frame.scale,
+        frame.originY - points[i * 2 + 1]! * frame.scale,
+      ]
+      const p0 = at(q[0]!)
+      const p1 = at(q[1]!)
+      const p2 = at(q[2]!)
+      const p3 = at(q[3]!)
+      const p4 = at(q[4]!)
+      const p5 = at(q[5]!)
+      flatTriangle(surface, [p0[0], p0[1], p1[0], p1[1], p2[0], p2[1]], z, STROKE_RGB)
+      flatTriangle(surface, [p3[0], p3[1], p4[0], p4[1], p5[0], p5[1]], z, STROKE_RGB)
+    }
+  }
+}
+
+/** 描边四边形的深度：取离它最近的投影顶点，近似这条边的远近。 */
+function quadDepth(
+  quad: Float32Array,
+  screen: Float32Array,
+  partDepth: Float32Array,
+): number {
+  const cx = (quad[0]! + quad[4]!) / 2
+  const cy = (quad[1]! + quad[5]!) / 2
+  let best = Number.POSITIVE_INFINITY
+  let depth = 0
+  for (let v = 0; v < partDepth.length; v += 1) {
+    const dx = screen[v * 2]! - cx
+    const dy = screen[v * 2 + 1]! - cy
+    const distance = dx * dx + dy * dy
+    if (distance < best) {
+      best = distance
+      depth = partDepth[v]!
+    }
+  }
+  return Number.isFinite(best) ? depth : 0
+}
+
+/** 取景：按当前姿态收框，但最多放大到绑定姿态的比例，避免姿态收拢时被放大。 */
+function framing(parts: readonly ProjectedPart[], width: number, height: number): Frame {
+  const current = fit(contain(parts), width, height)
+  const baseline = fit(restFrame, width, height)
+  const scale = Math.min(current.scale, baseline.scale)
+  const cx = (restFrame.minX + restFrame.maxX) / 2
+  const cy = (restFrame.minY + restFrame.maxY) / 2
+  return {
+    ...restFrame,
+    scale,
+    originX: width / 2 - cx * scale,
+    originY: height / 2 + cy * scale,
   }
 }
 
@@ -332,25 +447,6 @@ function applyPose(): void {
     if (control.axis === 'rotation') setPoseRotation(pose, bone, radians)
     else if (control.axis === 'swing') setPoseSwing(pose, bone, radians)
     else setPoseTwist(pose, bone, radians)
-  }
-}
-
-function paintStroke(part: StrokePart, frame: Frame): void {
-  ctx!.fillStyle = STROKE
-  for (let q = 0; q < part.quads.length; q += 1) {
-    const quad = part.quads[q]!
-    ctx!.beginPath()
-    move(quad.positions, frame, quad.indices[0]!)
-    line(quad.positions, frame, quad.indices[1]!)
-    line(quad.positions, frame, quad.indices[2]!)
-    ctx!.closePath()
-    ctx!.fill()
-    ctx!.beginPath()
-    move(quad.positions, frame, quad.indices[3]!)
-    line(quad.positions, frame, quad.indices[4]!)
-    line(quad.positions, frame, quad.indices[5]!)
-    ctx!.closePath()
-    ctx!.fill()
   }
 }
 
@@ -436,14 +532,6 @@ function fit(bounds: Bounds, width: number, height: number): Frame {
     originX: (width - usedW) / 2 - bounds.minX * scale,
     originY: (height - usedH) / 2 + bounds.maxY * scale,
   }
-}
-
-function move(positions: Float32Array, frame: Frame, index: number): void {
-  ctx!.moveTo(frame.originX + positions[index * 2]! * frame.scale, frame.originY - positions[index * 2 + 1]! * frame.scale)
-}
-
-function line(positions: Float32Array, frame: Frame, index: number): void {
-  ctx!.lineTo(frame.originX + positions[index * 2]! * frame.scale, frame.originY - positions[index * 2 + 1]! * frame.scale)
 }
 
 function degrees(radians: number): number {

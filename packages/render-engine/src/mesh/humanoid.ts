@@ -1,5 +1,11 @@
 import type { Humanoid } from '../body/assemble'
-import type { BodyProportions, RadiusProfile, RadiusSample } from '../body/proportions'
+import type {
+  BodyProportions,
+  PalmSection,
+  RadiusProfile,
+  RadiusSample,
+  SectionProfile,
+} from '../body/proportions'
 import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
 import type { Fill, PartSet, SkinnedPart } from '../part/set'
 import { bindLength, boneName, findBone, type Skeleton } from '../skeleton/skeleton'
@@ -84,7 +90,10 @@ function torsoMesh(
   const spineRings: number[] = []
   for (let k = 0; k <= AXIAL_STEPS; k += 1) {
     const t = k / AXIAL_STEPS
-    const ring = addRing(d, ringPoints(spine, t, radiusAt(proportions.spineProfile, t)))
+    const ring = addRing(
+      d,
+      ringPoints(spine, t, torsoSectionAt(proportions, t * proportions.spineLength), TORSO_FRONT),
+    )
     setShare(d, ring, Math.max(0, 1 - 2 * t), 0)
     spineRings.push(ring)
   }
@@ -94,7 +103,10 @@ function torsoMesh(
   const chestRings: number[] = [spineRings[spineRings.length - 1]!]
   for (let i = 1; i < chestTs.length; i += 1) {
     const t = chestTs[i]!
-    const ring = addRing(d, ringPoints(chest, t, radiusAt(proportions.chestProfile, t)))
+    const ring = addRing(
+      d,
+      ringPoints(chest, t, torsoSectionAt(proportions, proportions.spineLength + t * proportions.chestLength), TORSO_FRONT),
+    )
     setShare(d, ring, 0, 0)
     chestRings.push(ring)
   }
@@ -108,7 +120,7 @@ function torsoMesh(
   const neckRings: number[] = [chestRings[chestRings.length - 1]!]
   for (let k = 1; k <= AXIAL_STEPS; k += 1) {
     const t = k / AXIAL_STEPS
-    const ring = addRing(d, ringPoints(neck, t, radiusAt(proportions.neckProfile, t)))
+    const ring = addRing(d, ringPoints(neck, t, sectionAt(proportions.neckProfile, t), TORSO_FRONT))
     const headShare = t >= 0.5 ? 2 * t - 1 : 0
     setShare(d, ring, 0, headShare)
     neckRings.push(ring)
@@ -137,10 +149,17 @@ function armMesh(
   const lower = frameOf(rig, lateral, skeleton, findBone(skeleton, `lowerArm${side > 0 ? 'L' : 'R'}`))
   const tS = 1 - proportions.shoulderDropY / proportions.chestLength
   const chestTs = chestStations(tS)
-  const chestRingsPoints = chestTs.map((t) => ringPoints(chest, t, radiusAt(proportions.chestProfile, t)))
+  const chestRingsPoints = chestTs.map((t) =>
+    ringPoints(
+      chest,
+      t,
+      torsoSectionAt(proportions, proportions.spineLength + t * proportions.chestLength),
+      TORSO_FRONT,
+    ),
+  )
   const rim = shoulderRimPoints(chestRingsPoints, 3, 9, side)
-  const end = ringPoints(upper, 6 / 8, radiusAt(proportions.upperArmProfile, 6 / 8))
-  const collar = addCollar(d, rim, end, upper, proportions.upperArmProfile, 0, true)
+  const end = ringPoints(upper, 6 / 8, sectionAt(proportions.upperArmProfile, 6 / 8), LIMB_FRONT)
+  const collar = addCollar(d, rim, end, upper, proportions.upperArmProfile, 0, true, null, LIMB_FRONT)
   markSeam(d, collar[0]!)
   link(d.indices, collar)
 
@@ -150,6 +169,7 @@ function armMesh(
     proportions.upperArmProfile,
     [6 / 8, 7 / 8, 1],
     collar[collar.length - 1]!,
+    LIMB_FRONT,
   )
   link(d.indices, upperTail)
 
@@ -159,19 +179,31 @@ function armMesh(
     proportions.lowerArmProfile,
     [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8],
     upperTail[upperTail.length - 1]!,
+    LIMB_FRONT,
   )
   link(d.indices, forearm)
 
-  const wristTo = ringPoints(lower, 1, proportions.palmRadius)
+  const wristTo = ringPoints(
+    lower,
+    1,
+    {
+      halfWidth: proportions.palmWrist.halfWidth,
+      frontDepth: proportions.palmWrist.halfThickness,
+      backDepth: proportions.palmWrist.halfThickness,
+      exponent: 3,
+    },
+    LIMB_FRONT,
+  )
   const wristRings = addCollar(
     d,
-    ringPoints(lower, 5 / 8, radiusAt(proportions.lowerArmProfile, 5 / 8)),
+    ringPoints(lower, 5 / 8, sectionAt(proportions.lowerArmProfile, 5 / 8), LIMB_FRONT),
     wristTo,
     lower,
     null,
     1,
     false,
     forearm[forearm.length - 1]!,
+    LIMB_FRONT,
   )
   markSeam(d, wristRings[wristRings.length - 1]!)
   link(d.indices, wristRings)
@@ -192,8 +224,8 @@ function legMesh(
   const shin = frameOf(rig, lateral, skeleton, findBone(skeleton, `shin${side > 0 ? 'L' : 'R'}`))
   const foot = frameOf(rig, lateral, skeleton, findBone(skeleton, `foot${side > 0 ? 'L' : 'R'}`))
   const rim = hipRimPoints(spine, proportions, side)
-  const end = ringPoints(thigh, 6 / 8, radiusAt(proportions.thighProfile, 6 / 8))
-  const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true)
+  const end = ringPoints(thigh, 6 / 8, sectionAt(proportions.thighProfile, 6 / 8), LIMB_FRONT)
+  const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true, null, LIMB_FRONT)
   markSeam(d, collar[0]!)
   link(d.indices, collar)
 
@@ -203,6 +235,7 @@ function legMesh(
     proportions.thighProfile,
     [6 / 8, 7 / 8, 1],
     collar[collar.length - 1]!,
+    LIMB_FRONT,
   )
   link(d.indices, thighTail)
 
@@ -212,19 +245,21 @@ function legMesh(
     proportions.shinProfile,
     [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8],
     thighTail[thighTail.length - 1]!,
+    LIMB_FRONT,
   )
   link(d.indices, shinRings)
 
   const ankleRim = footHoleRimPoints(proportions).map((point) => transformPartPoint(foot, point))
   const ankleRings = addCollar(
     d,
-    ringPoints(shin, 5 / 8, radiusAt(proportions.shinProfile, 5 / 8)),
+    ringPoints(shin, 5 / 8, sectionAt(proportions.shinProfile, 5 / 8), LIMB_FRONT),
     ankleRim,
     shin,
     null,
     1,
     false,
     shinRings[shinRings.length - 1]!,
+    LIMB_FRONT,
   )
   markSeam(d, ankleRings[ankleRings.length - 1]!)
   link(d.indices, ankleRings)
@@ -251,7 +286,7 @@ function rigidMesh(
 function headMesh(partId: string, length: number, proportions: BodyProportions, fill: Fill): Mesh {
   const d = draft(false)
   const frame: Frame = { ox: 0, oy: 0, oz: 0, ax: 1, ay: 0, px: 0, py: 1, length }
-  const rings = addProfile(d, frame, proportions.headProfile, uniformStations(), null)
+  const rings = addProfile(d, frame, proportions.headProfile, uniformStations(), null, HEAD_FRONT)
   markSeam(d, rings[0]!)
   link(d.indices, rings)
   addCap(d, rings[rings.length - 1]!, true)
@@ -267,7 +302,7 @@ function handMesh(
 ): Mesh {
   const d = draft(false)
   const palmEnd = proportions.palmFraction * length
-  const palm = tubeAlongX(d, 0, 0, 0, palmEnd, 0, 0, proportions.palmRadius)
+  const palm = palmTube(d, palmEnd, proportions.palmWrist, proportions.palmKnuckle)
   markSeam(d, palm[0]!)
   const thumbX = proportions.thumbAlong * length
   const thumbY = -proportions.thumbDrop
@@ -275,17 +310,16 @@ function handMesh(
   const hole = thumbHole(palmEnd, thumbX, thumbY, thumbZ)
   linkExcept(d.indices, palm, (interval, j) => interval === hole.interval && hole.omitted.has(j))
   const fingers: number[] = []
-  for (const spread of [
-    -proportions.fingerSpread[1],
-    -proportions.fingerSpread[0],
-    proportions.fingerSpread[0],
-    proportions.fingerSpread[1],
-  ]) {
-    const root = tubeAlongX(d, palmEnd, 0, spread, length, 0, spread, proportions.fingerRadius)
+  for (let f = 0; f < 4; f += 1) {
+    const spread = side * proportions.fingerOffsets[f]!
+    const tip = proportions.fingerLengths[f]! * length
+    const root = tubeAlongX(d, palmEnd, 0, spread, tip, 0, spread, proportions.fingerRadius)
     link(d.indices, root)
     addCap(d, root[root.length - 1]!, true)
     const ring = root[0]!
-    for (let j = 0; j < TUBE_SIDES; j += 1) pullInsidePalm(d.positions, ring + j, proportions.palmRadius)
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      clampPalmThickness(d.positions, ring + j, proportions.palmKnuckle.halfThickness)
+    }
     fingers.push(ring)
   }
   const thumb = tubeAlongX(
@@ -293,9 +327,9 @@ function handMesh(
     thumbX,
     thumbY,
     thumbZ,
-    thumbX + proportions.thumbFraction * length,
+    proportions.thumbTipAlong * length,
     thumbY,
-    thumbZ,
+    side * proportions.thumbTipZ,
     proportions.thumbRadius,
   )
   link(d.indices, thumb)
@@ -303,6 +337,41 @@ function handMesh(
   weldPalmEnd(d.indices, d.positions, palm[palm.length - 1]!, fingers)
   weldThumb(d.indices, d.positions, palm, hole, thumb[0]!)
   return finish(partId, 'part', d, fill)
+}
+
+/** 掌的扁截面：`θ = 0` 落在 `+y`（掌厚），`θ = π/2` 落在 `+z`（掌宽）。 */
+function palmPoint(section: PalmSection, theta: number): { y: number; z: number } {
+  const power = 2 / 3
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  return {
+    y: section.halfThickness * Math.sign(cos) * Math.pow(Math.abs(cos), power),
+    z: section.halfWidth * Math.sign(sin) * Math.pow(Math.abs(sin), power),
+  }
+}
+
+function palmTube(
+  d: Draft,
+  length: number,
+  wrist: PalmSection,
+  knuckle: PalmSection,
+): number[] {
+  const rings: number[] = []
+  for (let k = 0; k <= AXIAL_STEPS; k += 1) {
+    const u = k / AXIAL_STEPS
+    const section = {
+      halfWidth: wrist.halfWidth + (knuckle.halfWidth - wrist.halfWidth) * u,
+      halfThickness: wrist.halfThickness + (knuckle.halfThickness - wrist.halfThickness) * u,
+    }
+    const points: Point[] = []
+    for (let j = 0; j < TUBE_SIDES; j += 1) {
+      const theta = (j * 2 * Math.PI) / TUBE_SIDES
+      const { y, z } = palmPoint(section, theta)
+      points.push({ x: length * u, y, z })
+    }
+    rings.push(addRing(d, points))
+  }
+  return rings
 }
 
 function footMesh(partId: string, proportions: BodyProportions, fill: Fill): Mesh {
@@ -381,23 +450,24 @@ function shoulderRimIndices(
 }
 
 function hipRimPoints(spine: Frame, proportions: BodyProportions, side: number): Point[] {
-  const r0 = radiusAt(proportions.spineProfile, 0)
+  const base = torsoSectionAt(proportions, 0)
   const drop = proportions.thighLength / 8
   const crotch = (m: number): Point => {
     const beta = (m * Math.PI) / 8
-    return { x: -r0 * Math.cos(beta), y: spine.oy - drop * Math.sin(beta), z: 0 }
+    const depth = beta <= Math.PI / 2 ? base.backDepth : base.frontDepth
+    return { x: -depth * Math.cos(beta), y: spine.oy - drop * Math.sin(beta), z: 0 }
   }
   const rim: Point[] = []
   if (side > 0) {
     // 前 → +Z → 后 → 裆线回到前
-    for (let k = 0; k <= 8; k += 1) rim.push(sample(spine, 0, r0, 8 - k))
+    for (let k = 0; k <= 8; k += 1) rim.push(sample(spine, 0, base, 8 - k, TORSO_FRONT))
     for (let m = 1; m <= 7; m += 1) rim.push(crotch(m))
   } else {
     // 前 → 裆线到后 → −Z 回到前，使裆线与左腿走向相反
-    rim.push(sample(spine, 0, r0, 8))
+    rim.push(sample(spine, 0, base, 8, TORSO_FRONT))
     for (let m = 7; m >= 1; m -= 1) rim.push(crotch(m))
-    rim.push(sample(spine, 0, r0, 0))
-    for (let j = 15; j >= 9; j -= 1) rim.push(sample(spine, 0, r0, j))
+    rim.push(sample(spine, 0, base, 0, TORSO_FRONT))
+    for (let j = 15; j >= 9; j -= 1) rim.push(sample(spine, 0, base, j, TORSO_FRONT))
   }
   return rim
 }
@@ -457,10 +527,11 @@ function addCollar(
   from: readonly Point[],
   to: readonly Point[],
   frame: Frame,
-  profile: RadiusProfile | null,
+  profile: SectionProfile | null,
   chainEnd: 0 | 1,
   writeFirst: boolean,
   reuseFirst: number | null = null,
+  frontSign: FrontSign = LIMB_FRONT,
 ): number[] {
   const rings: number[] = []
   for (let i = 0; i <= AXIAL_STEPS; i += 1) {
@@ -478,7 +549,8 @@ function addCollar(
       const a = from[k]!
       const b = to[k]!
       const tk = clamp01(dotAxis(a, frame) / (frame.length * frame.length))
-      const wall = profile === null ? b : sample(frame, tk, radiusAt(profile, tk), k)
+      const wall =
+        profile === null ? b : sample(frame, tk, sectionAt(profile, tk), k, frontSign)
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
       const c = {
         x: 0.5 * mid.x + 0.5 * wall.x,
@@ -503,9 +575,10 @@ function addCollar(
 function addProfile(
   d: Draft,
   frame: Frame,
-  profile: RadiusProfile,
+  profile: SectionProfile,
   ts: readonly number[],
   reuseFirst: number | null,
+  frontSign: FrontSign,
 ): number[] {
   const rings: number[] = []
   for (let i = 0; i < ts.length; i += 1) {
@@ -513,7 +586,7 @@ function addProfile(
       rings.push(reuseFirst)
       continue
     }
-    const ring = addRing(d, ringPoints(frame, ts[i]!, radiusAt(profile, ts[i]!)))
+    const ring = addRing(d, ringPoints(frame, ts[i]!, sectionAt(profile, ts[i]!), frontSign))
     setShare(d, ring, 0, 0)
     rings.push(ring)
   }
@@ -638,15 +711,12 @@ function thumbHole(palmEnd: number, thumbX: number, thumbY: number, thumbZ: numb
   return { interval: along, omitted, j0, count }
 }
 
-function pullInsidePalm(positions: number[], vertex: number, radius: number): void {
+/** 指根环压进掌的厚度范围，避免指管露到掌背或掌心之外。 */
+function clampPalmThickness(positions: number[], vertex: number, halfThickness: number): void {
   const y = positions[vertex * 3 + 1]!
-  const z = positions[vertex * 3 + 2]!
-  const reach = Math.hypot(y, z)
-  const limit = radius * 0.98
-  if (reach <= limit) return
-  const scale = limit / reach
-  positions[vertex * 3 + 1] = y * scale
-  positions[vertex * 3 + 2] = z * scale
+  const limit = halfThickness * 0.98
+  if (Math.abs(y) <= limit) return
+  positions[vertex * 3 + 1] = Math.sign(y) * limit
 }
 
 function weldPalmEnd(indices: number[], positions: number[], palm: number, fingers: readonly number[]): void {
@@ -888,16 +958,89 @@ function uniformStations(): number[] {
   return ts
 }
 
-function ringPoints(frame: Frame, t: number, radius: number): Point[] {
+/** 截面 `+along` 指向角色哪一侧：躯干和头的骨轴法线朝 −X，四肢朝 +X。 */
+type FrontSign = 1 | -1
+
+const TORSO_FRONT: FrontSign = -1
+const LIMB_FRONT: FrontSign = 1
+const HEAD_FRONT: FrontSign = -1
+
+/** 插值后的一站截面，四个量都已换成米或无量纲。 */
+type SectionValues = {
+  readonly halfWidth: number
+  readonly frontDepth: number
+  readonly backDepth: number
+  readonly exponent: number
+}
+
+/** 躯干站位表按「骨盆原点以上的高度」取样，和骨轴的 `t` 无关。 */
+function torsoSectionAt(proportions: BodyProportions, heightAboveHip: number): SectionValues {
+  const total = proportions.spineLength + proportions.chestLength
+  return sectionAt(proportions.torsoProfile, heightAboveHip / total)
+}
+
+function sectionAt(profile: SectionProfile, t: number): SectionValues {
+  for (let i = 0; i < profile.length - 1; i += 1) {
+    const left = profile[i]!
+    const right = profile[i + 1]!
+    if (t < left.t || t > right.t) continue
+    const span = right.t - left.t
+    const u = span === 0 ? 0 : (t - left.t) / span
+    return {
+      halfWidth: left.halfWidth * (1 - u) + right.halfWidth * u,
+      frontDepth: left.frontDepth * (1 - u) + right.frontDepth * u,
+      backDepth: left.backDepth * (1 - u) + right.backDepth * u,
+      exponent: left.exponent * (1 - u) + right.exponent * u,
+    }
+  }
+  throw new Error('section')
+}
+
+/**
+ * 超椭圆截面上的点。`θ = 0` 落在 `along` 正侧，`θ = π/2` 落在 `+lateral`。
+ * `frontSign` 说明 `along` 正侧是不是角色的前方，只切换用前深还是后深，不改环的走向。
+ */
+function sectionPoint(
+  section: SectionValues,
+  theta: number,
+  frontSign: FrontSign,
+): { along: number; lateral: number } {
+  const power = 2 / section.exponent
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  const towardFront = (cos >= 0) === (frontSign > 0)
+  const depth = (towardFront ? section.frontDepth : section.backDepth) * Math.pow(Math.abs(cos), power)
+  return {
+    along: cos >= 0 ? depth : -depth,
+    lateral: section.halfWidth * Math.sign(sin) * Math.pow(Math.abs(sin), power),
+  }
+}
+
+/** 圆截面：腕口与掌根共用的临时形状。 */
+function circle(radius: number): SectionValues {
+  return { halfWidth: radius, frontDepth: radius, backDepth: radius, exponent: 2 }
+}
+
+function ringPoints(
+  frame: Frame,
+  t: number,
+  section: SectionValues,
+  frontSign: FrontSign,
+): Point[] {
   const points: Point[] = []
-  for (let j = 0; j < TUBE_SIDES; j += 1) points.push(sample(frame, t, radius, j))
+  for (let j = 0; j < TUBE_SIDES; j += 1) points.push(sample(frame, t, section, j, frontSign))
   return points
 }
 
-function sample(frame: Frame, t: number, radius: number, j: number): Point {
+function sample(
+  frame: Frame,
+  t: number,
+  section: SectionValues,
+  j: number,
+  frontSign: FrontSign,
+): Point {
   const theta = (j * 2 * Math.PI) / TUBE_SIDES
-  const along = radius * Math.cos(theta)
-  const lateral = radius * Math.sin(theta)
+  const { along, lateral } = sectionPoint(section, theta, frontSign)
   return {
     x: frame.ox + frame.ax * frame.length * t + frame.px * along,
     y: frame.oy + frame.ay * frame.length * t + frame.py * along,

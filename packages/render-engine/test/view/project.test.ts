@@ -212,10 +212,22 @@ describe('view', () => {
     const p = compiled.proportions
     expect(span(front, 'armL').max).toBeGreaterThan(p.shoulderOffsetZ)
     expect(span(front, 'armR').min).toBeLessThan(-p.shoulderOffsetZ)
-    expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighProfile[0]!.radius)
+    expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighProfile[0]!.halfWidth)
     expectClose(span(front, 'footL').max, p.hipOffsetZ + widestStation(p.footHalfWidth), 1e-5)
-    expectClose(span(front, 'torso').max, p.shoulderOffsetZ, 1e-5)
-    expect(span(side, 'armR').max - span(side, 'armR').min).toBeGreaterThan(2 * p.upperArmProfile[1]!.radius)
+    expectClose(span(front, 'torso').max, p.torsoProfile[0]!.halfWidth, 1e-5)
+    const armDepth = (() => {
+      const t = 6 / 8
+      const profile = p.upperArmProfile
+      for (let i = 0; i < profile.length - 1; i += 1) {
+        const left = profile[i]!
+        const right = profile[i + 1]!
+        if (t < left.t || t > right.t) continue
+        const u = (t - left.t) / (right.t - left.t)
+        return left.frontDepth * (1 - u) + right.frontDepth * u
+      }
+      throw new Error('profile')
+    })()
+    expect(span(side, 'armR').max - span(side, 'armR').min).toBeGreaterThan(2 * armDepth)
     expect(span(side, 'armR').max - span(side, 'armR').min).toBeLessThan(2 * p.shoulderOffsetZ)
   })
 

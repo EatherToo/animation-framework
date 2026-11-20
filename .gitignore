@@ -6,3 +6,4 @@ coverage/
 Computer Animation Algorithms and Techniques (Rick Parent) (z-library.sk, 1lib.sk, z-lib.sk).pdf
 docs
 preview/textures
+preview/.generate-textures.build.mjs
