@@ -69,6 +69,30 @@ describe('fk', () => {
     expectSameBits(movedLateral, restLateral)
   })
 
+  it('肘的正角把腕弯向身前，膝的负角把踝弯向身后', () => {
+    const humanoid = createHumanoid(1.8)
+    const compiled = compileHumanoid(humanoid)
+    const index = humanoid.boneIndex
+    const pose = createPose(compiled.skeleton)
+    const count = compiled.skeleton.boneCount
+    const at = (fk: Float32Array, bone: number) => ({ x: fk[bone * 9 + 6]!, y: fk[bone * 9 + 7]! })
+    const rest = new Float32Array(count * 9)
+    evaluateFk(rest, new Float32Array(count), compiled, pose, count)
+    const wrist0 = at(rest, index.handL)
+    const ankle0 = at(rest, index.footL)
+
+    setPoseRotation(pose, index.lowerArmL, (40 * Math.PI) / 180)
+    const flexed = new Float32Array(count * 9)
+    evaluateFk(flexed, new Float32Array(count), compiled, pose, count)
+    expect(at(flexed, index.handL).x).toBeGreaterThan(wrist0.x + 0.1)
+
+    setPoseRotation(pose, index.lowerArmL, 0)
+    setPoseRotation(pose, index.shinL, (-40 * Math.PI) / 180)
+    const knee = new Float32Array(count * 9)
+    evaluateFk(knee, new Float32Array(count), compiled, pose, count)
+    expect(at(knee, index.footL).x).toBeLessThan(ankle0.x - 0.1)
+  })
+
   it('姿态不属于这棵骨架时不写 out', () => {
     const compiled = compileHumanoid(createHumanoid(1.7))
     const other = createPose(createHumanoid(1.8).skeleton)
