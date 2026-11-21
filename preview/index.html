@@ -3,119 +3,121 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>渲染引擎 · 正面</title>
+    <title>渲染引擎 · Core2D 预览</title>
     <style>
-      html,
-      body {
-        margin: 0;
-        height: 100%;
-        background: #5c5c5c;
-        overflow: hidden;
-        color: #ececec;
-        font: 13px/1.4 "Iowan Old Style", Palatino, "Songti SC", serif;
+      :root {
+        color-scheme: dark;
+        --bg: #0f131b;
+        --panel: #181e29;
+        --line: #2b3444;
+        --text: #e6edf7;
+        --dim: #93a1b5;
+        --accent: #5ad1b1;
       }
+      html, body { margin: 0; height: 100%; overflow: hidden; }
       body {
         display: flex;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
       }
-      #stage {
-        flex: 1;
-        min-width: 0;
-        position: relative;
-      }
-      canvas {
-        display: block;
-        width: 100%;
-        height: 100%;
-      }
+      #stage { flex: 1; min-width: 0; position: relative; background: #181c26; }
+      #view { display: block; width: 100%; height: 100%; }
       aside {
-        width: 292px;
+        width: 300px;
         flex: none;
         overflow: auto;
-        background: #2a2a2a;
-        border-left: 1px solid #1a1a1a;
+        background: var(--panel);
+        border-left: 1px solid var(--line);
         padding: 18px 16px 28px;
       }
-      h1 {
-        margin: 0 0 4px;
-        font-size: 18px;
+      h1 { margin: 0 0 6px; font-size: 17px; font-weight: 650; }
+      h2 {
+        margin: 18px 0 8px;
+        font-size: 12px;
+        letter-spacing: 0.1em;
+        color: var(--dim);
         font-weight: 600;
       }
-      p.note {
-        margin: 0 0 14px;
-        color: #b7b7b7;
-      }
-      h2 {
-        margin: 12px 0 8px;
-        font-size: 13px;
-        letter-spacing: 0.08em;
-        color: #9d9d9d;
+      p.note { margin: 0; color: var(--dim); }
+      .info {
+        margin-top: 12px;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #121722;
+        color: #c8d4e4;
+        font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
       }
       .joint {
         display: grid;
-        grid-template-columns: 6.6em 28px 1fr 28px;
+        grid-template-columns: 5.5em 3.2em 1fr;
         gap: 6px;
         align-items: center;
-        margin-bottom: 4px;
+        margin: 7px 0;
       }
-      .joint span {
-        font-variant-numeric: tabular-nums;
-      }
-      .range {
-        grid-column: 2 / -1;
-        margin: -2px 0 8px;
-        color: #8d8d8d;
-        font-size: 12px;
-      }
+      .joint .value { color: var(--accent); text-align: right; font-variant-numeric: tabular-nums; }
+      input[type='range'] { width: 100%; accent-color: var(--accent); }
       button {
         font: inherit;
-        color: inherit;
-        background: #3a3a3a;
-        border: 1px solid #555;
-        border-radius: 999px;
-        height: 28px;
+        color: var(--text);
+        background: #232d3c;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        height: 30px;
         cursor: pointer;
       }
-      button.reset {
-        width: 100%;
-        margin: 0 0 4px;
-      }
-      pre.progress {
-        position: absolute;
-        left: 24px;
-        bottom: 24px;
+      button:hover { border-color: var(--accent); }
+      button.reset { width: 100%; margin-top: 8px; }
+      pre.help {
         margin: 0;
-        padding: 8px 12px;
-        background: #262626;
-        border: 1px solid #444;
+        padding: 9px 10px;
+        border: 1px solid var(--line);
         border-radius: 6px;
-        color: #cfcfcf;
-        font: 12px/1.4 ui-monospace, Menlo, monospace;
+        background: #121722;
+        color: #a9b8cc;
+        font: 11.5px/1.55 ui-monospace, Menlo, Consolas, monospace;
+        white-space: pre-wrap;
       }
       pre.error {
         position: absolute;
-        inset: 24px;
+        left: 16px;
+        right: 16px;
+        top: 16px;
         margin: 0;
-        padding: 16px 18px;
-        max-height: 60%;
+        padding: 12px 14px;
+        max-height: 70%;
         overflow: auto;
-        background: #2a1d1d;
-        border: 1px solid #7a3b3b;
+        background: #2a1618;
+        border: 1px solid #8b3b42;
         border-radius: 8px;
-        color: #f0d0d0;
-        font: 12px/1.5 ui-monospace, Menlo, monospace;
+        color: #ffd9dc;
+        font: 12px/1.5 ui-monospace, Menlo, Consolas, monospace;
         white-space: pre-wrap;
       }
-      input[type='range'] {
-        width: 100%;
-        accent-color: #3dff9a;
-      }
+      pre.error[hidden] { display: none; }
     </style>
   </head>
   <body>
     <div id="stage">
       <canvas id="view"></canvas>
+      <pre id="error" class="error" hidden></pre>
     </div>
-    <aside id="pose"></aside>
+    <aside id="pose">
+      <h1>Render Engine · Core2D</h1>
+      <p class="note">新引擎 API 预览：createHumanoid('simple2d') 生成 18 骨人形，逐骨构建 world 空间 region packet，经 viewProjection2D 投影后由 CPU / WebGL2 后端绘制。</p>
+      <div id="runtimeInfo" class="info">初始化中…</div>
+      <h2>骨骼旋转叠加（度）</h2>
+      <div id="composerControls"></div>
+      <button id="reset" class="reset" type="button">重置姿态 / 清零滑杆</button>
+      <h2>URL 参数</h2>
+      <pre class="help">?mode=cpu|webgl   渲染后端，默认 cpu
+?pose=tpose|walk|raise   姿态，默认 tpose
+?speed=1.0   walk 播放速度
+
+walk 用 sampleAnimation 驱动 rotate/translate
+时间轴，滑杆作为叠加旋转增量。</pre>
+    </aside>
     <script src="./main.js"></script>
   </body>
 </html>
