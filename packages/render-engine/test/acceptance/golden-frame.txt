@@ -1,0 +1,25 @@
+M9 黄金帧记录
+================
+
+画布: 64 x 64, RGBA8, 不透明黑背景 [0,0,0,255]
+相机: 无 viewProjection（packet.positions 即设备像素坐标）
+光栅器: CpuBackend, supersample=1, 固定管线 normal 混合
+确定性: 同一帧连续渲染两次，readPixels() 逐字节一致
+
+场景（sortPackets 后顺序）:
+  1. triangleA  id=1  order=0  seq=1  kind=region  红色 [1,0,0,1]
+     positions = (4,4) (28,4) (4,28)           → 1 个三角形
+  2. triangleB  id=2  order=1  seq=2  kind=region  绿色 [0,1,0,1]
+     positions = (36,36) (60,36) (36,60)       → 1 个三角形
+  3. region     id=3  order=2  seq=3  kind=region  蓝色 [0,0,1,1]
+     positions = (34,4) (60,4) (60,30) (34,30) → 四边形，2 个三角形
+
+合计: 3 个 packet / 4 个三角形；无纹理、无 mask、无时间或随机输入。
+
+哈希:
+  算法 = FNV-1a 64 位（offset basis 0xcbf29ce484222325，prime 0x100000001b3）
+  输入 = readPixels() 返回的 64*64*4 = 16384 字节 RGBA 流
+  输出 = 8e308586c8b4c67d
+
+该常量由首次红灯运行取得并写死在 golden.test.ts 中；任何像素、
+顺序或混合语义变化都会导致断言失败，从而检测渲染回归。

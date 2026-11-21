@@ -326,16 +326,17 @@ export class WebGL2Backend implements RenderBackend {
   private readonly gl: WebGL2Like
   private buffers: GLBuffers | null = null
   private readonly capacities = new Map<unknown, number>()
-  private readonly program: object = {}
+  private readonly program: object
   private width = 1
   private height = 1
   private pixels: Uint8ClampedArray = new Uint8ClampedArray(4)
   private disposed = false
 
-  constructor(gl: WebGL2Like) {
+  constructor(gl: WebGL2Like, program: object = {}) {
     if (gl === null || typeof gl !== 'object') throw new Error('WebGL2Backend: 缺少 gl 上下文')
     if (typeof gl.drawElements !== 'function') throw new Error('WebGL2Backend: gl.drawElements 不可用，无法提交绘制')
     this.gl = gl
+    this.program = program
     if (typeof gl.createBuffer === 'function') {
       this.buffers = {
         positions: gl.createBuffer(),

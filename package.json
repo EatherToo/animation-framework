@@ -9,7 +9,11 @@
   "scripts": {
     "build": "pnpm -r --filter=./packages/* run build",
     "typecheck": "pnpm -r --filter=./packages/* run typecheck",
-    "test": "pnpm -r --filter=./packages/* run test"
+    "test": "pnpm -r --filter=./packages/* run test",
+    "test:golden": "pnpm -r --filter=./packages/* run test:golden",
+    "test:parity": "pnpm -r --filter=./packages/* run test:parity",
+    "test:import": "pnpm -r --filter=./packages/* run test:import",
+    "bench": "pnpm -r --filter=./packages/* run bench"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

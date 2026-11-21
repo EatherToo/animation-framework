@@ -22,7 +22,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "jest"
+    "test": "jest",
+    "test:golden": "jest --testPathPatterns='acceptance/golden'",
+    "test:parity": "jest --testPathPatterns='acceptance/parity'",
+    "test:import": "jest --testPathPatterns='acceptance/import-corpus|asset'",
+    "bench": "jest --testPathPatterns='acceptance/bench'"
   },
   "dependencies": {
     "gl-matrix": "3.4.4"
