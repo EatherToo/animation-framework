@@ -336,6 +336,24 @@ describe('M10 mask: WebGL2 scissor / stencil 与上下文恢复', () => {
     expect(backend.stats.drawCalls).toBe(1)
   })
 
+  it('stencil mask 上传自己的几何，而不是复用上一个 packet 的 buffer', () => {
+    const gl = new FakeWebGL()
+    const backend = new WebGL2Backend(gl)
+    backend.resize({ width: 8, height: 8 })
+    backend.prepare(assets)
+    const mask = polygonMask([4, 1, 7, 4, 5, 7, 3, 7, 1, 4])
+    backend.draw(frameWithMask(8, 8, mask, packet(8, 8), assets))
+    const draws = gl.calls.filter((c) => c.op === 'drawElements')
+    expect(draws).toHaveLength(2)
+    expect(draws[0]!.args[1]).toBe(mask.indices.length)
+    expect(draws[1]!.args[1]).toBe(6)
+    const uploaded = gl.calls
+      .filter((c) => c.op === 'bufferSubData')
+      .map((c) => c.args[2] as number)
+    expect(uploaded).toContain(mask.positions.byteLength)
+    expect(uploaded).toContain(mask.indices.byteLength)
+  })
+
   it('restore 重建 buffer/纹理并记录次数，之后可继续绘制', () => {
     const gl = new FakeWebGL()
     const backend = new WebGL2Backend(gl)

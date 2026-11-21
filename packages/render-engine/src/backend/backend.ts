@@ -832,6 +832,11 @@ export class WebGL2Backend implements RenderBackend {
         gl.clear?.(GL_STENCIL_BUFFER_BIT)
         gl.stencilFunc?.(GL_ALWAYS, 1, 0xff)
         gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_REPLACE)
+        // mask 是独立几何：必须上传自己的顶点/索引，不能复用上一个 packet 的 buffer。
+        this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, mask.positions)
+        this.setAttrib('aPosition', 2, GL_FLOAT, false)
+        this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, mask.indices)
+        this.setUniform1i('uUseTexture', 0)
         gl.drawElements?.(GL_TRIANGLES, mask.indices.length, GL_UNSIGNED_INT, 0)
         gl.colorMask?.(true, true, true, true)
         gl.stencilFunc?.(mask.invert ? GL_NOTEQUAL : GL_EQUAL, 1, 0xff)
