@@ -135,3 +135,21 @@ describe('explicit slot masks', () => {
     expect(resolved.masks[0]).not.toBeNull()
   })
 })
+
+describe('alpha masks', () => {
+  it('resolves alphaRegion into a page + uv matrix', () => {
+    const alphaMask = {
+      id: 'alpha', mode: 'alpha' as const, invert: false, feather: 0,
+      polygon: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+      startSlotId: 'body', endSlotId: 'after', alphaRegion: { atlasKey: 'body', uvs: null },
+    }
+    const lib = { version: 1 as const, masks: [alphaMask] }
+    const set = createSlotSet([
+      { ...slots[1]!, id: 'body', mask: 'alpha' },
+    ], asset.skins, 'default')
+    const resolved = resolveMaskPaths(set, lib, createPose(sk), atlas)
+    expect(resolved.masks[0]?.mode).toBe('alpha')
+    expect(resolved.masks[0]?.alpha?.page).toBe(0)
+    expect(resolved.masks[0]?.alpha?.uvMatrix).toEqual(atlas.regions.get('body')!.uvMatrix)
+  })
+})

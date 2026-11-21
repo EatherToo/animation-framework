@@ -83,3 +83,22 @@ describe('runtime context loss and limits', () => {
     expect(() => new Engine({ backend: 'cpu', maxInfluences: 1 }).load(weighted)).toThrow('E_CONFIG')
   })
 })
+
+describe('runtime outline option', () => {
+  it('adds outline packets when configured', () => {
+    const engine = new Engine({ backend: 'cpu', outline: { width: 0.05, color: [0, 0, 0, 1] } })
+    const base = asset(2)
+    const region = {
+      kind: 'region' as const, id: 'r',
+      region: { atlasKey: 'r', uvs: null }, color: { r: 1, g: 1, b: 1, a: 1 },
+    }
+    const withRegion: SkeletonAsset = {
+      ...base,
+      slots: [{ id: 'r', bone: 1, order: 0, color: { r: 1, g: 1, b: 1, a: 1 }, blend: 'normal', attachment: 'r', mask: null, zOffset: 0 }],
+      skins: new Map([['default', { id: 'default', attachments: new Map([['r', region]]) }]]),
+    }
+    engine.load(withRegion)
+    const frame = engine.render()
+    expect(frame.packets.some((p) => p.kind === 'outline')).toBe(true)
+  })
+})

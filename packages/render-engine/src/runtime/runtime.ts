@@ -18,6 +18,7 @@ import {
   buildMaskSet,
   buildMeshPacket,
   batchPackets,
+  buildOutlinePacket,
   buildRegionPacket,
   sortPackets,
   triangulatePolygon,
@@ -56,6 +57,8 @@ export type EngineConfig = {
   maxInfluences?: number
   pixelRatio?: number
   fixedDt?: number
+  /** 可选描边：world 宽度 + straight RGBA。 */
+  outline?: { readonly width: number; readonly color: readonly [number, number, number, number] }
 }
 
 export type EnginePhase =
@@ -284,6 +287,7 @@ export function resolveMaskPaths(
   slotSet: SlotSet,
   library: MaskLibrary,
   pose?: Pose,
+  atlas?: AtlasData,
 ): ResolvedMasks {
   const byId = new Map<string, number>()
   library.masks.forEach((mask, index) => byId.set(mask.id, index))
@@ -303,7 +307,7 @@ export function resolveMaskPaths(
         const parent = open.length > 0 ? open[open.length - 1]!.path : -1
         nodes.push({ maskId: maskIndex, parent })
         open.push({ maskId: maskIndex, path: nodes.length - 1, endSlotId: def.endSlotId })
-        if (masks[maskIndex] == null) masks[maskIndex] = buildRuntimeMask(def, slotSet, pose)
+        if (masks[maskIndex] == null) masks[maskIndex] = buildRuntimeMask(def, slotSet, pose, atlas)
       }
       paths[slotIndex] = -1
       continue
@@ -316,7 +320,7 @@ export function resolveMaskPaths(
         const def = library.masks[explicit]!
         nodes.push({ maskId: explicit, parent: path })
         path = nodes.length - 1
-        if (masks[explicit] == null) masks[explicit] = buildRuntimeMask(def, slotSet, pose)
+        if (masks[explicit] == null) masks[explicit] = buildRuntimeMask(def, slotSet, pose, atlas)
       }
     }
     paths[slotIndex] = path
@@ -328,6 +332,7 @@ function buildRuntimeMask(
   def: MaskLibrary['masks'][number],
   slotSet: SlotSet,
   pose?: Pose,
+  atlas?: AtlasData,
 ): RenderMask {
   const slot = slotSet.slots.find((entry) => entry.data.id === def.startSlotId)
   const bone = slot?.data.bone ?? 0
@@ -355,9 +360,13 @@ function buildRuntimeMask(
   const bounds = Number.isFinite(minX)
     ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
     : { x: 0, y: 0, width: 0, height: 0 }
+  const alpha = def.mode === 'alpha' && def.alphaRegion !== undefined && atlas !== undefined
+    ? atlas.regions.get(def.alphaRegion.atlasKey)
+    : undefined
   return {
     id: 0, mode: def.mode === 'alpha' ? 'alpha' : 'stencil', invert: def.invert,
     feather: def.feather, positions, indices, bounds,
+    ...(alpha === undefined ? {} : { alpha: { page: alpha.page, uvMatrix: alpha.uvMatrix } }),
   }
 }
 
@@ -419,6 +428,7 @@ export class Engine {
   private readonly maxTexturePages: number
   private readonly maxInfluences: number
   private readonly fixedDt: number | undefined
+  private readonly outline: { readonly width: number; readonly color: readonly [number, number, number, number] } | undefined
   private accumulator = 0
 
   constructor(
@@ -437,6 +447,7 @@ export class Engine {
     this.maxTexturePages = config.maxTexturePages ?? 4
     this.maxInfluences = config.maxInfluences ?? 4
     this.fixedDt = config.fixedDt
+    this.outline = config.outline
     if (!Number.isInteger(this.maxBones) || this.maxBones < 1 ||
         !Number.isInteger(this.maxTexturePages) || this.maxTexturePages < 1 || this.maxTexturePages > 4 ||
         !Number.isInteger(this.maxInfluences) || this.maxInfluences < 1 || this.maxInfluences > 4) {
@@ -634,7 +645,7 @@ export class Engine {
     }
 
     const resolved = this.maskLibrary !== undefined
-      ? resolveMaskPaths(slotSet, this.maskLibrary, pose)
+      ? resolveMaskPaths(slotSet, this.maskLibrary, pose, this.asset.atlas)
       : undefined
     const rules = this.host.viewRules()
     const packets: RenderPacket[] = []
@@ -657,8 +668,14 @@ export class Engine {
       if (packet !== null) packets.push(packet)
     }
 
+    const outlined = this.outline === undefined
+      ? packets
+      : packets.flatMap((packet) => [
+          packet,
+          buildOutlinePacket(packet, this.outline!.width, this.outline!.color, packet.id + 100000, packet.seq),
+        ])
     const frame: RenderFrame = {
-      packets: batchPackets(sortPackets(packets)),
+      packets: batchPackets(sortPackets(outlined)),
       width: this.viewport.width,
       height: this.viewport.height,
       viewProjection: this.viewProjection,
