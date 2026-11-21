@@ -553,6 +553,8 @@
     const pendingAttachment = /* @__PURE__ */ new Map();
     const pendingColor = /* @__PURE__ */ new Map();
     const pendingDrawOrder = /* @__PURE__ */ new Map();
+    const pendingDeform = /* @__PURE__ */ new Map();
+    const pendingIk = /* @__PURE__ */ new Map();
     const skeleton = pose.skeleton;
     for (const track of tracks) {
       if (track.alpha <= 0) continue;
@@ -639,6 +641,12 @@
         } else if (tl.kind === "drawOrder") {
           pendingDrawOrder.set(index, value);
           wrote = true;
+        } else if (tl.kind === "deform") {
+          pendingDeform.set(index, value);
+          wrote = true;
+        } else if (tl.kind === "ik") {
+          pendingIk.set(index, value);
+          wrote = true;
         }
       }
       if (!additive && wrote) dominant = clip.name;
@@ -659,11 +667,14 @@
       const shift = (value % n + n) % n;
       setDrawOrder(slotSet, slotSet.slots.map((_, i) => (i + shift) % n));
     }
-    return { events, dominant };
+    return { events, dominant, deform: pendingDeform, ik: pendingIk };
   }
 
   // packages/render-engine/src/constraint/constraint.ts
   var PHYSICS_DT = 1 / 120;
+
+  // packages/render-engine/src/physics/physics.ts
+  var DEFAULT_FIXED_DT = 1 / 120;
 
   // packages/render-engine/src/render/render.ts
   var clamp012 = (v) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
@@ -1266,6 +1277,58 @@
   var GL_REPLACE = 7681;
   var GL_STENCIL_BUFFER_BIT = 1024;
   var GL_DEPTH_BUFFER_BIT = 256;
+  var GL_VERTEX_SHADER = 35633;
+  var GL_FRAGMENT_SHADER = 35632;
+  var GL_COMPILE_STATUS = 35713;
+  var GL_LINK_STATUS = 35714;
+  var DEFAULT_VERTEX_SHADER = `#version 300 es
+in vec2 aPosition;
+in vec2 aUv;
+in vec4 aColor;
+uniform mat3 viewProjection;
+uniform vec2 uResolution;
+out vec2 vUv;
+out vec4 vColor;
+void main() {
+  vec3 p = viewProjection * vec3(aPosition, 1.0);
+  vec2 ndc = vec2(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0);
+  gl_Position = vec4(ndc, 0.0, 1.0);
+  vUv = aUv;
+  vColor = aColor;
+}`;
+  var DEFAULT_FRAGMENT_SHADER = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform float uUseTexture;
+out vec4 outColor;
+void main() {
+  vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
+  outColor = vColor * texel;
+}`;
+  function compileDefaultProgram(gl) {
+    if (gl.createShader === void 0 || gl.createProgram === void 0 || gl.shaderSource === void 0 || gl.compileShader === void 0 || gl.attachShader === void 0 || gl.linkProgram === void 0) return null;
+    const vs = gl.createShader(GL_VERTEX_SHADER);
+    const fs = gl.createShader(GL_FRAGMENT_SHADER);
+    gl.shaderSource?.(vs, DEFAULT_VERTEX_SHADER);
+    gl.shaderSource?.(fs, DEFAULT_FRAGMENT_SHADER);
+    gl.compileShader?.(vs);
+    gl.compileShader?.(fs);
+    if (gl.getShaderParameter?.(vs, GL_COMPILE_STATUS) === false || gl.getShaderParameter?.(fs, GL_COMPILE_STATUS) === false) {
+      gl.deleteShader?.(vs);
+      gl.deleteShader?.(fs);
+      return null;
+    }
+    const program = gl.createProgram();
+    gl.attachShader?.(program, vs);
+    gl.attachShader?.(program, fs);
+    gl.linkProgram?.(program);
+    gl.deleteShader?.(vs);
+    gl.deleteShader?.(fs);
+    if (gl.getProgramParameter?.(program, GL_LINK_STATUS) === false) return null;
+    return program;
+  }
   var WebGL2Backend = class {
     kind = "webgl2";
     stats = {
@@ -1288,11 +1351,11 @@
     assets = null;
     textures = [];
     whiteTexture = null;
-    constructor(gl, program = {}) {
+    constructor(gl, program) {
       if (gl === null || typeof gl !== "object") throw new Error("WebGL2Backend: \u7F3A\u5C11 gl \u4E0A\u4E0B\u6587");
       if (typeof gl.drawElements !== "function") throw new Error("WebGL2Backend: gl.drawElements \u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u63D0\u4EA4\u7ED8\u5236");
       this.gl = gl;
-      this.program = program;
+      this.program = program ?? compileDefaultProgram(gl) ?? {};
       if (typeof gl.createBuffer === "function") {
         this.buffers = {
           positions: gl.createBuffer(),
@@ -1401,6 +1464,12 @@
       if (loc === void 0 || loc < 0 || gl.enableVertexAttribArray === void 0 || gl.vertexAttribPointer === void 0) return;
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, type, normalized, 0, 0);
+    }
+    setResolution(width, height) {
+      const gl = this.gl;
+      if (gl.getUniformLocation === void 0 || gl.uniform2f === void 0) return;
+      const loc = gl.getUniformLocation(this.program, "uResolution");
+      if (loc !== null && loc !== void 0) gl.uniform2f(loc, width, height);
     }
     setViewProjection(vp) {
       const gl = this.gl;
@@ -1538,6 +1607,7 @@
       const gl = this.gl;
       gl.useProgram?.(this.program);
       this.setViewProjection(frame.viewProjection);
+      this.setResolution(frame.width, frame.height);
       const depthMode = frame.depthMode ?? "none";
       if (depthMode === "none") {
         gl.disable?.(GL_DEPTH_TEST);
@@ -1990,7 +2060,7 @@
   }
 
   // packages/render-engine/src/tools/tools.ts
-  var DEFAULT_FIXED_DT = 1 / 60;
+  var DEFAULT_FIXED_DT2 = 1 / 60;
 
   // preview/procedural-atlas.ts
   var PAGE_SIZE = 512;

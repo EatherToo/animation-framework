@@ -125,6 +125,7 @@ export interface BuildMeshPacketArgs extends BuildPacketArgs {
   readonly depth?: Float32Array | null
 }
 
+const EPS = 1e-12
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
 
 /** 直通色转预乘 alpha（0..1 浮点），只做一次乘法。 */
@@ -402,6 +403,51 @@ export function triangulatePolygon(points: Float32Array): Uint32Array {
     for (let i = 1; i + 1 < order.length; i += 1) out.push(order[0]!, order[i]!, order[i + 1]!)
   }
   return Uint32Array.from(out)
+}
+
+/** 由 packet 的剪影边生成描边几何：每条边一个四边形，宽度为 world 单位。 */
+export function buildOutlinePacket(
+  source: RenderPacket,
+  width: number,
+  color: readonly [number, number, number, number],
+  id: number = source.id,
+  seq: number = source.seq,
+): RenderPacket {
+  const edges = outlineEdges(source.indices)
+  const half = Math.max(0, Number.isFinite(width) ? width : 0) / 2
+  const positions = new Float32Array(edges.length * 8)
+  const uvs = new Float32Array(edges.length * 8)
+  const indices = new Uint16Array(edges.length * 6)
+  let p = 0
+  let u = 0
+  let k = 0
+  for (const [a, b] of edges) {
+    const ax = source.positions[a]!, ay = source.positions[a + 1]!
+    const bx = source.positions[b]!, by = source.positions[b + 1]!
+    const dx = bx - ax
+    const dy = by - ay
+    const len = Math.hypot(dx, dy)
+    const nx = len > EPS ? (-dy / len) * half : 0
+    const ny = len > EPS ? (dx / len) * half : 0
+    positions.set([ax + nx, ay + ny, ax - nx, ay - ny, bx - nx, by - ny, bx + nx, by + ny], p)
+    p += 8
+    uvs.fill(0, u, u + 8)
+    u += 8
+    indices.set([k, k + 1, k + 2, k, k + 2, k + 3], (k / 4) * 6)
+    k += 4
+  }
+  return {
+    ...source,
+    id,
+    kind: 'outline',
+    positions,
+    uvs,
+    colors: fillColors(edges.length * 4, colorBytes(color, false)),
+    indices,
+    depth: null,
+    subOrder: source.subOrder + 1,
+    seq,
+  }
 }
 
 /** 三角网格的剪影边：共享边去重后只保留单三角形使用的边（内部边不描）。 */

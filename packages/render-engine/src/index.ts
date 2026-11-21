@@ -18,7 +18,7 @@ export type {
 } from './render/render'
 export {
   toPma, atlasRegionUv, buildRegionPacket, buildMeshPacket,
-  sortPackets, batchKey, batchPackets, validateAtlasPages, validateMaskPath, outlineEdges,
+  sortPackets, batchKey, batchPackets, buildOutlinePacket, validateAtlasPages, validateMaskPath, outlineEdges,
   sampleTexture, validateAssets, maskChain, validateMaskPaths, buildMaskSet, triangulatePolygon,
 } from './render/render'
 export * from './backend/backend'

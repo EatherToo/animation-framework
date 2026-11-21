@@ -4,6 +4,7 @@ import {
   batchKey,
   batchPackets,
   buildMeshPacket,
+  buildOutlinePacket,
   buildRegionPacket,
   outlineEdges,
   sortPackets,
@@ -232,5 +233,21 @@ describe('packet batching', () => {
     const b = buildRegionPacket({ id: 2, positions: new Float32Array([2, 0, 3, 0, 3, 1]), color: [1, 1, 1, 1], materialId: 2, order: 1, depthKey: 0, seq: 1 })
     const c = buildRegionPacket({ id: 3, positions: new Float32Array([4, 0, 5, 0, 5, 1]), color: [1, 1, 1, 1], materialId: 1, order: 2, depthKey: 0, seq: 2, maskPath: 1 })
     expect(batchPackets([a, b, c])).toHaveLength(3)
+  })
+})
+
+describe('outline packets', () => {
+  it('builds one quad per silhouette edge with finite geometry', () => {
+    const source = buildRegionPacket({
+      id: 1, positions: new Float32Array([0, 0, 4, 0, 0, 4]),
+      color: [1, 1, 1, 1], materialId: 0, order: 0, depthKey: 0,
+    })
+    const outline = buildOutlinePacket(source, 0.5, [0, 0, 0, 1], 9)
+    expect(outline.kind).toBe('outline')
+    expect(outline.positions.length).toBe(3 * 8) // 3 edges * 4 vertices
+    expect(outline.indices.length).toBe(3 * 6)
+    for (const v of outline.positions) expect(Number.isFinite(v)).toBe(true)
+    expect(outline.materialId).toBe(0)
+    expect(outline.id).toBe(9)
   })
 })

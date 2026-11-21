@@ -70,6 +70,143 @@ export type SampleResult = {
 }
 export type 动画采样结果 = SampleResult
 
+export type AnimationEventType = 'start' | 'complete' | 'event'
+export type AnimationEvent = {
+  readonly type: AnimationEventType
+  readonly name: string
+  readonly time: number
+  readonly track: number
+  readonly int?: number
+  readonly float?: number
+  readonly string?: string
+}
+export type AnimationListener = (event: AnimationEvent) => void
+export type PlayOptions = {
+  readonly loop?: boolean
+  readonly speed?: number
+  readonly alpha?: number
+  readonly mixDuration?: number
+  readonly delay?: number
+  readonly track?: number
+  readonly blendMode?: 'replace' | 'additive'
+}
+
+const EMPTY_CLIP: AnimationClip = { name: '__empty', duration: 0, timelines: [] }
+
+/**
+ * 文档 12 §3 的门面：管理多 track、时间缩放、暂停/恢复与帧末事件派发。
+ * 采样与混合仍复用 sampleAnimation，避免两套语义。
+ */
+export class AnimationState {
+  private readonly clips: ReadonlyMap<string, AnimationClip>
+  private readonly pose: Pose
+  private readonly slotSet: SlotSet
+  private readonly listeners = new Map<AnimationEventType, Set<AnimationListener>>()
+  private readonly savedSpeed = new WeakMap<Track, number>()
+  private readonly _tracks: Track[] = []
+  private timeScale = 1
+  private disposed = false
+
+  constructor(clips: ReadonlyMap<string, AnimationClip>, pose: Pose, slotSet: SlotSet) {
+    this.clips = clips
+    this.pose = pose
+    this.slotSet = slotSet
+  }
+
+  get tracks(): Track[] {
+    return this._tracks
+  }
+
+  private assertLive(): void {
+    if (this.disposed) throw new Error('E_DISPOSED')
+  }
+
+  play(name: string, options: PlayOptions = {}): Track {
+    this.assertLive()
+    const clip = this.clips.get(name)
+    if (clip === undefined) throw new Error('E_ANIM')
+    const index = Math.max(0, Math.floor(options.track ?? 0))
+    while (this._tracks.length <= index) this._tracks.push(createTrack(EMPTY_CLIP))
+    const track = createTrack(clip, {
+      loop: options.loop ?? true,
+      speed: options.speed ?? 1,
+      alpha: options.alpha ?? 1,
+      ...(options.blendMode === undefined ? {} : { blendMode: options.blendMode }),
+    })
+    this._tracks[index] = track
+    this.dispatch({ type: 'start', name, time: 0, track: index })
+    return track
+  }
+
+  stop(track?: Track): void {
+    this.assertLive()
+    if (track === undefined) { this._tracks.length = 0; return }
+    const index = this._tracks.indexOf(track)
+    if (index >= 0) this._tracks.splice(index, 1)
+  }
+
+  pause(track?: Track): void {
+    this.assertLive()
+    const list = track === undefined ? this._tracks : [track]
+    for (const t of list) {
+      if (!this.savedSpeed.has(t)) this.savedSpeed.set(t, t.speed)
+      t.speed = 0
+    }
+  }
+
+  resume(track?: Track): void {
+    this.assertLive()
+    const list = track === undefined ? this._tracks : [track]
+    for (const t of list) {
+      const saved = this.savedSpeed.get(t)
+      if (saved !== undefined) { t.speed = saved; this.savedSpeed.delete(t) }
+    }
+  }
+
+  setTimeScale(scale: number): void {
+    this.assertLive()
+    if (!Number.isFinite(scale) || scale < 0) throw new Error('E_TRACK')
+    this.timeScale = scale
+  }
+
+  addListener(type: AnimationEventType, fn: AnimationListener): () => void {
+    this.assertLive()
+    let set = this.listeners.get(type)
+    if (set === undefined) { set = new Set(); this.listeners.set(type, set) }
+    set.add(fn)
+    return () => { set!.delete(fn) }
+  }
+
+  private dispatch(event: AnimationEvent): void {
+    const set = this.listeners.get(event.type)
+    if (set === undefined) return
+    for (const fn of set) {
+      try { fn(event) } catch { /* 监听器异常隔离 */ }
+    }
+  }
+
+  update(dt: number): void {
+    this.assertLive()
+    if (!Number.isFinite(dt) || dt < 0) throw new Error('E_TRACK')
+    const result = sampleAnimation(this._tracks, this.pose, this.slotSet, dt * this.timeScale)
+    const pending: AnimationEvent[] = []
+    this._tracks.forEach((track, index) => {
+      for (const name of result.events) pending.push({ type: 'event', name, time: track.time, track: index })
+      if (!track.loop && track.clip.duration > 0 && track.time >= track.clip.duration && track.lastTime < track.clip.duration) {
+        pending.push({ type: 'complete', name: track.clip.name, time: track.time, track: index })
+      }
+    })
+    for (const event of pending) this.dispatch(event)
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    this._tracks.length = 0
+    this.listeners.clear()
+  }
+}
+
 /** 建立 track；默认循环播放、完全替换、1 倍速。 */
 export function createTrack(
   clip: AnimationClip,
