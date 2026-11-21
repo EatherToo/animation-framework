@@ -368,3 +368,17 @@ describe('混合、叠加与主导 clip', () => {
     expect(r.dominant).toBe('B')
   })
 })
+
+describe('deform / ik timeline 输出', () => {
+  it('把 deform 与 ik 采样值放进结果，供网格与约束消费', () => {
+    const sk = skeleton()
+    const pose = createPose(sk)
+    const c = clip('data', [
+      { kind: 'deform', path: '0', keys: [key(0, 0.25), key(1, 0.75)] },
+      { kind: 'ik', path: '1', keys: [key(0, 0.2), key(1, 0.8)] },
+    ])
+    const result = sampleAnimation([createTrack(c)], pose, slotSetArg(), 0.5)
+    expect(result.deform.get(0)).toBeCloseTo(0.5, 5)
+    expect(result.ik.get(1)).toBeCloseTo(0.5, 5)
+  })
+})

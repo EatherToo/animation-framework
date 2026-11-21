@@ -44,7 +44,7 @@ export type IkConstraint = ConstraintBase & {
   kind: 'ik'
   targetBone: number
   chainLength: number
-  method: 'analytic' | 'ccd' | 'fabrik'
+  method: 'analytic' | 'ccd' | 'fabrik' | 'dls'
   maxIterations: number
   tolerance: number
   bendSign: 1 | -1
@@ -252,7 +252,7 @@ function validateIkConstraint(c: IkConstraint): void {
   if (!c || typeof c !== 'object') throw new Error('ik.constraint')
   if (!Number.isFinite(c.tolerance) || c.tolerance <= 0) throw new Error('ik.tolerance')
   if (!Number.isFinite(c.maxIterations) || c.maxIterations < 1) throw new Error('ik.maxIterations')
-  if (c.method !== 'analytic' && c.method !== 'ccd' && c.method !== 'fabrik') throw new Error('ik.method')
+  if (c.method !== 'analytic' && c.method !== 'ccd' && c.method !== 'fabrik' && c.method !== 'dls') throw new Error('ik.method')
   if (c.bendSign !== 1 && c.bendSign !== -1) throw new Error('ik.bendSign')
 }
 
@@ -504,7 +504,79 @@ export function solveIk(pose: Pose, c: IkConstraint): IkResult {
     return solveAnalytic(pose, c, bones, lengths, target, distance, targetAngle)
   }
   if (c.method === 'ccd') return solveCcd(pose, c, bones, target)
+  if (c.method === 'dls') return solveDls(pose, c, bones, target)
   return solveFabrik(pose, c, bones, lengths, target)
+}
+
+/**
+ * DLS（阻尼最小二乘）：数值 Jacobian + 2x2 正规方程，适合多节链的平滑收敛。
+ * 阻尼项 λ²I 保证奇异位形下仍有有限步长；每步夹到 ±MAX_STEP。
+ */
+function solveDls(
+  pose: Pose,
+  c: IkConstraint,
+  bones: readonly number[],
+  target: readonly [number, number],
+): IkResult {
+  const n = bones.length
+  const cap = Math.min(Math.max(1, Math.floor(c.maxIterations)), ITERATION_CAP)
+  const h = 1e-3
+  const lambda2 = 1e-4
+  let iterations = 0
+  let converged = false
+  for (let it = 0; it < cap; it += 1) {
+    iterations = it + 1
+    updateWorld(pose)
+    const tip = tipOfChain(pose, bones)
+    const ex = target[0] - tip[0]
+    const ey = target[1] - tip[1]
+    if (Math.hypot(ex, ey) <= c.tolerance) { converged = true; break }
+    const jac = new Float64Array(n * 2)
+    for (let j = 0; j < n; j += 1) {
+      addRotation(pose, bones[j]!, h)
+      updateWorld(pose)
+      const moved = tipOfChain(pose, bones)
+      jac[j * 2] = (moved[0] - tip[0]) / h
+      jac[j * 2 + 1] = (moved[1] - tip[1]) / h
+      addRotation(pose, bones[j]!, -h)
+      updateWorld(pose)
+    }
+    let a = lambda2
+    let b = 0
+    let d = lambda2
+    for (let j = 0; j < n; j += 1) {
+      const jx = jac[j * 2]!
+      const jy = jac[j * 2 + 1]!
+      a += jx * jx
+      b += jx * jy
+      d += jy * jy
+    }
+    const det = a * d - b * b
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-14) {
+      // 奇异位形：退化为目标函数梯度步，仍保证有限步长与确定性。
+      for (let j = 0; j < n; j += 1) {
+        let delta = 0.25 * (jac[j * 2]! * ex + jac[j * 2 + 1]! * ey)
+        delta = delta > MAX_STEP ? MAX_STEP : delta < -MAX_STEP ? -MAX_STEP : delta
+        if (delta !== 0) addRotation(pose, bones[j]!, delta)
+      }
+      continue
+    }
+    const yx = (d * ex - b * ey) / det
+    const yy = (-b * ex + a * ey) / det
+    for (let j = 0; j < n; j += 1) {
+      let delta = jac[j * 2]! * yx + jac[j * 2 + 1]! * yy
+      delta = delta > MAX_STEP ? MAX_STEP : delta < -MAX_STEP ? -MAX_STEP : delta
+      if (delta !== 0) addRotation(pose, bones[j]!, delta)
+    }
+  }
+  const limited = clampChainLimits(pose, bones)
+  const residual = residualOf(pose, target, bones)
+  return {
+    reached: residual <= c.tolerance,
+    residual,
+    iterations,
+    reason: limited ? 'limit' : converged ? 'ok' : 'maxIterations',
+  }
 }
 
 /** 按 (order, id) 确定性排序；不改入参数组。 */

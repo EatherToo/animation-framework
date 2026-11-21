@@ -95,6 +95,45 @@ export class FakeWebGL implements WebGL2Like {
     this.push('useProgram', program)
   }
 
+  createShader(type: number): number {
+    const id = 100 + this.calls.length
+    this.push('createShader', type, id)
+    return id
+  }
+
+  shaderSource(shader: unknown, source: string): void {
+    this.push('shaderSource', shader, source.length)
+  }
+
+  compileShader(shader: unknown): void {
+    this.push('compileShader', shader)
+  }
+
+  getShaderParameter(): boolean {
+    return true
+  }
+
+  deleteShader(shader: unknown): void {
+    this.push('deleteShader', shader)
+  }
+
+  createProgram(): number {
+    this.push('createProgram')
+    return 777
+  }
+
+  attachShader(program: unknown, shader: unknown): void {
+    this.push('attachShader', program, shader)
+  }
+
+  linkProgram(program: unknown): void {
+    this.push('linkProgram', program)
+  }
+
+  getProgramParameter(): boolean {
+    return true
+  }
+
   createTexture(): number {
     const id = this.nextTexture++
     this.push('createTexture', id)

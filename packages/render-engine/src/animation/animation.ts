@@ -60,7 +60,14 @@ export type Track = {
   loopCount: number
 }
 
-export type SampleResult = { events: string[]; dominant: string | null }
+export type SampleResult = {
+  events: string[]
+  dominant: string | null
+  /** deform timeline 的当前采样值，key 为 timeline 路径解析出的索引。 */
+  deform: Map<number, number>
+  /** ik timeline 的 mix 值，key 为 timeline 路径解析出的索引。 */
+  ik: Map<number, number>
+}
 export type 动画采样结果 = SampleResult
 
 /** 建立 track；默认循环播放、完全替换、1 倍速。 */
@@ -292,6 +299,8 @@ export function sampleAnimation(
   const pendingAttachment = new Map<number, number>()
   const pendingColor = new Map<number, number>()
   const pendingDrawOrder = new Map<number, number>()
+  const pendingDeform = new Map<number, number>()
+  const pendingIk = new Map<number, number>()
   const skeleton = pose.skeleton
   for (const track of tracks) {
     if (track.alpha <= 0) continue
@@ -384,8 +393,13 @@ export function sampleAnimation(
       } else if (tl.kind === 'drawOrder') {
         pendingDrawOrder.set(index, value)
         wrote = true
+      } else if (tl.kind === 'deform') {
+        pendingDeform.set(index, value)
+        wrote = true
+      } else if (tl.kind === 'ik') {
+        pendingIk.set(index, value)
+        wrote = true
       }
-      // deform/ik 仅采样，顶点偏移与约束输入由 05/07 的后续模块消费。
     }
     if (!additive && wrote) dominant = clip.name
   }
@@ -409,5 +423,5 @@ export function sampleAnimation(
     setDrawOrder(slotSet, slotSet.slots.map((_, i) => (i + shift) % n))
   }
 
-  return { events, dominant }
+  return { events, dominant, deform: pendingDeform, ik: pendingIk }
 }

@@ -434,3 +434,33 @@ describe('core2d secondary physics', () => {
     for (const v of state.positions) expect(Number.isFinite(v)).toBe(true)
   })
 })
+
+describe('IK dls：阻尼最小二乘', () => {
+  it('四节链在迭代预算内收敛且保持有限残差', () => {
+    const sk = compileSkeleton({
+      name: 'dls', profile: 'full2d',
+      bones: [
+        ...Array.from({ length: 5 }, (_, i) => ({
+          name: i === 0 ? 'root' : `b${i}`,
+          parent: i - 1,
+          length: 0.5,
+          rest: { x: i === 0 ? 0 : 0.5, y: 0, rotation: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 },
+        })),
+        { name: 'target', parent: 0, length: 0, rest: { x: 1.1, y: 0.9, rotation: 0, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 } },
+      ],
+    })
+    const pose = createPose(sk)
+    updateWorld(pose)
+    const target = sk.boneIdByName.get('target')!
+    updateWorld(pose)
+    const result = solveIk(pose, {
+      id: 'dls', kind: 'ik', bone: 4, weight: 1, enabled: true, order: 0,
+      targetBone: target, chainLength: 4, method: 'dls', maxIterations: 60,
+      tolerance: 1e-3, bendSign: 1,
+    })
+    expect(result.reason).toBe('ok')
+    expect(result.reached).toBe(true)
+    expect(result.residual).toBeLessThan(1e-3)
+    expect(result.iterations).toBeLessThanOrEqual(60)
+  })
+})

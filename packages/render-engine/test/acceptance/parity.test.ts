@@ -234,3 +234,51 @@ describe('M9 parity：WebGL2Backend 提交顺序', () => {
     backend.dispose()
   })
 })
+
+describe('M9 parity：图集纹理与 mask', () => {
+  it('CPU 采样图集页与 mask 裁剪结果可逐像素核对', () => {
+    const page = {
+      width: 2, height: 2,
+      data: Uint8Array.from([
+        255, 0, 0, 255, 0, 255, 0, 255,
+        0, 0, 255, 255, 255, 255, 255, 255,
+      ]),
+      pma: true,
+    }
+    const assets = {
+      pages: [page],
+      materials: [{ id: 1, kind: 'sprite' as const, page: 0, filter: 'nearest' as const }],
+    }
+    const packet = buildRegionPacket({
+      id: 1,
+      positions: new Float32Array([0, 0, 16, 0, 16, 16, 0, 16]),
+      uvs: new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]),
+      color: [1, 1, 1, 1],
+      materialId: 1,
+      page: 0,
+      order: 0,
+      depthKey: 0,
+    })
+    const mask = {
+      id: 0, mode: 'scissor' as const, invert: false, feather: 0,
+      positions: new Float32Array(0), indices: new Uint32Array(0),
+      bounds: { x: 0, y: 0, width: 8, height: 16 },
+    }
+    const frame: RenderFrame = {
+      packets: [packet], width: 16, height: 16, assets,
+      maskPaths: [{ maskId: 0, parent: -1 }],
+      masks: { version: 1, masks: [mask] },
+    }
+    const backend = new CpuBackend(16, 16)
+    backend.draw(frame)
+    const px = backend.readPixels()
+    const at = (x: number, y: number) => {
+      const i = (y * 16 + x) * 4
+      return [px[i]!, px[i + 1]!, px[i + 2]!, px[i + 3]!]
+    }
+    expect(at(3, 3)).toEqual([255, 0, 0, 255])
+    expect(at(12, 3)).toEqual([0, 0, 0, 255]) // mask 外是背景
+    expect(at(3, 12)[2]).toBe(255)
+    backend.dispose()
+  })
+})

@@ -561,6 +561,15 @@ export interface WebGL2Like {
   uniform1i?(location: unknown, value: number): void
   uniform1f?(location: unknown, value: number): void
   uniform2f?(location: unknown, x: number, y: number): void
+  createShader?(type: number): unknown
+  shaderSource?(shader: unknown, source: string): void
+  compileShader?(shader: unknown): void
+  getShaderParameter?(shader: unknown, pname: number): boolean
+  deleteShader?(shader: unknown): void
+  createProgram?(): unknown
+  attachShader?(program: unknown, shader: unknown): void
+  linkProgram?(program: unknown): void
+  getProgramParameter?(program: unknown, pname: number): boolean
   useProgram?(program: unknown): void
   drawElements?(mode: number, count: number, type: number, offset: number): void
   readPixels?(x: number, y: number, width: number, height: number, format: number, type: number, dst: Uint8Array): void
@@ -593,6 +602,66 @@ interface GLBuffers {
   indices: unknown
 }
 
+const GL_VERTEX_SHADER = 0x8b31
+const GL_FRAGMENT_SHADER = 0x8b30
+const GL_COMPILE_STATUS = 0x8b81
+const GL_LINK_STATUS = 0x8b82
+
+const DEFAULT_VERTEX_SHADER = `#version 300 es
+in vec2 aPosition;
+in vec2 aUv;
+in vec4 aColor;
+uniform mat3 viewProjection;
+uniform vec2 uResolution;
+out vec2 vUv;
+out vec4 vColor;
+void main() {
+  vec3 p = viewProjection * vec3(aPosition, 1.0);
+  vec2 ndc = vec2(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0);
+  gl_Position = vec4(ndc, 0.0, 1.0);
+  vUv = aUv;
+  vColor = aColor;
+}`
+
+const DEFAULT_FRAGMENT_SHADER = `#version 300 es
+precision mediump float;
+in vec2 vUv;
+in vec4 vColor;
+uniform sampler2D uTexture;
+uniform float uUseTexture;
+out vec4 outColor;
+void main() {
+  vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
+  outColor = vColor * texel;
+}`
+
+/** 真实 GL 下默认编译内置 shader；mock 缺少 shader 方法时退回空 program。 */
+function compileDefaultProgram(gl: WebGL2Like): object | null {
+  if (gl.createShader === undefined || gl.createProgram === undefined ||
+      gl.shaderSource === undefined || gl.compileShader === undefined ||
+      gl.attachShader === undefined || gl.linkProgram === undefined) return null
+  const vs = gl.createShader(GL_VERTEX_SHADER)
+  const fs = gl.createShader(GL_FRAGMENT_SHADER)
+  gl.shaderSource?.(vs, DEFAULT_VERTEX_SHADER)
+  gl.shaderSource?.(fs, DEFAULT_FRAGMENT_SHADER)
+  gl.compileShader?.(vs)
+  gl.compileShader?.(fs)
+  if (gl.getShaderParameter?.(vs, GL_COMPILE_STATUS) === false ||
+      gl.getShaderParameter?.(fs, GL_COMPILE_STATUS) === false) {
+    gl.deleteShader?.(vs)
+    gl.deleteShader?.(fs)
+    return null
+  }
+  const program = gl.createProgram()
+  gl.attachShader?.(program, vs)
+  gl.attachShader?.(program, fs)
+  gl.linkProgram?.(program)
+  gl.deleteShader?.(vs)
+  gl.deleteShader?.(fs)
+  if (gl.getProgramParameter?.(program, GL_LINK_STATUS) === false) return null
+  return program as object
+}
+
 /** 按 frame.packets 原始顺序逐包上传并 drawElements，绝不重排。 */
 export class WebGL2Backend implements RenderBackend {
   readonly kind = 'webgl2' as const
@@ -614,11 +683,11 @@ export class WebGL2Backend implements RenderBackend {
   private textures: unknown[] = []
   private whiteTexture: unknown = null
 
-  constructor(gl: WebGL2Like, program: object = {}) {
+  constructor(gl: WebGL2Like, program?: object) {
     if (gl === null || typeof gl !== 'object') throw new Error('WebGL2Backend: 缺少 gl 上下文')
     if (typeof gl.drawElements !== 'function') throw new Error('WebGL2Backend: gl.drawElements 不可用，无法提交绘制')
     this.gl = gl
-    this.program = program
+    this.program = program ?? compileDefaultProgram(gl) ?? {}
     if (typeof gl.createBuffer === 'function') {
       this.buffers = {
         positions: gl.createBuffer(),
@@ -722,6 +791,13 @@ export class WebGL2Backend implements RenderBackend {
         gl.vertexAttribPointer === undefined) return
     gl.enableVertexAttribArray(loc)
     gl.vertexAttribPointer(loc, size, type, normalized, 0, 0)
+  }
+
+  private setResolution(width: number, height: number): void {
+    const gl = this.gl
+    if (gl.getUniformLocation === undefined || gl.uniform2f === undefined) return
+    const loc = gl.getUniformLocation(this.program, 'uResolution')
+    if (loc !== null && loc !== undefined) gl.uniform2f(loc, width, height)
   }
 
   private setViewProjection(vp: Float32Array | undefined): void {
@@ -874,6 +950,7 @@ export class WebGL2Backend implements RenderBackend {
     const gl = this.gl
     gl.useProgram?.(this.program)
     this.setViewProjection(frame.viewProjection)
+    this.setResolution(frame.width, frame.height)
 
     const depthMode = frame.depthMode ?? 'none'
     if (depthMode === 'none') {
