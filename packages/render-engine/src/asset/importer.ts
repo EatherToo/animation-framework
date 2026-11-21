@@ -9,10 +9,13 @@
 import { compileSkeleton, type BoneSpec, type CompiledSkeleton } from '../core/skeleton'
 import { createPose, updateWorld } from '../core/pose'
 import { decomposeAffine, normalizeAngle, WORLD_STRIDE, type InheritMode, type LocalTransform } from '../core/math'
-import type { Attachment, BlendMode, RGBA, SkinData, SlotData } from '../slot/slot'
+import type { Attachment, BlendMode, RegionRef, RGBA, SkinData, SlotData } from '../slot/slot'
 import type { AnimationClip, ScalarKey, Timeline } from '../animation/animation'
+import type { ConstraintData } from '../constraint/constraint'
+import type { AtlasData } from './atlas'
 
 const DEG = Math.PI / 180
+const DEFAULT_REGION_UVS = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
 
 /** 单条导入记录：带 code / path / 原值 / 处置。 */
 export type ImportIssue = {
@@ -27,6 +30,24 @@ export type ImportIssue = {
 /** 导入报告：只保留 issues 与两个计数，便于 UI/CI 展示。 */
 export type ImportReport = { issues: ImportIssue[]; warnings: number; errors: number }
 
+/** 单个裁剪 mask：slot 范围 + 局部多边形；alphaRegion 为可选的 alpha mask 图。 */
+export type MaskData = {
+  readonly id: string
+  readonly mode: 'clip' | 'alpha'
+  readonly invert: boolean
+  readonly feather: number
+  readonly polygon: Float32Array
+  readonly startSlotId: string
+  readonly endSlotId: string
+  readonly alphaRegion?: RegionRef
+}
+
+/** mask 库：version 固定 1，masks 稳定顺序。 */
+export type MaskLibrary = {
+  readonly version: 1
+  readonly masks: readonly MaskData[]
+}
+
 /** 导入产物：schema 固定为 1，hash 覆盖除 report/hash 外的全部字段。 */
 export type SkeletonAsset = {
   readonly schema: 1
@@ -40,6 +61,12 @@ export type SkeletonAsset = {
   readonly events: readonly { time: number; name: string }[]
   readonly hash: string
   readonly report: ImportReport
+  /** 实际图集；未提供 atlas 参数时缺省。 */
+  readonly atlas?: AtlasData
+  /** setup 约束；按源格式解析，运行时交 createConstraintSolver。 */
+  readonly constraints?: readonly ConstraintData[]
+  /** clipping 附件生成的 mask 库。 */
+  readonly maskLibrary?: MaskLibrary
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +78,8 @@ type Ctx = {
   unitScale: number
   issues: ImportIssue[]
   atlas: ReadonlySet<string> | null
+  atlasData: AtlasData | null
+  masks: MaskData[]
 }
 
 function add(
@@ -168,12 +197,34 @@ function collectAtlas(doc: Record<string, unknown>, source: Ctx['source']): Read
 /** 校验 region 是否有对应图集；缺失时仍产出占位 region，保证结构完整。 */
 function atlasKeyOf(rawPath: unknown, fallbackName: string, ctx: Ctx, path: string): string {
   const key = typeof rawPath === 'string' && rawPath.length > 0 ? rawPath : fallbackName
-  if (ctx.atlas !== null && !ctx.atlas.has(key)) {
-    add(ctx, 'error', 'E_MISSING_ATLAS', path, 'region 无对应图集，使用占位键', 'fallback', rawPath)
-  } else if (key === fallbackName && (typeof rawPath !== 'string' || rawPath.length === 0)) {
+  // 实际 AtlasData 优先：缺失只记 warning，不阻断导入。
+  if (ctx.atlasData !== null) {
+    if (!ctx.atlasData.regions.has(key)) {
+      add(ctx, 'warning', 'W_ATLAS_MISSING', path, 'atlas 中缺少 region，保留 atlasKey 占位', 'fallback', key)
+    }
+    return key
+  }
+  if (ctx.atlas !== null) {
+    // 源 JSON 自带 atlas 名单：保持 M5 的 error 语义。
+    if (!ctx.atlas.has(key)) {
+      add(ctx, 'error', 'E_MISSING_ATLAS', path, 'region 无对应图集，使用占位键', 'fallback', rawPath)
+    } else if (key === fallbackName && (typeof rawPath !== 'string' || rawPath.length === 0)) {
+      add(ctx, 'error', 'E_MISSING_ATLAS', path, 'region path 为空，使用附件名', 'fallback', rawPath)
+    }
+    return key
+  }
+  if (key === fallbackName && (typeof rawPath !== 'string' || rawPath.length === 0)) {
     add(ctx, 'error', 'E_MISSING_ATLAS', path, 'region path 为空，使用附件名', 'fallback', rawPath)
   }
   return key
+}
+
+/** 有实际 atlas 时给 region 附件补默认四边形 UV；其余情况保持原值。 */
+function regionRefOf(ctx: Ctx, atlasKey: string, uvs: Float32Array | null): RegionRef {
+  if (uvs === null && ctx.atlasData !== null && ctx.atlasData.regions.has(atlasKey)) {
+    return { atlasKey, uvs: DEFAULT_REGION_UVS }
+  }
+  return { atlasKey, uvs }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,13 +460,23 @@ function readWeightedMesh(
 ): Attachment {
   const vertices = arr(raw.vertices).map((v) => num(v))
   const uvs = arr(raw.uvs).map((v) => num(v))
-  const positions = new Float32Array(vertices.length / 2 * 2)
   const perVertex = 4
-  const boneIndices = new Uint16Array(Math.max(1, vertices.length / 2) * perVertex)
-  const weights = new Float32Array(Math.max(1, vertices.length / 2) * perVertex)
+  // 先按源布局数一遍顶点：每个顶点 = count + count×4 个分量。
+  let vertexCount = 0
+  let scan = 0
+  while (scan < vertices.length) {
+    const count = Math.floor(vertices[scan] ?? 0)
+    if (!Number.isInteger(count) || count < 0 || count > 64) break
+    scan += 1 + count * 4
+    vertexCount += 1
+  }
+  if (vertexCount === 0) vertexCount = Math.max(1, Math.floor(vertices.length / 2))
+  const positions = new Float32Array(vertexCount * 2)
+  const boneIndices = new Uint16Array(vertexCount * perVertex)
+  const weights = new Float32Array(vertexCount * perVertex)
   let p = 0
   let v = 0
-  while (p < vertices.length && v * 2 < positions.length) {
+  while (p < vertices.length && v < vertexCount) {
     const count = Math.max(0, Math.floor(vertices[p++]!))
     const influences: { bone: number; x: number; y: number; w: number }[] = []
     for (let j = 0; j < count; j += 1) {
@@ -450,24 +511,26 @@ function readWeightedMesh(
     }
     v += 1
   }
-  const vertexCount = positions.length / 2
+  const mesh = {
+    id: typeof raw.name === 'string' ? raw.name : 'mesh',
+    positions,
+    uvs: uvOf(uvs, vertexCount),
+    indices: validateIndices(raw.triangles, vertexCount, ctx, path),
+    bone: slotBone,
+    vertexSpace: 'boneLocal' as const,
+    boneIndices,
+    weights,
+    // 调试/描边扩展字段；不进入核心 MeshData 契约，故用结构附加。
+    ...(Number.isFinite(num(raw.hull, NaN)) ? { hull: num(raw.hull) } : {}),
+    ...(arr(raw.edges).length > 0 ? { edges: Uint16Array.from(arr(raw.edges).map((v) => num(v))) } : {}),
+    ...(Number.isFinite(num(raw.width, NaN)) ? { sourceWidth: num(raw.width) * ctx.unitScale } : {}),
+    ...(Number.isFinite(num(raw.height, NaN)) ? { sourceHeight: num(raw.height) * ctx.unitScale } : {}),
+  }
   return {
     kind: 'weightedMesh',
-    id: typeof raw.name === 'string' ? raw.name : 'mesh',
-    mesh: {
-      id: typeof raw.name === 'string' ? raw.name : 'mesh',
-      positions,
-      uvs: uvOf(uvs, vertexCount),
-      indices: validateIndices(raw.triangles, vertexCount, ctx, path),
-      bone: slotBone,
-      vertexSpace: 'boneLocal',
-      boneIndices,
-      weights,
-    },
-    region: {
-      atlasKey: atlasKeyOf(raw.path, typeof raw.name === 'string' ? raw.name : 'mesh', ctx, `${path}.path`),
-      uvs: null,
-    },
+    id: mesh.id,
+    mesh,
+    region: regionRefOf(ctx, atlasKeyOf(raw.path, mesh.id, ctx, `${path}.path`), null),
     color: WHITE,
   }
 }
@@ -498,25 +561,38 @@ function buildAttachment(
     ? (typeof rawObj.type === 'string' ? rawObj.type : 'region')
     : (typeof rawObj.type === 'string' && rawObj.type === 'mesh' ? 'mesh' : 'region')
   const atlasKey = atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)
-  const region = { atlasKey, uvs: null }
-  if (type === 'mesh') {
+  const region = { atlasKey, uvs: null as Float32Array | null }
+  if (type === 'mesh' || type === 'weightedmesh') {
     const vertices = arr(rawObj.vertices)
-    const weighted = vertices.length > 0 && Number.isInteger(vertices[0])
+    const uvCount = arr(rawObj.uvs).length
+    const first = vertices[0]
+    // 非加权顶点与 uvs 等长；加权布局首项是影响数，且总长度明显大于 uvs。
+    const weighted = type === 'weightedmesh'
+      || (vertices.length > 0
+        && vertices.length !== uvCount
+        && Number.isInteger(first)
+        && (first as number) >= 1
+        && 1 + (first as number) * 4 <= vertices.length)
     if (weighted) return readWeightedMesh(rawObj, slotBone, srcToId, ctx, path)
     const positions = flatPositions(vertices.map((x) => num(x)), ctx, ctx.unitScale)
     const vertexCount = positions.length / 2
+    const mesh = {
+      id: name,
+      positions,
+      uvs: uvOf(arr(rawObj.uvs).map((x) => num(x)), vertexCount),
+      indices: validateIndices(rawObj.triangles, vertexCount, ctx, path),
+      bone: slotBone,
+      vertexSpace: 'boneLocal' as const,
+      ...(Number.isFinite(num(rawObj.hull, NaN)) ? { hull: num(rawObj.hull) } : {}),
+      ...(arr(rawObj.edges).length > 0 ? { edges: Uint16Array.from(arr(rawObj.edges).map((x) => num(x))) } : {}),
+      ...(Number.isFinite(num(rawObj.width, NaN)) ? { sourceWidth: num(rawObj.width) * ctx.unitScale } : {}),
+      ...(Number.isFinite(num(rawObj.height, NaN)) ? { sourceHeight: num(rawObj.height) * ctx.unitScale } : {}),
+    }
     return {
       kind: 'mesh',
       id: name,
-      mesh: {
-        id: name,
-        positions,
-        uvs: uvOf(arr(rawObj.uvs).map((x) => num(x)), vertexCount),
-        indices: validateIndices(rawObj.triangles, vertexCount, ctx, path),
-        bone: slotBone,
-        vertexSpace: 'boneLocal',
-      },
-      region,
+      mesh,
+      region: regionRefOf(ctx, atlasKey, region.uvs),
       color: kindHint === 'spine' ? parseHexColor(rawObj.color, ctx, `${path}.color`) : WHITE,
     }
   }
@@ -528,20 +604,391 @@ function buildAttachment(
     return { kind, id: name, polygon: flatPositions(arr(rawObj.vertices).map((x) => num(x)), ctx, ctx.unitScale) }
   }
   if (type === 'linkedmesh') {
-    // 无父 mesh 拓扑可共享时，退化为占位 region，不让它变成空几何。
+    // 真正的 linkedmesh 由两遍解析处理；走到这里说明父拓扑不可用。
     add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, 'linkedmesh 无法解析父拓扑，退化为 region', 'fallback', rawObj.parent)
-    return { kind: 'region', id: name, region, color: WHITE }
+    return { kind: 'region', id: name, region: regionRefOf(ctx, atlasKey, null), color: WHITE }
   }
   if (type !== 'region') {
     add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, '未知附件类型，退化为 region', 'fallback', type)
   }
   const customUvs = arr(rawObj.uvs)
+  const uvs = customUvs.length === 8 ? Float32Array.from(customUvs.map((x) => num(x))) : null
   return {
     kind: 'region',
     id: name,
-    region: { atlasKey, uvs: customUvs.length === 8 ? Float32Array.from(customUvs.map((x) => num(x))) : null },
+    region: regionRefOf(ctx, atlasKey, uvs),
     color: kindHint === 'spine' ? parseHexColor(rawObj.color, ctx, `${path}.color`) : WHITE,
   }
+}
+
+/**
+ * linkedmesh：复用父 mesh 的拓扑/UV/权重，应用自己的 vertices 与可选 uvs。
+ * 父必须是同一 skin 内已解析的 mesh/weightedMesh；否则返回 null 由调用方降级。
+ */
+function buildLinkedMesh(
+  raw: Record<string, unknown>,
+  name: string,
+  parent: Attachment | undefined,
+  slotBone: number,
+  ctx: Ctx,
+  path: string,
+): Attachment | null {
+  if (parent === undefined || (parent.kind !== 'mesh' && parent.kind !== 'weightedMesh')) {
+    return null
+  }
+  const parentMesh = parent.mesh
+  const rawVertices = arr(raw.vertices).map((x) => num(x))
+  const positions = rawVertices.length >= 4
+    ? flatPositions(rawVertices, ctx, ctx.unitScale)
+    : new Float32Array(parentMesh.positions)
+  const rawUvs = arr(raw.uvs).map((x) => num(x))
+  const uvs = rawUvs.length === positions.length
+    ? Float32Array.from(rawUvs)
+    : new Float32Array(parentMesh.uvs)
+  const atlasKey = atlasKeyOf(raw.path, name, ctx, `${path}.path`)
+  const color = parseHexColor(raw.color, ctx, `${path}.color`)
+
+  if (parent.kind === 'weightedMesh') {
+    const mesh = {
+      id: name,
+      positions,
+      uvs,
+      indices: new Uint16Array(parentMesh.indices),
+      bone: parentMesh.bone,
+      vertexSpace: parentMesh.vertexSpace,
+      boneIndices: new Uint16Array(parent.mesh.boneIndices),
+      weights: new Float32Array(parent.mesh.weights),
+    }
+    return {
+      kind: 'weightedMesh',
+      id: name,
+      mesh,
+      region: regionRefOf(ctx, atlasKey, null),
+      color,
+    }
+  }
+  const mesh = {
+    id: name,
+    positions,
+    uvs,
+    indices: new Uint16Array(parentMesh.indices),
+    bone: parentMesh.bone,
+    vertexSpace: parentMesh.vertexSpace,
+  }
+  return { kind: 'mesh', id: name, mesh, region: regionRefOf(ctx, atlasKey, null), color }
+}
+
+/** 设置 slot.mask；SlotData 对外只读，导入阶段允许一次性写入。 */
+function setSlotMask(slots: readonly SlotData[], slotName: string, maskId: string): void {
+  const slot = slots.find((s) => s.id === slotName)
+  if (slot !== undefined) (slot as { mask: string | null }).mask = maskId
+}
+
+/** 设置 slot.attachment（DragonBones displayIndex 用）。 */
+function setSlotAttachment(slots: readonly SlotData[], slotName: string, attachment: string | null): void {
+  const slot = slots.find((s) => s.id === slotName)
+  if (slot !== undefined) (slot as { attachment: string | null }).attachment = attachment
+}
+
+/**
+ * clipping → maskLibrary 条目：作用范围从当前 slot 到源 `end` slot（含）。
+ * end 不存在时回退到当前 slot 并记 W_CLIP_END。
+ */
+function addClippingMask(
+  ctx: Ctx,
+  slots: readonly SlotData[],
+  slotName: string,
+  attachmentName: string,
+  raw: Record<string, unknown>,
+  polygon: Float32Array,
+): void {
+  const id = `${slotName}.${attachmentName}`
+  if (ctx.masks.some((mask) => mask.id === id)) return
+  const requestedEnd = typeof raw.end === 'string' ? raw.end : ''
+  const endSlotId = slots.some((slot) => slot.id === requestedEnd) ? requestedEnd : slotName
+  if (endSlotId !== requestedEnd) {
+    add(ctx, 'warning', 'W_CLIP_END', `attachments.${slotName}.${attachmentName}.end`, 'clipping end slot 不存在，回退当前 slot', 'fallback', requestedEnd)
+  }
+  const mask: MaskData = {
+    id,
+    mode: 'clip',
+    invert: raw.inverted === true || raw.inverse === true,
+    feather: Math.max(0, num(raw.softness, 0)),
+    polygon,
+    startSlotId: slotName,
+    endSlotId,
+  }
+  ctx.masks.push(Object.freeze(mask))
+  setSlotMask(slots, slotName, id)
+}
+
+/** DragonBones 紧凑权重 [boneCount,(boneIndex,weight)*] → 每顶点 4 影响。 */
+function readDbWeights(
+  raw: readonly number[],
+  vertexCount: number,
+  boneNames: readonly string[],
+  boneIdByName: ReadonlyMap<string, number>,
+  slotBone: number,
+  ctx: Ctx,
+  path: string,
+): { boneIndices: Uint16Array; weights: Float32Array } | null {
+  const boneIndices = new Uint16Array(Math.max(1, vertexCount) * 4)
+  const weights = new Float32Array(Math.max(1, vertexCount) * 4)
+  let cursor = 0
+  for (let v = 0; v < vertexCount; v += 1) {
+    if (cursor >= raw.length) return null
+    const count = Math.max(0, Math.floor(raw[cursor++]!))
+    const influences: { bone: number; weight: number }[] = []
+    for (let j = 0; j < count; j += 1) {
+      const nameIndex = Math.floor(raw[cursor++] ?? -1)
+      const weight = raw[cursor++] ?? 0
+      const boneName = boneNames[nameIndex]
+      const bone = boneName === undefined ? undefined : boneIdByName.get(boneName)
+      if (bone === undefined) {
+        add(ctx, 'error', 'E_WEIGHT_BONE', `${path}.weights[${v}]`, '权重骨名不存在，已跳过', 'skip', boneName)
+        continue
+      }
+      influences.push({ bone, weight })
+    }
+    let sum = influences.reduce((acc, item) => acc + item.weight, 0)
+    if (!Number.isFinite(sum) || sum <= 0) {
+      add(ctx, 'error', 'E_WEIGHT_SUM', `${path}.weights[${v}]`, '权重和 ≤0，回退单骨刚性', 'fallback', influences.map((i) => i.weight))
+      influences.length = 0
+      influences.push({ bone: slotBone, weight: 1 })
+      sum = 1
+    }
+    if (influences.length > 4) {
+      add(ctx, 'warning', 'W_WEIGHT_PRUNED', `${path}.weights[${v}]`, '影响数 >4，保留前 4 并归一化', 'normalize', influences.length)
+      influences.length = 4
+      sum = influences.reduce((acc, item) => acc + item.weight, 0)
+    }
+    for (let j = 0; j < 4; j += 1) {
+      const influence = influences[j]
+      boneIndices[v * 4 + j] = influence?.bone ?? slotBone
+      weights[v * 4 + j] = influence !== undefined && sum > 0 ? clamp01(influence.weight / sum) : 0
+    }
+  }
+  return cursor > raw.length ? null : { boneIndices, weights }
+}
+
+/** DragonBones mesh display：image/mesh/armature 的分派与权重展开。 */
+function buildDragonBonesDisplay(
+  rawDisplay: unknown,
+  name: string,
+  slotBone: number,
+  boneIdByName: ReadonlyMap<string, number>,
+  ctx: Ctx,
+  path: string,
+): Attachment | null {
+  const dsp = obj(rawDisplay)
+  if (dsp === null) {
+    add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, 'display 不是对象，已跳过', 'skip', rawDisplay)
+    return null
+  }
+  const type = typeof dsp.type === 'string' ? dsp.type : 'image'
+  if (type === 'armature') {
+    add(ctx, 'warning', 'W_SUBARMATURE', path, '嵌套 armature display 暂不支持，已跳过', 'skip', name)
+    return null
+  }
+  const atlasKey = atlasKeyOf(dsp.path ?? name, name, ctx, `${path}.path`)
+  if (type === 'mesh') {
+    const vertices = arr(dsp.vertices).map((x) => num(x))
+    const positions = flatPositions(vertices, ctx, ctx.unitScale)
+    const vertexCount = positions.length / 2
+    const indices = validateIndices(dsp.triangles, vertexCount, ctx, path)
+    const uvs = uvOf(arr(dsp.uvs).map((x) => num(x)), vertexCount)
+    const weightsRaw = arr(dsp.weights).map((x) => num(x))
+    const boneNames = arr(dsp.bones).map((x) => (typeof x === 'string' ? x : ''))
+    const weights = weightsRaw.length > 0
+      ? readDbWeights(weightsRaw, vertexCount, boneNames, boneIdByName, slotBone, ctx, path)
+      : null
+    if (weights === null && weightsRaw.length > 0) {
+      add(ctx, 'error', 'E_WEIGHT_LEN', path, 'DragonBones weights 长度与顶点数不符，降级刚性网格', 'fallback', weightsRaw.length)
+    }
+    const base = {
+      id: name,
+      positions,
+      uvs,
+      indices,
+      bone: slotBone,
+      vertexSpace: 'boneLocal' as const,
+    }
+    const region = regionRefOf(ctx, atlasKey, null)
+    const color = parseDbColor(dsp.color)
+    if (weights !== null) {
+      return {
+        kind: 'weightedMesh',
+        id: name,
+        mesh: { ...base, boneIndices: weights.boneIndices, weights: weights.weights },
+        region,
+        color,
+      }
+    }
+    return { kind: 'mesh', id: name, mesh: base, region, color }
+  }
+  if (type === 'boundingBox' || type === 'boundingbox') {
+    return { kind: 'boundingBox', id: name, polygon: flatPositions(arr(dsp.vertices).map((x) => num(x)), ctx, ctx.unitScale) }
+  }
+  if (type === 'path') {
+    return { kind: 'path', id: name, polygon: flatPositions(arr(dsp.vertices).map((x) => num(x)), ctx, ctx.unitScale) }
+  }
+  if (type !== 'image' && type !== 'region') {
+    add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, '未知 display 类型，退化为 region', 'fallback', type)
+  }
+  return {
+    kind: 'region',
+    id: name,
+    region: regionRefOf(ctx, atlasKey, null),
+    color: parseDbColor(dsp.color),
+  }
+}
+
+/** 收集 path 附件多边形，供 path 约束引用。 */
+function pathPolygons(skins: ReadonlyMap<string, SkinData>): Map<string, Float32Array> {
+  const out = new Map<string, Float32Array>()
+  for (const skin of skins.values()) {
+    for (const attachment of skin.attachments.values()) {
+      if (attachment.kind === 'path' && !out.has(attachment.id)) out.set(attachment.id, attachment.polygon)
+    }
+  }
+  return out
+}
+
+/** Spine 顶层 ik/transform/path/physics → ConstraintData[]；不可恢复项记 W 跳过。 */
+function readSpineConstraints(
+  doc: Record<string, unknown>,
+  skeleton: CompiledSkeleton,
+  skins: ReadonlyMap<string, SkinData>,
+  ctx: Ctx,
+): ConstraintData[] {
+  const out: ConstraintData[] = []
+  const paths = pathPolygons(skins)
+  const idOf = (v: unknown): number | undefined => {
+    if (typeof v !== 'string') return undefined
+    return skeleton.boneIdByName.get(v)
+  }
+  const idsOf = (v: unknown): number[] => arr(v).map(idOf).filter((id): id is number => id !== undefined)
+
+  for (const [index, raw] of arr(doc.ik).entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const chain = idsOf(o.bones)
+    const target = idOf(o.target)
+    if (chain.length === 0 || target === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `ik[${index}]`, 'IK 缺 bones/target，已跳过', 'skip', raw)
+      continue
+    }
+    if (o.mix === undefined || o.bendPositive === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_DEFAULT', `ik[${index}]`, 'IK 缺 mix/bendPositive，使用默认值', 'fallback', raw)
+    }
+    out.push({
+      kind: 'ik',
+      id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `ik_${index}`,
+      bone: chain[chain.length - 1]!,
+      weight: clamp01(num(o.mix, 1)),
+      enabled: true,
+      order: Math.floor(num(o.order, index)),
+      targetBone: target,
+      chainLength: chain.length,
+      method: 'analytic',
+      maxIterations: Math.max(1, Math.floor(num(o.iterations, 8))),
+      tolerance: 1e-3,
+      bendSign: o.bendPositive === false ? -1 : 1,
+    })
+  }
+
+  for (const [index, raw] of arr(doc.transform).entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const chain = idsOf(o.bones)
+    const source = idOf(o.target)
+    if (chain.length === 0 || source === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `transform[${index}]`, 'transform 缺 bones/target，已跳过', 'skip', raw)
+      continue
+    }
+    if (o.mixRotate === undefined && o.mixX === undefined && o.mixY === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_DEFAULT', `transform[${index}]`, 'transform 缺 mix，使用默认 1', 'fallback', raw)
+    }
+    const mixX = clamp01(num(o.mixX, num(o.mixY, 1)))
+    const mixY = clamp01(num(o.mixY, mixX))
+    out.push({
+      kind: 'transform',
+      id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `transform_${index}`,
+      bone: chain[0]!,
+      weight: clamp01(num(o.mix, 1)),
+      enabled: true,
+      order: Math.floor(num(o.order, index)),
+      sourceBone: source,
+      mixRotation: clamp01(num(o.mixRotate, 1)),
+      mixTranslation: (mixX + mixY) / 2,
+    })
+  }
+
+  for (const [index, raw] of arr(doc.path).entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const chain = idsOf(o.bones)
+    const target = typeof o.target === 'string' ? o.target : ''
+    const points = paths.get(target)
+    if (chain.length === 0 || points === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `path[${index}]`, 'path 约束缺 bones/path 附件，已跳过', 'skip', raw)
+      continue
+    }
+    if (o.mixX === undefined && o.mixRotate === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_DEFAULT', `path[${index}]`, 'path 缺 mix，使用默认 1', 'fallback', raw)
+    }
+    out.push({
+      kind: 'path',
+      id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `path_${index}`,
+      bone: chain[chain.length - 1]!,
+      weight: clamp01(num(o.mix, 1)),
+      enabled: true,
+      order: Math.floor(num(o.order, index)),
+      points,
+      mix: clamp01(num(o.mixX, num(o.mixRotate, 1))),
+    })
+  }
+
+  for (const raw of arr(doc.physics)) {
+    add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', 'physics', 'physics 约束读入但不求解', 'keep', raw)
+  }
+  return out
+}
+
+/** DragonBones armature 级 ik → ConstraintData[]。 */
+function readDragonBonesConstraints(
+  armature: Record<string, unknown>,
+  skeleton: CompiledSkeleton,
+  ctx: Ctx,
+): ConstraintData[] {
+  const out: ConstraintData[] = []
+  const idOf = (v: unknown): number | undefined => (typeof v === 'string' ? skeleton.boneIdByName.get(v) : undefined)
+  for (const [index, raw] of arr(armature.ik).entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const names = arr(o.bones ?? o.chain).filter((v): v is string => typeof v === 'string')
+    const chain = names.map((v) => skeleton.boneIdByName.get(v)).filter((id): id is number => id !== undefined)
+    const target = idOf(o.target)
+    if (chain.length === 0 || target === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `ik[${index}]`, 'DragonBones IK 缺 bones/target，已跳过', 'skip', raw)
+      continue
+    }
+    out.push({
+      kind: 'ik',
+      id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `ik_${index}`,
+      bone: chain[chain.length - 1]!,
+      weight: clamp01(num(o.mix, 1)),
+      enabled: true,
+      order: Math.floor(num(o.order, index)),
+      targetBone: target,
+      chainLength: chain.length,
+      method: 'analytic',
+      maxIterations: 8,
+      tolerance: 1e-3,
+      bendSign: o.bendPositive === false ? -1 : 1,
+    })
+  }
+  return out
 }
 
 function pickDefaultSkin(
@@ -623,7 +1070,11 @@ function fromOffsets(offsets: unknown, slotNames: readonly string[], ctx: Ctx, p
 }
 
 function packedColor(v: unknown, ctx: Ctx, path: string): number {
-  const c = parseHexColor(v, ctx, path)
+  return packRgba(parseHexColor(v, ctx, path))
+}
+
+/** RGBA 0..1 → 0xAARRGGBB，与 slot 颜色 timeline 约定一致。 */
+function packRgba(c: RGBA): number {
   const byte = (x: number) => Math.round(clamp01(x) * 255)
   return (((byte(c.a) << 24) | (byte(c.r) << 16) | (byte(c.g) << 8) | byte(c.b)) >>> 0)
 }
@@ -725,6 +1176,33 @@ function readSpineAnimations(
       })
       timelines.push(...drawOrderTimelines(drawKeys, slotNames.length))
     }
+    // deform：vertices 是顶点偏移；目标 Timeline 以标量通道承载，保留首分量作确定性采样值。
+    for (const skinDeform of Object.values(obj(a.deform) ?? {})) {
+      for (const [slotName, rawSlotDeform] of Object.entries(obj(skinDeform) ?? {})) {
+        const slotIndex = slotNames.indexOf(slotName)
+        if (slotIndex < 0) continue
+        for (const [attName, rawKeys] of Object.entries(obj(rawSlotDeform) ?? {})) {
+          const keys: ScalarKey[] = arr(rawKeys).map((raw) => {
+            const k = obj(raw) ?? {}
+            const time = num(k.time)
+            duration = Math.max(duration, time)
+            const offsets = arr(k.vertices)
+            return { time, value: offsets.length > 0 ? num(offsets[0]) : 0 }
+          })
+          if (keys.length > 0) timelines.push({ kind: 'deform', path: `${slotIndex}.${attName}`, keys })
+        }
+      }
+    }
+    // ik timeline：按约束名索引，mix 作为标量通道。
+    for (const [constraintName, rawKeys] of Object.entries(obj(a.ik) ?? {})) {
+      const keys: ScalarKey[] = arr(rawKeys).map((raw) => {
+        const k = obj(raw) ?? {}
+        const time = num(k.time)
+        duration = Math.max(duration, time)
+        return { time, value: clamp01(num(k.mix, 1)) }
+      })
+      if (keys.length > 0) timelines.push({ kind: 'ik', path: constraintName, keys })
+    }
     // 事件。
     const eventKeys = arr(a.events).map((raw) => {
       const k = obj(raw) ?? {}
@@ -804,6 +1282,65 @@ function readDragonBonesAnimations(
           timelines.push({ kind: 'scale', path: `${String(b.name)}.${axis}`, keys })
         }
       }
+    }
+    // slot displayIndex / color timeline。
+    for (const rawSlotAnim of arr(a.slot)) {
+      const s = obj(rawSlotAnim)
+      if (s === null) continue
+      const slotIndex = slotNames.indexOf(typeof s.name === 'string' ? s.name : '')
+      if (slotIndex < 0) continue
+      if (arr(s.displayIndex).length > 0) {
+        let acc = 0
+        const keys: ScalarKey[] = arr(s.displayIndex).map((rawFrame) => {
+          const f = obj(rawFrame) ?? {}
+          const time = acc / rate
+          acc += num(f.duration, 0)
+          duration = Math.max(duration, time)
+          return { time, value: num(f.value, 0) }
+        })
+        timelines.push({ kind: 'attachment', path: String(slotIndex), keys })
+      }
+      if (arr(s.color).length > 0) {
+        let acc = 0
+        const keys: ScalarKey[] = arr(s.color).map((rawFrame) => {
+          const f = obj(rawFrame) ?? {}
+          const time = acc / rate
+          acc += num(f.duration, 0)
+          duration = Math.max(duration, time)
+          return { time, value: packRgba(parseDbColor(f.value)) }
+        })
+        timelines.push({ kind: 'color', path: String(slotIndex), keys })
+      }
+    }
+    // ffd：顶点偏移，按 slot 名索引；值取首分量以便统一 Timeline 结构。
+    for (const rawFfd of arr(a.ffd)) {
+      const f = obj(rawFfd)
+      if (f === null) continue
+      const slotIndex = slotNames.indexOf(typeof f.name === 'string' ? f.name : '')
+      if (slotIndex < 0) continue
+      let acc = 0
+      const keys: ScalarKey[] = arr(f.vertices).map((rawKey) => {
+        const k = obj(rawKey) ?? {}
+        const time = acc / rate
+        acc += num(k.duration, 0)
+        duration = Math.max(duration, time)
+        const offset = arr(k.offset)
+        return { time, value: offset.length > 0 ? num(offset[0]) : 0 }
+      })
+      if (keys.length > 0) timelines.push({ kind: 'deform', path: `${slotIndex}.${String(f.name)}`, keys })
+    }
+    // ik timeline（4.5 可选）：按约束名索引。
+    for (const rawIk of arr(a.ik)) {
+      const ik = obj(rawIk)
+      if (ik === null) continue
+      const keyName = typeof ik.name === 'string' ? ik.name : ''
+      const keys: ScalarKey[] = arr(ik.keys ?? ik.mix).map((rawKey) => {
+        const k = obj(rawKey) ?? {}
+        const time = num(k.time, 0)
+        duration = Math.max(duration, time)
+        return { time, value: clamp01(num(k.mix ?? k.value, 1)) }
+      })
+      if (keyName.length > 0 && keys.length > 0) timelines.push({ kind: 'ik', path: keyName, keys })
     }
     // zOrder：完整 slot 索引顺序。
     const zFrames = arr(a.zOrder)
@@ -966,6 +1503,9 @@ function freezeAsset(
   animations: Map<string, AnimationClip>,
   events: { time: number; name: string }[],
   ctx: Ctx,
+  atlas?: AtlasData,
+  constraints?: readonly ConstraintData[],
+  maskLibrary?: MaskLibrary,
 ): SkeletonAsset {
   slots.forEach((slot) => Object.freeze(slot))
   for (const skin of skins.values()) Object.freeze(skin)
@@ -980,6 +1520,9 @@ function freezeAsset(
     skins: Object.freeze(skins),
     animations: Object.freeze(animations),
     events: Object.freeze(events),
+    ...(atlas !== undefined ? { atlas } : {}),
+    ...(constraints !== undefined ? { constraints: Object.freeze(constraints) } : {}),
+    ...(maskLibrary !== undefined ? { maskLibrary } : {}),
   }
   const report: ImportReport = {
     issues: ctx.issues,
@@ -990,7 +1533,10 @@ function freezeAsset(
 }
 
 /** 导入 Spine 4.x JSON。主版本 ≠4 / 结构非法抛错，其余进 report。 */
-export function importSpine(json: unknown, options?: { unitScale?: number; defaultSkin?: string }): SkeletonAsset {
+export function importSpine(
+  json: unknown,
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData },
+): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: spine JSON 必须是对象')
   const skeletonMeta = obj(doc.skeleton)
@@ -998,7 +1544,14 @@ export function importSpine(json: unknown, options?: { unitScale?: number; defau
   const version = typeof skeletonMeta.spine === 'string' ? skeletonMeta.spine : ''
   if (!/^4\./.test(version)) throw new Error(`E_VERSION: ${version || '(missing)'}`)
 
-  const ctx: Ctx = { source: 'spine', unitScale: 0.01, issues: [], atlas: collectAtlas(doc, 'spine') }
+  const ctx: Ctx = {
+    source: 'spine',
+    unitScale: 0.01,
+    issues: [],
+    atlas: collectAtlas(doc, 'spine'),
+    atlasData: options?.atlas ?? null,
+    masks: [],
+  }
   ctx.unitScale = unitScaleOf(options, ctx)
 
   const rawBones = arr(doc.bones).map((raw, i) => rawBoneFrom(raw, i, 'spine', ctx, `bones[${i}]`))
@@ -1044,17 +1597,45 @@ export function importSpine(json: unknown, options?: { unitScale?: number; defau
       continue
     }
     const attachments = new Map<string, Attachment>()
-    for (const slot of builtSlots) {
-      const group = obj(obj(s.attachments)?.[slot.name])
-      if (group === null) continue
-      for (const [attName, rawAtt] of Object.entries(group)) {
-        if (attachments.has(attName)) {
-          add(ctx, 'error', 'E_DUPLICATE_NAME', `skins[${i}].attachments.${slot.name}.${attName}`, '附件重名，已跳过', 'skip', attName)
-          continue
+    const groups = builtSlots.map((slot) => ({
+      slot,
+      group: obj(obj(s.attachments)?.[slot.name]),
+    }))
+    // 两遍：先普通附件，再 linkedmesh，保证父拓扑已存在。
+    for (const linkedPass of [false, true]) {
+      for (const { slot, group } of groups) {
+        if (group === null) continue
+        for (const [attName, rawAtt] of Object.entries(group)) {
+          const attObj = obj(rawAtt)
+          const isLinked = attObj?.type === 'linkedmesh'
+          if (isLinked !== linkedPass) continue
+          if (attachments.has(attName)) {
+            add(ctx, 'error', 'E_DUPLICATE_NAME', `skins[${i}].attachments.${slot.name}.${attName}`, '附件重名，已跳过', 'skip', attName)
+            continue
+          }
+          const path = `skins[${i}].attachments.${slot.name}.${attName}`
+          const bone = slotBoneId(slots, slot)
+          let built: Attachment | null
+          if (isLinked && attObj !== null) {
+            built = buildLinkedMesh(attObj, attName, attachments.get(String(attObj.parent ?? '')), bone, ctx, path)
+            if (built === null) {
+              add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, 'linkedmesh 父拓扑不存在，退化为 region', 'fallback', attObj.parent)
+              built = {
+                kind: 'region',
+                id: attName,
+                region: regionRefOf(ctx, atlasKeyOf(attObj.path, attName, ctx, `${path}.path`), null),
+                color: WHITE,
+              }
+            }
+          } else {
+            built = buildAttachment(rawAtt, attName, 'spine', bone, srcToId, ctx, path)
+          }
+          if (built === null) continue
+          attachments.set(attName, built)
+          if (built.kind === 'clipping' && attObj !== null) {
+            addClippingMask(ctx, slots, slot.name, attName, attObj, built.polygon)
+          }
         }
-        const built = buildAttachment(rawAtt, attName, 'spine', slotBoneId(slots, slot), srcToId, ctx,
-          `skins[${i}].attachments.${slot.name}.${attName}`)
-        if (built !== null) attachments.set(attName, built)
       }
     }
     skins.set(name, { id: name, attachments })
@@ -1062,9 +1643,17 @@ export function importSpine(json: unknown, options?: { unitScale?: number; defau
   // 只负责校验/报告默认皮肤；运行时由 createSlotSet 选用。
   pickDefaultSkin(skins, options?.defaultSkin, ctx)
 
+  const constraints = readSpineConstraints(doc, skeleton, skins, ctx)
+  const maskLibrary: MaskLibrary | undefined = ctx.masks.length > 0
+    ? Object.freeze({ version: 1 as const, masks: Object.freeze(ctx.masks.slice()) })
+    : undefined
+
   const attIndex = attachmentIndex(skins)
   const { animations, events } = readSpineAnimations(doc.animations, skeleton, slotNames, attIndex, ctx)
-  return freezeAsset('spine', version, ctx.unitScale, skeleton, slots, skins, animations, events, ctx)
+  return freezeAsset(
+    'spine', version, ctx.unitScale, skeleton, slots, skins, animations, events, ctx,
+    ctx.atlasData ?? undefined, constraints, maskLibrary,
+  )
 }
 
 /** 由 BuiltSlot 名字回查稳定 BoneId（slots[].bone 保存的即是）。 */
@@ -1073,7 +1662,10 @@ function slotBoneId(slots: readonly SlotData[], slot: BuiltSlot): number {
 }
 
 /** 导入 DragonBones 4.5 JSON（5.x 走 compatibleVersion 兼容子集）。 */
-export function importDragonBones(json: unknown, options?: { unitScale?: number; defaultSkin?: string }): SkeletonAsset {
+export function importDragonBones(
+  json: unknown,
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData },
+): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: dragonbones JSON 必须是对象')
   const version = typeof doc.version === 'string' ? doc.version : ''
@@ -1082,14 +1674,19 @@ export function importDragonBones(json: unknown, options?: { unitScale?: number;
     throw new Error(`E_VERSION: ${version || '(missing)'}`)
   }
   const ctx: Ctx = {
-    source: 'dragonbones', unitScale: 0.01, issues: [], atlas: collectAtlas(doc, 'dragonbones'),
+    source: 'dragonbones',
+    unitScale: 0.01,
+    issues: [],
+    atlas: collectAtlas(doc, 'dragonbones'),
+    atlasData: options?.atlas ?? null,
+    masks: [],
   }
   ctx.unitScale = unitScaleOf(options, ctx)
-  const frameRate = num(doc.frameRate, 24)
 
   const armatures = arr(doc.armature)
   if (armatures.length === 0) throw new Error('E_SCHEMA: dragonbones.armature 为空')
   const armature = obj(armatures[0]) ?? {}
+  const frameRate = num(armature.frameRate, num(doc.frameRate, 24))
 
   const rawBones = arr(armature.bone).map((raw, i) => rawBoneFrom(raw, i, 'db', ctx, `armature.bone[${i}]`))
   if (rawBones.length === 0) throw new Error('E_SCHEMA: dragonbones.bone 为空')
@@ -1128,6 +1725,12 @@ export function importDragonBones(json: unknown, options?: { unitScale?: number;
   })
 
   const skins = new Map<string, SkinData>()
+  const displayNamesBySlot = new Map<string, string[]>()
+  const displayIndexByName = new Map<string, number>()
+  rawSlots.forEach((raw, i) => {
+    const o = obj(raw) ?? {}
+    displayIndexByName.set(slotNames[i]!, num(o.displayIndex, 0))
+  })
   for (const [i, rawSkin] of arr(armature.skin).entries()) {
     const s = obj(rawSkin)
     if (s === null) continue
@@ -1136,6 +1739,7 @@ export function importDragonBones(json: unknown, options?: { unitScale?: number;
       add(ctx, 'error', 'E_DUPLICATE_NAME', `armature.skin[${i}].name`, '皮肤重名，已跳过', 'skip', name)
       continue
     }
+    const firstSkin = skins.size === 0
     const attachments = new Map<string, Attachment>()
     for (const rawSlotSkin of arr(s.slot)) {
       const ss = obj(rawSlotSkin)
@@ -1143,30 +1747,43 @@ export function importDragonBones(json: unknown, options?: { unitScale?: number;
       const slotName = typeof ss.name === 'string' ? ss.name : ''
       const slotIndex = slotNames.indexOf(slotName)
       if (slotIndex < 0) continue
-      for (const [j, rawDisplay] of arr(ss.display).entries()) {
+      const displays = arr(ss.display)
+      const names: string[] = []
+      for (const [j, rawDisplay] of displays.entries()) {
         const dsp = obj(rawDisplay)
         if (dsp === null) continue
         const displayName = typeof dsp.name === 'string' ? dsp.name : `display_${j}`
+        names.push(displayName)
         if (attachments.has(displayName)) continue
-        const built = buildAttachment(
-          { ...dsp, type: dsp.type === 'mesh' ? 'mesh' : 'region' },
-          displayName, 'db', slots[slotIndex]!.bone, srcToId, ctx,
+        const built = buildDragonBonesDisplay(
+          dsp, displayName, slots[slotIndex]!.bone, skeleton.boneIdByName, ctx,
           `armature.skin[${i}].slot.${slotName}.display[${j}]`,
         )
         if (built !== null) attachments.set(displayName, built)
       }
-      if (arr(ss.display).length === 0) {
+      if (firstSkin) displayNamesBySlot.set(slotName, names)
+      if (displays.length === 0) {
         add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', `armature.skin[${i}].slot.${slotName}`, 'display 为空，slot 无附件', 'keep', null)
       }
     }
     skins.set(name, { id: name, attachments })
   }
+  // displayIndex：在首个皮肤的 display 列表中选默认附件；越界回退 0。
+  for (const [slotName, names] of displayNamesBySlot) {
+    const index = Math.floor(num(displayIndexByName.get(slotName), 0))
+    const chosen = names[index] ?? names[0] ?? null
+    setSlotAttachment(slots, slotName, chosen)
+  }
   pickDefaultSkin(skins, options?.defaultSkin, ctx)
 
+  const constraints = readDragonBonesConstraints(armature, skeleton, ctx)
   const { animations, events } = readDragonBonesAnimations(
     armature.animation, frameRate, skeleton, slotNames, ctx,
   )
-  return freezeAsset('dragonbones', version, ctx.unitScale, skeleton, slots, skins, animations, events, ctx)
+  return freezeAsset(
+    'dragonbones', version, ctx.unitScale, skeleton, slots, skins, animations, events, ctx,
+    ctx.atlasData ?? undefined, constraints, undefined,
+  )
 }
 
 /**
