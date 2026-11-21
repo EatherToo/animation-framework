@@ -1,43 +1,27 @@
 /**
- * 程序化 2D 骨架姿态引擎的公共入口。
- * 运行时模块按自底向上的顺序接入。
+ * 类 Spine 2D 骨骼动画引擎公共入口。
+ * 目录按技术方案分层：core / slot / mesh / animation / constraint /
+ * render / backend / volume / asset / runtime / app / tools。
  */
-export * from './math'
-export * from './space'
-export * from './skeleton'
-export * from './body'
-export * from './foot'
-export * from './part'
-export * from './slot'
-export * from './mesh'
-export * from './outline'
-export * from './texture'
-export * from './topology'
-export * from './weight'
-export * from './correction'
-export * from './compile'
-export * from './fk'
-export * from './skin'
-export * from './view'
-export * from './fill'
-export * from './ik'
-export * from './reach'
-export * from './params'
-export * from './place'
-export * from './speed'
-export * from './gait'
-export * from './plan'
-export * from './schedule'
-export * from './trajectory'
-export * from './modulate'
-export * from './recover'
-export * from './solve'
-export * from './render'
-export * from './stroke'
-export * from './pipeline2d'
-export * from './bind'
-export * from './event'
-export * from './snapshot'
-export * from './diag'
-export * from './engine'
-export * from './clock'
+export * from './core/math'
+export * from './core/skeleton'
+export * from './core/pose'
+export * from './slot/slot'
+export * from './mesh/mesh'
+export * from './animation/animation'
+export * from './constraint/constraint'
+export type {
+  PacketKind, RenderPacket, RenderFrame, AtlasRect, AtlasPage, AtlasRegionRef,
+  BuildPacketArgs, BuildMeshPacketArgs,
+} from './render/render'
+export {
+  toPma, atlasRegionUv, buildRegionPacket, buildMeshPacket,
+  sortPackets, batchKey, validateAtlasPages, validateMaskPath, outlineEdges,
+} from './render/render'
+export * from './backend/backend'
+export * from './render/camera'
+export * from './volume/volume'
+export * from './asset/importer'
+export * from './runtime/runtime'
+export * from './app/app'
+export * from './tools/tools'
