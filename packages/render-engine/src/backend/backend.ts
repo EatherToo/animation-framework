@@ -1,6 +1,14 @@
 /** M4 后端：CPU 参考光栅化与 WebGL2 提交，两者只消费 RenderFrame。 */
 
-import type { BlendMode, RenderFrame, RenderPacket } from '../render/render'
+import type {
+  BlendMode,
+  MaterialDef,
+  RenderAssets,
+  RenderFrame,
+  RenderMask,
+  TextureData,
+} from '../render/render'
+import { maskChain, sampleTexture } from '../render/render'
 
 export interface Viewport {
   width: number
@@ -11,10 +19,16 @@ export interface BackendStats {
   drawCalls: number
   packets: number
   uploadedVertices: number
+  /** mask 求值次数（层数 × 覆盖像素）。 */
+  maskTests: number
+  /** 纹理采样次数（每片元一次）。 */
+  textureSamples: number
 }
 
 export interface RenderBackend {
   readonly kind: 'cpu' | 'webgl2'
+  /** 上传/更新纹理页与材质缓存；非必需，旧后端可只消费 frame.assets。 */
+  prepare?(assets: RenderAssets): void
   draw(frame: RenderFrame): void
   readPixels(out?: Uint8ClampedArray): Uint8ClampedArray
   resize(v: Viewport): void
@@ -23,6 +37,44 @@ export interface RenderBackend {
 
 const EPS = 1e-12
 const mulU8 = (a: number, b: number): number => (((a * b + 127) / 255) | 0)
+const clampUnit = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
+
+/** 点到线段距离（像素），用于 mask feather 软边。 */
+function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax
+  const dy = by - ay
+  const len2 = dx * dx + dy * dy
+  if (len2 <= EPS) return Math.hypot(px - ax, py - ay)
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2
+  t = t < 0 ? 0 : t > 1 ? 1 : t
+  return Math.hypot(px - (ax + dx * t), py - (ay + dy * t))
+}
+
+/** 奇偶规则点在多边形内；poly 为 [x0,y0,x1,y1,...] 的屏幕空间边界。 */
+function pointInPolygon(poly: readonly number[], px: number, py: number): boolean {
+  let inside = false
+  const count = Math.floor(poly.length / 2)
+  for (let i = 0, j = count - 1; i < count; j = i, i += 1) {
+    const xi = poly[i * 2]!
+    const yi = poly[i * 2 + 1]!
+    const xj = poly[j * 2]!
+    const yj = poly[j * 2 + 1]!
+    const intersects = yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
+    if (intersects) inside = !inside
+  }
+  return inside
+}
+
+function distanceToPolygon(poly: readonly number[], px: number, py: number): number {
+  const count = Math.floor(poly.length / 2)
+  let best = Infinity
+  for (let i = 0; i < count; i += 1) {
+    const j = (i + 1) % count
+    const d = distanceToSegment(px, py, poly[i * 2]!, poly[i * 2 + 1]!, poly[j * 2]!, poly[j * 2 + 1]!)
+    if (d < best) best = d
+  }
+  return best
+}
 
 /** 固定管线混合，全部在 PMA 域；multiply/screen 采用文档的受控近似。 */
 function blendPixel(
@@ -68,10 +120,21 @@ function blendPixel(
 interface ScreenVertex {
   x: number
   y: number
+  u: number
+  v: number
+  z: number
   r: number
   g: number
   b: number
   a: number
+}
+
+/** 预转换到屏幕空间的 mask 上下文，避免逐像素做坐标变换。 */
+interface MaskCtx {
+  readonly mask: RenderMask
+  readonly rect: { x0: number; y0: number; x1: number; y1: number }
+  readonly poly: readonly number[] | null
+  readonly alphaPage: TextureData | null
 }
 
 const edge = (a: ScreenVertex, b: ScreenVertex, x: number, y: number): number =>
@@ -100,7 +163,9 @@ export interface CpuBackendOptions {
 /** 纯 TypeScript 参考光栅化器；不依赖 DOM/Canvas。 */
 export class CpuBackend implements RenderBackend {
   readonly kind = 'cpu' as const
-  readonly stats: BackendStats = { drawCalls: 0, packets: 0, uploadedVertices: 0 }
+  readonly stats: BackendStats = {
+    drawCalls: 0, packets: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
+  }
 
   private width: number
   private height: number
@@ -108,6 +173,14 @@ export class CpuBackend implements RenderBackend {
   private readonly background: readonly [number, number, number, number]
   private color: Uint8ClampedArray
   private disposed = false
+  /** prepare() 缓存的资产；frame.assets 优先。 */
+  private assets: RenderAssets | null = null
+  private depthBuffer: Float32Array | null = null
+  private depthMode: 'none' | 'test' | 'write' = 'none'
+  private material: MaterialDef | null = null
+  private page: TextureData | null = null
+  private masks: MaskCtx[] = []
+  private readonly maskCache = new Map<RenderMask, MaskCtx>()
 
   constructor(options?: CpuBackendOptions)
   constructor(width: number, height: number, supersample?: 1 | 2)
@@ -123,6 +196,11 @@ export class CpuBackend implements RenderBackend {
     this.clear()
   }
 
+  /** CPU 端资产只是引用；真正采样在 draw 时进行。 */
+  prepare(assets: RenderAssets): void {
+    this.assets = assets
+  }
+
   resize(v: Viewport): void {
     const w = Math.max(1, Math.floor(v.width))
     const h = Math.max(1, Math.floor(v.height))
@@ -130,6 +208,7 @@ export class CpuBackend implements RenderBackend {
     this.width = w
     this.height = h
     this.color = new Uint8ClampedArray(w * this.ss * h * this.ss * 4)
+    this.depthBuffer = null
     this.clear()
   }
 
@@ -196,10 +275,126 @@ export class CpuBackend implements RenderBackend {
         const g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g)
         const b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b)
         const a = Math.round(b0 * p0.a + b1 * p1.a + b2 * p2.a)
-        if (a <= 0) continue
-        blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend)
+        const u = b0 * p0.u + b1 * p1.u + b2 * p2.u
+        const v = b0 * p0.v + b1 * p1.v + b2 * p2.v
+        const z = b0 * p0.z + b1 * p1.z + b2 * p2.z
+        this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z)
       }
     }
+  }
+
+  /** 片元着色：mask → 深度 → 纹理调制 → 混合；纹理/顶点色都在 PMA 域只乘一次。 */
+  private shadeFragment(
+    sx: number, sy: number, px: number, py: number,
+    u: number, v: number,
+    r: number, g: number, b: number, a: number,
+    z: number,
+  ): void {
+    if (a <= 0) return
+    const ssW = this.width * this.ss
+    if (this.masks.length > 0) {
+      let coverage = 1
+      for (const ctx of this.masks) {
+        this.stats.maskTests += 1
+        coverage *= this.maskCoverageAt(ctx, px / this.ss, py / this.ss)
+        if (coverage <= 0) return
+      }
+      if (coverage < 1) {
+        const c = Math.round(coverage * 255)
+        r = mulU8(r, c)
+        g = mulU8(g, c)
+        b = mulU8(b, c)
+        a = mulU8(a, c)
+      }
+    }
+    if (this.depthMode !== 'none' && this.depthBuffer !== null) {
+      const di = sy * ssW + sx
+      const current = this.depthBuffer[di] ?? 1
+      if (!Number.isFinite(z) || z >= current) return
+      if (this.depthMode === 'write') this.depthBuffer[di] = z
+    }
+    if (this.material !== null && this.material.kind === 'sprite' && this.page !== null) {
+      const texel = sampleTexture(this.page, u, v, this.material.filter)
+      this.stats.textureSamples += 1
+      r = mulU8(texel[0], r)
+      g = mulU8(texel[1], g)
+      b = mulU8(texel[2], b)
+      a = mulU8(texel[3], a)
+    }
+    if (a <= 0) return
+    blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend)
+  }
+
+  /** 把 mask 的 world 几何预转换到屏幕空间；同一帧内按对象缓存。 */
+  private maskCtxFor(mask: RenderMask, frame: RenderFrame, assets: RenderAssets | null): MaskCtx {
+    const cached = this.maskCache.get(mask)
+    if (cached !== undefined) return cached
+    const corners: Array<[number, number]> = [
+      this.toScreen(frame, mask.bounds.x, mask.bounds.y),
+      this.toScreen(frame, mask.bounds.x + mask.bounds.width, mask.bounds.y),
+      this.toScreen(frame, mask.bounds.x + mask.bounds.width, mask.bounds.y + mask.bounds.height),
+      this.toScreen(frame, mask.bounds.x, mask.bounds.y + mask.bounds.height),
+    ]
+    let x0 = Infinity
+    let y0 = Infinity
+    let x1 = -Infinity
+    let y1 = -Infinity
+    for (const [x, y] of corners) {
+      if (x < x0) x0 = x
+      if (y < y0) y0 = y
+      if (x > x1) x1 = x
+      if (y > y1) y1 = y
+    }
+    let poly: number[] | null = null
+    if (mask.mode === 'stencil') {
+      poly = []
+      for (let i = 0; i + 1 < mask.positions.length; i += 2) {
+        const [sx, sy] = this.toScreen(frame, mask.positions[i]!, mask.positions[i + 1]!)
+        poly.push(sx, sy)
+      }
+    }
+    let alphaPage: TextureData | null = null
+    if (mask.mode === 'alpha' && mask.alpha !== undefined && assets !== null) {
+      alphaPage = assets.pages[mask.alpha.page] ?? null
+    }
+    const ctx: MaskCtx = { mask, rect: { x0, y0, x1, y1 }, poly, alphaPage }
+    this.maskCache.set(mask, ctx)
+    return ctx
+  }
+
+  /** 像素点（设备像素）的 mask 覆盖率 0..1；invert 作用于单层。 */
+  private maskCoverageAt(ctx: MaskCtx, px: number, py: number): number {
+    const mask = ctx.mask
+    let coverage = 0
+    if (mask.mode === 'scissor') {
+      const r = ctx.rect
+      coverage = px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1 ? 1 : 0
+    } else if (mask.mode === 'stencil') {
+      const poly = ctx.poly ?? []
+      const inside = pointInPolygon(poly, px, py)
+      if (mask.feather > 0) {
+        const d = distanceToPolygon(poly, px, py)
+        coverage = clampUnit(0.5 + (inside ? d : -d) / mask.feather)
+      } else {
+        coverage = inside ? 1 : 0
+      }
+    } else {
+      const page = ctx.alphaPage
+      const alpha = mask.alpha
+      if (page === null || alpha === undefined) {
+        coverage = 0
+      } else {
+        const r = ctx.rect
+        const u = r.x1 > r.x0 ? (px - r.x0) / (r.x1 - r.x0) : 0
+        const v = r.y1 > r.y0 ? (py - r.y0) / (r.y1 - r.y0) : 0
+        const m = alpha.uvMatrix
+        const up = m[0]! * u + m[2]! * v + m[4]!
+        const vp = m[1]! * u + m[3]! * v + m[5]!
+        const a = sampleTexture(page, up, vp, 'linear')[3]
+        coverage = mask.feather > 0 ? a / 255 : a >= 128 ? 1 : 0
+      }
+    }
+    return mask.invert ? 1 - coverage : coverage
   }
 
   private currentBlend: BlendMode = 'normal'
@@ -213,14 +408,43 @@ export class CpuBackend implements RenderBackend {
     this.stats.drawCalls = 0
     this.stats.packets = 0
     this.stats.uploadedVertices = 0
+    this.stats.maskTests = 0
+    this.stats.textureSamples = 0
     const ss = this.ss
     const ssW = this.width * ss
     const ssH = this.height * ss
+    const assets = frame.assets ?? this.assets
+    this.depthMode = frame.depthMode ?? 'none'
+    if (this.depthMode !== 'none') {
+      const size = ssW * ssH
+      if (this.depthBuffer === null || this.depthBuffer.length !== size) {
+        this.depthBuffer = new Float32Array(size)
+      }
+      this.depthBuffer.fill(1)
+    } else {
+      this.depthBuffer = null
+    }
+    this.maskCache.clear()
 
     for (const packet of frame.packets) {
       this.stats.packets += 1
       this.stats.drawCalls += 1
       this.currentBlend = packet.blend
+      this.material = assets?.materials.find((m) => m.id === packet.materialId) ?? null
+      this.page = this.material !== null && this.material.kind === 'sprite' && assets !== null
+        ? assets.pages[this.material.page] ?? null
+        : null
+      this.masks = []
+      if (frame.maskPaths !== undefined && frame.masks !== undefined && packet.maskPath >= 0) {
+        const chain = maskChain(packet.maskPath, frame.maskPaths)
+        if (!chain.error) {
+          for (const id of chain.ids) {
+            const mask = frame.masks.masks[id]
+            if (mask !== null && mask !== undefined) this.masks.push(this.maskCtxFor(mask, frame, assets))
+          }
+        }
+      }
+
       const vertexCount = Math.min(Math.floor(packet.uvs.length / 2), Math.floor(packet.positions.length / 2))
       if (vertexCount <= 0) continue
       this.stats.uploadedVertices += vertexCount
@@ -231,8 +455,14 @@ export class CpuBackend implements RenderBackend {
       for (let i = 0; i < vertexCount; i += 1) {
         const [x, y] = this.toScreen(frame, packet.positions[i * stride]!, packet.positions[i * stride + 1]!)
         const o = i * 4
+        const uv = i * 2
+        const z = packet.depth !== null
+          ? clampUnit(packet.depth[i] ?? 1)
+          : clampUnit(0.5 - packet.depthKey * 0.01)
         verts.push({
           x: x * ss, y: y * ss,
+          u: packet.uvs[uv] ?? 0, v: packet.uvs[uv + 1] ?? 0,
+          z,
           r: packet.colors[o]!, g: packet.colors[o + 1]!,
           b: packet.colors[o + 2]!, a: packet.colors[o + 3]!,
         })
@@ -292,6 +522,28 @@ const GL_UNSIGNED_BYTE = 0x1401
 const GL_UNSIGNED_INT = 0x1405
 const GL_TRIANGLES = 0x0004
 const GL_RGBA = 0x1908
+const GL_RGBA8 = 0x8058
+const GL_TEXTURE_2D = 0x0de1
+const GL_TEXTURE0 = 0x84c0
+const GL_TEXTURE1 = 0x84c1
+const GL_TEXTURE_MIN_FILTER = 0x2801
+const GL_TEXTURE_MAG_FILTER = 0x2800
+const GL_TEXTURE_WRAP_S = 0x2802
+const GL_TEXTURE_WRAP_T = 0x2803
+const GL_LINEAR = 0x2601
+const GL_NEAREST = 0x2600
+const GL_CLAMP_TO_EDGE = 0x812f
+const GL_SCISSOR_TEST = 0x0c11
+const GL_STENCIL_TEST = 0x0b90
+const GL_DEPTH_TEST = 0x0b71
+const GL_ALWAYS = 0x0207
+const GL_EQUAL = 0x0202
+const GL_NOTEQUAL = 0x0205
+const GL_LEQUAL = 0x0203
+const GL_KEEP = 0x1e00
+const GL_REPLACE = 0x1e01
+const GL_STENCIL_BUFFER_BIT = 0x0400
+const GL_DEPTH_BUFFER_BIT = 0x0100
 
 /** WebGL2 所需的最小接口；方法全部可选，便于注入 mock 并做能力降级。 */
 export interface WebGL2Like {
@@ -306,9 +558,32 @@ export interface WebGL2Like {
   getUniformLocation?(program: unknown, name: string): unknown
   uniformMatrix3fv?(location: unknown, transpose: boolean, value: ArrayLike<number>): void
   uniformMatrix4fv?(location: unknown, transpose: boolean, value: ArrayLike<number>): void
+  uniform1i?(location: unknown, value: number): void
+  uniform1f?(location: unknown, value: number): void
+  uniform2f?(location: unknown, x: number, y: number): void
   useProgram?(program: unknown): void
   drawElements?(mode: number, count: number, type: number, offset: number): void
   readPixels?(x: number, y: number, width: number, height: number, format: number, type: number, dst: Uint8Array): void
+  createTexture?(): unknown
+  deleteTexture?(texture: unknown): void
+  bindTexture?(target: number, texture: unknown): void
+  activeTexture?(texture: number): void
+  texImage2D?(
+    target: number, level: number, internalformat: number,
+    width: number, height: number, border: number,
+    format: number, type: number, pixels: ArrayBufferView | null,
+  ): void
+  texParameteri?(target: number, pname: number, param: number): void
+  scissor?(x: number, y: number, width: number, height: number): void
+  enable?(cap: number): void
+  disable?(cap: number): void
+  stencilFunc?(func: number, ref: number, mask: number): void
+  stencilOp?(fail: number, zfail: number, zpass: number): void
+  clearStencil?(s: number): void
+  colorMask?(r: boolean, g: boolean, b: boolean, a: boolean): void
+  depthFunc?(func: number): void
+  depthMask?(flag: boolean): void
+  clear?(mask: number): void
 }
 
 interface GLBuffers {
@@ -321,7 +596,11 @@ interface GLBuffers {
 /** 按 frame.packets 原始顺序逐包上传并 drawElements，绝不重排。 */
 export class WebGL2Backend implements RenderBackend {
   readonly kind = 'webgl2' as const
-  readonly stats: BackendStats = { drawCalls: 0, packets: 0, uploadedVertices: 0 }
+  readonly stats: BackendStats = {
+    drawCalls: 0, packets: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
+  }
+  /** 上下文恢复次数，供测试/诊断。 */
+  restoreCount = 0
 
   private readonly gl: WebGL2Like
   private buffers: GLBuffers | null = null
@@ -331,6 +610,9 @@ export class WebGL2Backend implements RenderBackend {
   private height = 1
   private pixels: Uint8ClampedArray = new Uint8ClampedArray(4)
   private disposed = false
+  private assets: RenderAssets | null = null
+  private textures: unknown[] = []
+  private whiteTexture: unknown = null
 
   constructor(gl: WebGL2Like, program: object = {}) {
     if (gl === null || typeof gl !== 'object') throw new Error('WebGL2Backend: 缺少 gl 上下文')
@@ -345,6 +627,72 @@ export class WebGL2Backend implements RenderBackend {
         indices: gl.createBuffer(),
       }
     }
+  }
+
+  /** 上传页纹理与 1x1 白纹理；只在 prepare/热更新时调用，draw 内绝不上传。 */
+  prepare(assets: RenderAssets): void {
+    this.assets = assets
+    this.uploadAssets(assets)
+  }
+
+  private uploadAssets(assets: RenderAssets): void {
+    const gl = this.gl
+    this.textures = []
+    this.whiteTexture = null
+    if (typeof gl.createTexture !== 'function') return
+    const filterOf = (index: number): 'linear' | 'nearest' => {
+      const material = assets.materials.find((m) => m.kind === 'sprite' && m.page === index)
+      return material?.filter ?? 'linear'
+    }
+    for (let i = 0; i < assets.pages.length; i += 1) {
+      const page = assets.pages[i]!
+      const texture = gl.createTexture()
+      gl.activeTexture?.(GL_TEXTURE0 + i)
+      gl.bindTexture?.(GL_TEXTURE_2D, texture)
+      gl.texImage2D?.(
+        GL_TEXTURE_2D, 0, GL_RGBA8, page.width, page.height, 0,
+        GL_RGBA, GL_UNSIGNED_BYTE, page.data,
+      )
+      const nearest = filterOf(i) === 'nearest'
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+      this.textures.push(texture)
+    }
+    // flat 材质绑定 1x1 白纹理，配合 uUseTexture=0 走纯顶点色。
+    const white = gl.createTexture()
+    gl.activeTexture?.(GL_TEXTURE0)
+    gl.bindTexture?.(GL_TEXTURE_2D, white)
+    gl.texImage2D?.(
+      GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0,
+      GL_RGBA, GL_UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]),
+    )
+    gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    this.whiteTexture = white
+  }
+
+  /** 上下文恢复：重建 buffer/texture/Program 状态，并记录次数。 */
+  restore(): void {
+    this.disposed = false
+    const gl = this.gl
+    if (typeof gl.createBuffer === 'function') {
+      this.buffers = {
+        positions: gl.createBuffer(),
+        uvs: gl.createBuffer(),
+        colors: gl.createBuffer(),
+        indices: gl.createBuffer(),
+      }
+    } else {
+      this.buffers = null
+    }
+    this.capacities.clear()
+    this.gl.useProgram?.(this.program)
+    if (this.assets !== null) this.uploadAssets(this.assets)
+    this.restoreCount += 1
   }
 
   resize(v: Viewport): void {
@@ -388,6 +736,126 @@ export class WebGL2Backend implements RenderBackend {
     }
   }
 
+  private setUniform1i(name: string, value: number): void {
+    const gl = this.gl
+    if (gl.getUniformLocation === undefined || gl.uniform1i === undefined) return
+    const loc = gl.getUniformLocation(this.program, name)
+    if (loc === null || loc === undefined) return
+    gl.uniform1i(loc, value)
+  }
+
+  /** world 包围盒 → 设备像素矩形；无 viewProjection 时按像素坐标直通。 */
+  private projectBounds(frame: RenderFrame, bounds: RenderMask['bounds']): { x: number; y: number; width: number; height: number } {
+    const corners: Array<[number, number]> = [
+      this.toScreen(frame, bounds.x, bounds.y),
+      this.toScreen(frame, bounds.x + bounds.width, bounds.y),
+      this.toScreen(frame, bounds.x + bounds.width, bounds.y + bounds.height),
+      this.toScreen(frame, bounds.x, bounds.y + bounds.height),
+    ]
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const [x, y] of corners) {
+      minX = Math.min(minX, x)
+      minY = Math.min(minY, y)
+      maxX = Math.max(maxX, x)
+      maxY = Math.max(maxY, y)
+    }
+    const x = Math.floor(minX)
+    const y = Math.floor(minY)
+    return { x, y, width: Math.max(0, Math.ceil(maxX) - x), height: Math.max(0, Math.ceil(maxY) - y) }
+  }
+
+  private toScreen(frame: RenderFrame, x: number, y: number): [number, number] {
+    const m = frame.viewProjection
+    if (m === undefined) return [x, y]
+    if (m.length >= 16) {
+      const cx = m[0]! * x + m[4]! * y + m[12]!
+      const cy = m[1]! * x + m[5]! * y + m[13]!
+      const cw = m[3]! * x + m[7]! * y + m[15]!
+      const w = Math.abs(cw) < EPS ? EPS : cw
+      return [(cx / w * 0.5 + 0.5) * frame.width, (0.5 - cy / w * 0.5) * frame.height]
+    }
+    if (m.length >= 9) {
+      const cx = m[0]! * x + m[3]! * y + m[6]!
+      const cy = m[1]! * x + m[4]! * y + m[7]!
+      const cw = m[2]! * x + m[5]! * y + m[8]!
+      const w = Math.abs(cw) < EPS ? EPS : cw
+      return [cx / w, cy / w]
+    }
+    return [x, y]
+  }
+
+  /** 应用 packet 的 mask 链；返回需要清理的状态。 */
+  private applyMasks(
+    frame: RenderFrame,
+    packetMaskPath: number,
+    assets: RenderAssets | null,
+  ): { scissor: boolean; stencil: boolean } {
+    const state = { scissor: false, stencil: false }
+    if (frame.maskPaths === undefined || frame.masks === undefined || packetMaskPath < 0) return state
+    const chain = maskChain(packetMaskPath, frame.maskPaths)
+    if (chain.error) return state
+
+    // 先合并所有 scissor 为单个矩形（取交集）。
+    let rect: { x: number; y: number; width: number; height: number } | null = null
+    for (const id of chain.ids) {
+      const mask = frame.masks.masks[id]
+      if (mask === null || mask === undefined) continue
+      this.stats.maskTests += 1
+      if (mask.mode !== 'scissor') continue
+      const r = this.projectBounds(frame, mask.bounds)
+      if (rect === null) rect = r
+      else {
+        const x0 = Math.max(rect.x, r.x)
+        const y0 = Math.max(rect.y, r.y)
+        const x1 = Math.min(rect.x + rect.width, r.x + r.width)
+        const y1 = Math.min(rect.y + rect.height, r.y + r.height)
+        rect = { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) }
+      }
+    }
+    if (rect !== null) {
+      this.gl.enable?.(GL_SCISSOR_TEST)
+      this.gl.scissor?.(rect.x, rect.y, rect.width, rect.height)
+      state.scissor = true
+    }
+
+    for (const id of chain.ids) {
+      const mask = frame.masks.masks[id]
+      if (mask === null || mask === undefined) continue
+      if (mask.mode === 'stencil') {
+        const gl = this.gl
+        gl.enable?.(GL_STENCIL_TEST)
+        gl.colorMask?.(false, false, false, false)
+        gl.clearStencil?.(0)
+        gl.clear?.(GL_STENCIL_BUFFER_BIT)
+        gl.stencilFunc?.(GL_ALWAYS, 1, 0xff)
+        gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_REPLACE)
+        gl.drawElements?.(GL_TRIANGLES, mask.indices.length, GL_UNSIGNED_INT, 0)
+        gl.colorMask?.(true, true, true, true)
+        gl.stencilFunc?.(mask.invert ? GL_NOTEQUAL : GL_EQUAL, 1, 0xff)
+        gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_KEEP)
+        state.stencil = true
+      } else if (mask.mode === 'alpha' && mask.alpha !== undefined) {
+        const texture = this.textures[mask.alpha.page]
+        if (texture !== undefined) {
+          this.gl.activeTexture?.(GL_TEXTURE1)
+          this.gl.bindTexture?.(GL_TEXTURE_2D, texture)
+          this.setUniform1i('uMask', 1)
+        }
+      }
+    }
+    return state
+  }
+
+  private resetMaskState(state: { scissor: boolean; stencil: boolean }): void {
+    if (state.scissor) this.gl.disable?.(GL_SCISSOR_TEST)
+    if (state.stencil) this.gl.disable?.(GL_STENCIL_TEST)
+    this.gl.colorMask?.(true, true, true, true)
+    this.gl.activeTexture?.(GL_TEXTURE0)
+  }
+
   draw(frame: RenderFrame): void {
     if (this.disposed) throw new Error('WebGL2Backend: 已 dispose，不能继续 draw')
     if (frame.width !== this.width || frame.height !== this.height) {
@@ -396,12 +864,46 @@ export class WebGL2Backend implements RenderBackend {
     this.stats.drawCalls = 0
     this.stats.packets = 0
     this.stats.uploadedVertices = 0
-    this.gl.useProgram?.(this.program)
+    this.stats.maskTests = 0
+    this.stats.textureSamples = 0
+    const gl = this.gl
+    gl.useProgram?.(this.program)
     this.setViewProjection(frame.viewProjection)
 
+    const depthMode = frame.depthMode ?? 'none'
+    if (depthMode === 'none') {
+      gl.disable?.(GL_DEPTH_TEST)
+    } else {
+      gl.enable?.(GL_DEPTH_TEST)
+      gl.depthFunc?.(GL_LEQUAL)
+      gl.depthMask?.(depthMode === 'write')
+      gl.clear?.(GL_DEPTH_BUFFER_BIT)
+    }
+
+    const assets = frame.assets ?? this.assets
     for (const packet of frame.packets) {
       const vertexCount = Math.floor(packet.uvs.length / 2)
       const stride = vertexCount > 0 ? packet.positions.length / vertexCount : 2
+      const material = assets?.materials.find((m) => m.id === packet.materialId) ?? null
+      const texture = material !== null && material.kind === 'sprite'
+        ? this.textures[material.page]
+        : undefined
+
+      if (texture !== undefined) {
+        gl.activeTexture?.(GL_TEXTURE0)
+        gl.bindTexture?.(GL_TEXTURE_2D, texture)
+        this.setUniform1i('uAtlas', 0)
+        this.setUniform1i('uUseTexture', 1)
+      } else {
+        if (this.whiteTexture !== null) {
+          gl.activeTexture?.(GL_TEXTURE0)
+          gl.bindTexture?.(GL_TEXTURE_2D, this.whiteTexture)
+        }
+        this.setUniform1i('uUseTexture', 0)
+      }
+
+      const maskState = this.applyMasks(frame, packet.maskPath, assets)
+
       this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, packet.positions)
       this.setAttrib('aPosition', Number.isFinite(stride) ? stride : 2, GL_FLOAT, false)
       this.upload(GL_ARRAY_BUFFER, this.buffers?.uvs, packet.uvs)
@@ -409,10 +911,17 @@ export class WebGL2Backend implements RenderBackend {
       this.upload(GL_ARRAY_BUFFER, this.buffers?.colors, packet.colors)
       this.setAttrib('aColor', 4, GL_UNSIGNED_BYTE, true)
       this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, packet.indices)
-      this.gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0)
+      gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0)
+      this.resetMaskState(maskState)
+
       this.stats.drawCalls += 1
       this.stats.packets += 1
       this.stats.uploadedVertices += vertexCount
+    }
+
+    if (depthMode !== 'none') {
+      gl.depthMask?.(false)
+      gl.disable?.(GL_DEPTH_TEST)
     }
   }
 
@@ -447,6 +956,12 @@ export class WebGL2Backend implements RenderBackend {
       gl.deleteBuffer(this.buffers.colors)
       gl.deleteBuffer(this.buffers.indices)
     }
+    if (typeof gl.deleteTexture === 'function') {
+      for (const texture of this.textures) gl.deleteTexture(texture)
+      if (this.whiteTexture !== null) gl.deleteTexture(this.whiteTexture)
+    }
+    this.textures = []
+    this.whiteTexture = null
     this.buffers = null
     this.capacities.clear()
   }
