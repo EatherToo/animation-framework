@@ -1,3 +1,4 @@
+import { triangulatePolygon } from '@/render/render'
 import { describe, expect, it } from '@jest/globals'
 import { CpuBackend, WebGL2Backend } from '@/backend/backend'
 import {
@@ -370,5 +371,21 @@ describe('M10 mask: WebGL2 scissor / stencil 与上下文恢复', () => {
 
     backend.draw({ packets: [packet(8, 8)], width: 8, height: 8, assets })
     expect(backend.stats.drawCalls).toBe(1)
+  })
+})
+
+describe('polygon triangulation', () => {
+  it('triangulates a concave polygon without losing area', () => {
+    const points = new Float32Array([0, 0, 4, 0, 4, 4, 2, 2, 0, 4])
+    const indices = triangulatePolygon(points)
+    expect(indices.length).toBeGreaterThanOrEqual(9)
+    let area = 0
+    for (let i = 0; i + 2 < indices.length; i += 3) {
+      const ax = points[indices[i]! * 2]!, ay = points[indices[i]! * 2 + 1]!
+      const bx = points[indices[i + 1]! * 2]!, by = points[indices[i + 1]! * 2 + 1]!
+      const cx = points[indices[i + 2]! * 2]!, cy = points[indices[i + 2]! * 2 + 1]!
+      area += Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / 2
+    }
+    expect(area).toBeCloseTo(12, 6)
   })
 })

@@ -32,6 +32,8 @@ export interface RenderBackend {
   draw(frame: RenderFrame): void
   readPixels(out?: Uint8ClampedArray): Uint8ClampedArray
   resize(v: Viewport): void
+  /** 上下文恢复后重建 GPU 资源；CPU 后端可不实现。 */
+  restore?(): void
   dispose(): void
 }
 

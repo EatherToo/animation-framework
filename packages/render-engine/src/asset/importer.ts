@@ -560,6 +560,10 @@ function buildAttachment(
   const type = kindHint === 'spine'
     ? (typeof rawObj.type === 'string' ? rawObj.type : 'region')
     : (typeof rawObj.type === 'string' && rawObj.type === 'mesh' ? 'mesh' : 'region')
+  // sequence 是 Spine 4.3 的帧序列附件；v1 不播放序列，降级为 region 并显式告警。
+  if (kindHint === 'spine' && (type === 'sequence' || rawObj.sequence !== undefined)) {
+    add(ctx, 'warning', 'W_SEQUENCE', path, 'sequence 附件不支持，按 region 降级', 'fallback', type)
+  }
   const atlasKey = atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)
   const region = { atlasKey, uvs: null as Float32Array | null }
   if (type === 'mesh' || type === 'weightedmesh') {
@@ -950,7 +954,7 @@ function readSpineConstraints(
   }
 
   for (const raw of arr(doc.physics)) {
-    add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', 'physics', 'physics 约束读入但不求解', 'keep', raw)
+    add(ctx, 'warning', 'W_PHYSICS_SKIPPED', 'physics', 'physics 约束读入但不求解（二级物理走独立模块）', 'keep', raw)
   }
   return out
 }
@@ -1574,6 +1578,9 @@ export function importSpine(
       bone = skeleton.roots[0] ?? 0
     }
     const defaultAttachment = typeof o.attachment === 'string' && o.attachment.length > 0 ? o.attachment : null
+    if (o.dark !== undefined && o.dark !== null) {
+      add(ctx, 'warning', 'W_TINT_DOWNGRADE', `slots[${i}].dark`, 'two-color tint 不支持，降级为 light tint', 'fallback', o.dark)
+    }
     return {
       id: slotNames[i]!,
       bone,

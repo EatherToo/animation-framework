@@ -140,6 +140,38 @@ export function projectPoint(
   return { x, y, viewZ, depthKey: -viewZ }
 }
 
+/** 设备像素 + 给定 viewZ → 世界点；与 projectPoint 互逆（容差 <0.5px）。 */
+export function unprojectPoint(
+  camera: Camera,
+  screenX: number,
+  screenY: number,
+  viewZ: number,
+): [number, number, number] {
+  const basis = cameraBasis(camera)
+  const w = Math.max(1, finite(camera.viewport.width, 1))
+  const h = Math.max(1, finite(camera.viewport.height, 1))
+  let viewX: number
+  let viewY: number
+  if (camera.kind === 'perspective') {
+    const safeZ = Math.abs(viewZ) < EPS ? EPS : viewZ
+    const aspect = w / h
+    const f = finite(camera.distance, 1) / Math.max(EPS, finite(camera.orthoHeight, 1) / 2)
+    const ndcX = (screenX / w) * 2 - 1
+    const ndcY = 1 - (screenY / h) * 2
+    viewX = (ndcX * safeZ * aspect) / f
+    viewY = (ndcY * safeZ) / f
+  } else {
+    const ppm = ppmOf(camera)
+    viewX = (screenX - w / 2) / ppm
+    viewY = (h / 2 - screenY) / ppm
+  }
+  return [
+    basis.eye[0]! + basis.right[0]! * viewX + basis.up[0]! * viewY + basis.forward[0]! * viewZ,
+    basis.eye[1]! + basis.right[1]! * viewX + basis.up[1]! * viewY + basis.forward[1]! * viewZ,
+    basis.eye[2]! + basis.right[2]! * viewX + basis.up[2]! * viewY + basis.forward[2]! * viewZ,
+  ]
+}
+
 /** 3x3 列主序、设备像素空间的 2D 视图矩阵；忽略 z（2D 核心不做透视除法）。 */
 export function viewProjection2D(camera: Camera): Float32Array {
   const basis = cameraBasis(camera)

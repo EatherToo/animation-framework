@@ -17,8 +17,10 @@ import { WORLD_STRIDE } from '../core/math'
 import {
   buildMaskSet,
   buildMeshPacket,
+  batchPackets,
   buildRegionPacket,
   sortPackets,
+  triangulatePolygon,
   type MaterialDef,
   type MaskPathNode,
   type RenderAssets,
@@ -331,13 +333,7 @@ function buildRuntimeMask(
   } else {
     positions.set(def.polygon)
   }
-  const count = Math.max(0, positions.length / 2)
-  const indices = new Uint32Array(Math.max(0, (count - 2) * 3))
-  for (let i = 1, c = 0; i + 1 < count; i += 1) {
-    indices[c++] = 0
-    indices[c++] = i
-    indices[c++] = i + 1
-  }
+  const indices = triangulatePolygon(positions)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (let i = 0; i + 1 < positions.length; i += 2) {
     minX = Math.min(minX, positions[i]!)
@@ -408,6 +404,9 @@ export class Engine {
   private preparedAssets: RenderAssets | undefined
   private maskLibrary: MaskLibrary | undefined
   private camera: Camera = DEFAULT_CAMERA
+  private readonly maxBones: number
+  private readonly maxTexturePages: number
+  private readonly maxInfluences: number
 
   constructor(
     config: EngineConfig = {},
@@ -421,6 +420,14 @@ export class Engine {
       throw new Error('E_CONFIG')
     }
 
+    this.maxBones = config.maxBones ?? 512
+    this.maxTexturePages = config.maxTexturePages ?? 4
+    this.maxInfluences = config.maxInfluences ?? 4
+    if (!Number.isInteger(this.maxBones) || this.maxBones < 1 ||
+        !Number.isInteger(this.maxTexturePages) || this.maxTexturePages < 1 || this.maxTexturePages > 4 ||
+        !Number.isInteger(this.maxInfluences) || this.maxInfluences < 1 || this.maxInfluences > 4) {
+      throw new Error('E_CONFIG')
+    }
     const factory = deps?.backendFactory ?? defaultBackendFactory
     this.backend = createBackend(kind, factory)
     this.viewport = viewportOf(pixelRatio)
@@ -485,6 +492,23 @@ export class Engine {
     const previous = this._phase
     this._phase = 'loading'
     try {
+      if (asset.skeleton.count > this.maxBones) throw new Error('E_CONFIG: maxBones')
+      if (asset.atlas !== undefined && asset.atlas.pages.length > this.maxTexturePages) {
+        throw new Error('E_CONFIG: maxTexturePages')
+      }
+      for (const skin of asset.skins.values()) {
+        for (const attachment of skin.attachments.values()) {
+          if (attachment.kind === 'weightedMesh') {
+            let max = 0
+            for (let i = 0; i < attachment.mesh.weights.length; i += 4) {
+              let count = 0
+              for (let j = 0; j < 4; j += 1) if ((attachment.mesh.weights[i + j] ?? 0) > 0) count += 1
+              if (count > max) max = count
+            }
+            if (max > this.maxInfluences) throw new Error('E_CONFIG: maxInfluences')
+          }
+        }
+      }
       const skins: ReadonlyMap<string, SkinData> = asset.skins.size > 0
         ? asset.skins
         : new Map<string, SkinData>([['default', { id: 'default', attachments: new Map() }]])
@@ -544,7 +568,8 @@ export class Engine {
     const slotSet = this.ownedSlotSet
     if (pose === null || slotSet === null || this.asset === null) throw new Error('E_NO_ASSET')
     if (this._phase === 'paused') return // Paused：不推进时间
-    if (this._phase !== 'ready' && this._phase !== 'running') throw new Error('E_STATE')
+    if (this._phase === 'contextLost') throw new Error('E_STATE')
+    if (this._phase !== 'ready' && this._phase !== 'running' && this._phase !== 'restored') throw new Error('E_STATE')
     if (!Number.isFinite(dt) || dt < 0) throw new Error('E_CONFIG')
 
     this.host.beforeUpdate(dt)
@@ -557,12 +582,31 @@ export class Engine {
     this.host.afterUpdate(dt)
   }
 
+  /** 模拟 WebGL 上下文丢失：暂停绘制，保留实例状态。 */
+  contextLost(): void {
+    this.assertLive()
+    if (this._phase === 'created' || this._phase === 'loading') throw new Error('E_STATE')
+    this._phase = 'contextLost'
+  }
+
+  /** 上下文恢复：重建后端资源，后续 render 重新可用。 */
+  contextRestored(): void {
+    this.assertLive()
+    if (this._phase !== 'contextLost') throw new Error('E_STATE')
+    this.backend.restore?.()
+    this.preparedAssets = undefined
+    this._phase = 'restored'
+  }
+
   render(): RenderFrame {
     this.assertLive()
     const pose = this.ownedPose
     const slotSet = this.ownedSlotSet
     if (pose === null || slotSet === null || this.asset === null || this.inverseBind === null) {
       throw new Error('E_NO_ASSET')
+    }
+    if (this._phase === 'contextLost' || this._phase === 'created' || this._phase === 'loading') {
+      throw new Error('E_STATE')
     }
 
     const resolved = this.maskLibrary !== undefined
@@ -590,7 +634,7 @@ export class Engine {
     }
 
     const frame: RenderFrame = {
-      packets: sortPackets(packets),
+      packets: batchPackets(sortPackets(packets)),
       width: this.viewport.width,
       height: this.viewport.height,
       viewProjection: this.viewProjection,

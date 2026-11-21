@@ -332,6 +332,89 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
   return Object.freeze(atlas)
 }
 
+/** 打包输入：只关心可见尺寸；trim/旋转由调用方先处理。 */
+export type AtlasPackerRegion = { readonly id: string; readonly width: number; readonly height: number }
+
+export type AtlasPackOptions = {
+  readonly pageSize?: number
+  readonly padding?: number
+  readonly bleed?: number
+  readonly maxPages?: number
+}
+
+/**
+ * 确定性 shelf 打包：按高度降序、id 升序放置；每页从上到下分行。
+ * 只生成 rotate=0 region；越界/超页直接抛错，不静默丢 region。
+ */
+export function packAtlas(
+  regions: readonly AtlasPackerRegion[],
+  options: AtlasPackOptions = {},
+): AtlasData {
+  const pageSize = Math.max(8, Math.floor(options.pageSize ?? 1024))
+  const padding = Math.max(0, Math.floor(options.padding ?? 4))
+  const bleed = Math.max(0, Math.floor(options.bleed ?? 2))
+  const maxPages = Math.max(1, Math.min(MAX_PAGES, Math.floor(options.maxPages ?? MAX_PAGES)))
+  const ordered = regions.slice().sort((a, b) => b.height - a.height || b.width - a.width || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const packed = new Map<string, AtlasRegion>()
+  let page = 0
+  let x = padding
+  let y = padding
+  let shelfHeight = 0
+  for (const input of ordered) {
+    if (!input.id || !(input.width > 0) || !(input.height > 0)) fail('E_ATLAS_REGION', `region ${input.id}`)
+    const w = Math.ceil(input.width)
+    const h = Math.ceil(input.height)
+    if (w + padding * 2 > pageSize || h + padding * 2 > pageSize) fail('E_ATLAS_FIT', `region ${input.id} 超过单页`)
+    if (x + w + padding > pageSize) {
+      x = padding
+      y += shelfHeight + padding
+      shelfHeight = 0
+    }
+    if (y + h + padding > pageSize) {
+      page += 1
+      if (page >= maxPages) fail('E_ATLAS_PAGES', `region ${input.id} 无法放入 ${maxPages} 页`)
+      x = padding
+      y = padding
+      shelfHeight = 0
+    }
+    const u0 = (x + 0.5) / pageSize
+    const v0 = (y + 0.5) / pageSize
+    const u1 = (x + w - 0.5) / pageSize
+    const v1 = (y + h - 0.5) / pageSize
+    packed.set(input.id, {
+      id: input.id, page, x, y, width: w, height: h,
+      uvMatrix: Float32Array.from([u1 - u0, 0, 0, v1 - v0, u0, v0]),
+      trim: { offsetX: 0, offsetY: 0, sourceWidth: w, sourceHeight: h },
+      maxMip: 0,
+    })
+    x += w + padding
+    shelfHeight = Math.max(shelfHeight, h)
+  }
+  const pages: AtlasPageDef[] = Array.from({ length: page + 1 }, (_, index) => ({
+    index, width: pageSize, height: pageSize,
+  }))
+  const signature = [...packed.values()]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((r) => `${r.id}@${r.page}:${r.x},${r.y},${r.width},${r.height}`)
+    .join('|')
+  return Object.freeze({
+    format: 'dsh-2d-atlas', version: 1, hash: fnv1a(signature),
+    pages: Object.freeze(pages), regions: packed, pma: true as const,
+    colorSpace: 'srgb' as const, padding, bleed, source: 'procedural' as const,
+  })
+}
+
+/** 每个图集页一个 sprite 材质；flat 材质固定 id=0。 */
+export function buildMaterialLibrary(atlas: AtlasData): import('../render/render').MaterialDef[] {
+  const materials: import('../render/render').MaterialDef[] = [
+    { id: 0, kind: 'flat', page: -1, filter: 'linear' },
+  ]
+  atlas.pages.forEach((_, index) => {
+    materials.push({ id: index + 1, kind: 'sprite', page: index, filter: 'linear' })
+  })
+  return materials
+}
+
 /** 按 id 取 region 的页号/矩形/页尺寸/UV 矩阵；缺失返回 null。 */
 export function atlasRegionRef(
   atlas: AtlasData,

@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals'
 import {
   atlasRegionUv,
   batchKey,
+  batchPackets,
   buildMeshPacket,
   buildRegionPacket,
   outlineEdges,
@@ -212,5 +213,24 @@ describe('M4 render: 描边边表', () => {
     expect(outlineEdges(new Uint32Array([0, 1, 2]))).toEqual([
       [0, 1], [0, 2], [1, 2],
     ])
+  })
+})
+
+describe('packet batching', () => {
+  it('merges adjacent packets with the same material/blend/mask', () => {
+    const a = buildRegionPacket({ id: 1, positions: new Float32Array([0, 0, 1, 0, 1, 1]), color: [1, 1, 1, 1], materialId: 1, order: 0, depthKey: 0, seq: 0 })
+    const b = buildRegionPacket({ id: 2, positions: new Float32Array([2, 0, 3, 0, 3, 1]), color: [1, 1, 1, 1], materialId: 1, order: 1, depthKey: 0, seq: 1 })
+    const merged = batchPackets([a, b])
+    expect(merged).toHaveLength(1)
+    expect(merged[0]!.positions.length).toBe(12)
+    expect(merged[0]!.indices.length).toBe(6)
+    expect([...merged[0]!.indices]).toEqual([0, 1, 2, 3, 4, 5])
+  })
+
+  it('does not merge across material or mask boundaries', () => {
+    const a = buildRegionPacket({ id: 1, positions: new Float32Array([0, 0, 1, 0, 1, 1]), color: [1, 1, 1, 1], materialId: 1, order: 0, depthKey: 0, seq: 0 })
+    const b = buildRegionPacket({ id: 2, positions: new Float32Array([2, 0, 3, 0, 3, 1]), color: [1, 1, 1, 1], materialId: 2, order: 1, depthKey: 0, seq: 1 })
+    const c = buildRegionPacket({ id: 3, positions: new Float32Array([4, 0, 5, 0, 5, 1]), color: [1, 1, 1, 1], materialId: 1, order: 2, depthKey: 0, seq: 2, maskPath: 1 })
+    expect(batchPackets([a, b, c])).toHaveLength(3)
   })
 })

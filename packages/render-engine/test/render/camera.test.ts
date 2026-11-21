@@ -5,6 +5,7 @@ import {
   depthKeyFor,
   FIXED_YAW_DEGREES,
   projectPoint,
+  unprojectPoint,
   viewProjection2D,
   type Camera,
 } from '@/render/camera'
@@ -142,5 +143,20 @@ describe('M4 camera: 屏幕映射与深度', () => {
     const center = projectPoint(perspective, [0, 0, 0])
     close(center.x, 8)
     close(center.y, 8)
+  })
+})
+
+describe('camera unproject', () => {
+  it('round-trips ortho and perspective points within 0.5 px', () => {
+    const ortho = { ...DEFAULT_CAMERA, kind: 'ortho' as const, yaw: 0.4, pitch: 0.3, target: [0, 1, 0] as const, distance: 5 }
+    const persp = { ...ortho, kind: 'perspective' as const }
+    for (const camera of [ortho, persp]) {
+      const point: [number, number, number] = [0.3, 1.2, 0.4]
+      const screen = projectPoint(camera, point)
+      const back = unprojectPoint(camera, screen.x, screen.y, screen.viewZ)
+      const again = projectPoint(camera, back)
+      expect(Math.abs(again.x - screen.x)).toBeLessThan(0.5)
+      expect(Math.abs(again.y - screen.y)).toBeLessThan(0.5)
+    }
   })
 })

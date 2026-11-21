@@ -271,6 +271,64 @@ export function sortPackets(packets: readonly RenderPacket[]): RenderPacket[] {
   return decorated.map((entry) => entry.packet)
 }
 
+/**
+ * 相邻合批：同材质/混合/mask/深度键/索引宽度的连续 packet 合并成一个，
+ * 减少 draw call；不改排序语义。跨 material/depthKey 绝不合并。
+ */
+export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
+  const out: RenderPacket[] = []
+  let current: RenderPacket | null = null
+  let positions: number[] = []
+  let uvs: number[] = []
+  let colors: number[] = []
+  let indices: number[] = []
+  let depths: number[] | null = []
+  let vertexCount = 0
+  let key = ''
+  const flush = (): void => {
+    if (current === null) return
+    out.push({
+      ...current,
+      positions: Float32Array.from(positions),
+      uvs: Float32Array.from(uvs),
+      colors: Uint8Array.from(colors),
+      indices: current.indices instanceof Uint32Array ? Uint32Array.from(indices) : Uint16Array.from(indices),
+      depth: depths === null ? null : Float32Array.from(depths),
+    })
+    current = null
+    positions = []; uvs = []; colors = []; indices = []; depths = []; vertexCount = 0; key = ''
+  }
+  for (const packet of packets) {
+    const indexType = packet.indices instanceof Uint32Array ? 32 : 16
+    const nextKey = `${batchKey(packet)}|${packet.maskPath}|${packet.depthKey}`
+    const count = Math.floor(packet.positions.length / 2)
+    const canMerge = current !== null && nextKey === key && vertexCount + count <= 65535
+    if (!canMerge) {
+      flush()
+      current = packet
+      key = nextKey
+      vertexCount = count
+      positions = [...packet.positions]
+      uvs = [...packet.uvs]
+      colors = [...packet.colors]
+      indices = [...packet.indices]
+      depths = packet.depth === null ? null : [...packet.depth]
+      continue
+    }
+    const base = vertexCount
+    for (const value of packet.positions) positions.push(value)
+    for (const value of packet.uvs) uvs.push(value)
+    for (const value of packet.colors) colors.push(value)
+    for (const value of packet.indices) indices.push(value + base)
+    if (depths === null || packet.depth === null) depths = null
+    else for (const value of packet.depth) depths.push(value)
+    vertexCount += count
+    void indexType
+  }
+  flush()
+  return out
+}
+
 /** 合批键：材质 / 混合 / mask / 索引宽度 / packet 种类。 */
 export function batchKey(p: RenderPacket): string {
   const indexType = p.indices instanceof Uint32Array ? 32 : 16
@@ -291,6 +349,59 @@ interface EdgeRecord {
   readonly a: number
   readonly b: number
   count: number
+}
+
+/**
+ * 简单多边形耳切三角化（支持凹多边形）；输出顶点索引，逆时针。
+ * 退化/自交输入会尽量输出合法耳，无法继续时退回扇形，绝不返回 NaN 索引。
+ */
+export function triangulatePolygon(points: Float32Array): Uint32Array {
+  const n = Math.floor(points.length / 2)
+  if (n < 3) return new Uint32Array(0)
+  const order: number[] = Array.from({ length: n }, (_, i) => i)
+  let signed = 0
+  for (let i = 0; i < n; i += 1) {
+    const j = (i + 1) % n
+    signed += points[i * 2]! * points[j * 2 + 1]! - points[j * 2]! * points[i * 2 + 1]!
+  }
+  if (signed < 0) order.reverse()
+  const out: number[] = []
+  const cross = (a: number, b: number, c: number): number =>
+    (points[b * 2]! - points[a * 2]!) * (points[c * 2 + 1]! - points[a * 2 + 1]!) -
+    (points[b * 2 + 1]! - points[a * 2 + 1]!) * (points[c * 2]! - points[a * 2]!)
+  const inside = (a: number, b: number, c: number, p: number): boolean => {
+    const d1 = cross(a, b, p)
+    const d2 = cross(b, c, p)
+    const d3 = cross(c, a, p)
+    return (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0)
+  }
+  let guard = 0
+  while (order.length > 3 && guard < n * n) {
+    guard += 1
+    let clipped = false
+    for (let i = 0; i < order.length; i += 1) {
+      const prev = order[(i + order.length - 1) % order.length]!
+      const curr = order[i]!
+      const next = order[(i + 1) % order.length]!
+      if (cross(prev, curr, next) <= 1e-12) continue
+      let blocked = false
+      for (const other of order) {
+        if (other === prev || other === curr || other === next) continue
+        if (inside(prev, curr, next, other)) { blocked = true; break }
+      }
+      if (blocked) continue
+      out.push(prev, curr, next)
+      order.splice(i, 1)
+      clipped = true
+      break
+    }
+    if (!clipped) break
+  }
+  if (order.length === 3) out.push(order[0]!, order[1]!, order[2]!)
+  else if (order.length > 3) {
+    for (let i = 1; i + 1 < order.length; i += 1) out.push(order[0]!, order[i]!, order[i + 1]!)
+  }
+  return Uint32Array.from(out)
 }
 
 /** 三角网格的剪影边：共享边去重后只保留单三角形使用的边（内部边不描）。 */

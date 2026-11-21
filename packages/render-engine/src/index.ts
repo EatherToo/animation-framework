@@ -18,8 +18,8 @@ export type {
 } from './render/render'
 export {
   toPma, atlasRegionUv, buildRegionPacket, buildMeshPacket,
-  sortPackets, batchKey, validateAtlasPages, validateMaskPath, outlineEdges,
-  sampleTexture, validateAssets, maskChain, validateMaskPaths, buildMaskSet,
+  sortPackets, batchKey, batchPackets, validateAtlasPages, validateMaskPath, outlineEdges,
+  sampleTexture, validateAssets, maskChain, validateMaskPaths, buildMaskSet, triangulatePolygon,
 } from './render/render'
 export * from './backend/backend'
 export * from './render/camera'
