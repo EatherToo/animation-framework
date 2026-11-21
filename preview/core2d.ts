@@ -7,6 +7,7 @@ import {
   CH_X,
   CH_Y,
   addRotation,
+  buildMaskSet,
   buildRegionPacket,
   createHumanoid,
   createPose,
@@ -24,10 +25,14 @@ import {
   viewProjection2D,
   type AnimationClip,
   type Attachment,
+  type AtlasData,
+  type AtlasRegion,
   type Camera,
   type CompiledSkeleton,
   type Pose,
+  type RenderAssets,
   type RenderFrame,
+  type RenderMask,
   type RenderPacket,
   type RGBA,
   type ScalarKey,
@@ -36,6 +41,7 @@ import {
   type SlotSet,
   type Track,
 } from '@animation-framework/render-engine'
+import { bodyMaskPolygon, createProceduralAtlas, partColorFor } from './procedural-atlas'
 
 export type PoseKind = 'tpose' | 'walk' | 'raise'
 export const SLIDER_BONES = ['upperArmR', 'lowerArmR', 'upperArmL', 'thighR', 'thighL'] as const
@@ -54,27 +60,11 @@ export type Scene = {
   readonly pose: Pose
   readonly slotSet: SlotSet
   readonly baseColors: readonly RGBA[]
+  /** 程序化图集与后端资产；flat 模式只使用材质 0。 */
+  readonly atlas: AtlasData
+  readonly assets: RenderAssets
   /** walk 模式用的可复用 track；speed 在 createScene 时写入。 */
   readonly walkTrack: Track
-}
-
-function colorFor(name: string): RGBA {
-  if (name === 'root') return { r: 0.93, g: 0.95, b: 1, a: 1 }
-  if (name === 'head') return { r: 1, g: 0.82, b: 0.45, a: 1 }
-  if (name === 'neck') return { r: 0.95, g: 0.72, b: 0.42, a: 1 }
-  if (name === 'pelvis' || name === 'spine' || name === 'chest') {
-    return { r: 0.30, g: 0.70, b: 0.98, a: 1 }
-  }
-  if (name.startsWith('hand')) {
-    return name.endsWith('L') ? { r: 0.42, g: 0.92, b: 0.66, a: 1 } : { r: 1, g: 0.54, b: 0.56, a: 1 }
-  }
-  if (name.startsWith('upperArm') || name.startsWith('lowerArm')) {
-    return name.endsWith('L') ? { r: 0.34, g: 0.84, b: 0.58, a: 1 } : { r: 0.96, g: 0.40, b: 0.44, a: 1 }
-  }
-  if (name.startsWith('thigh') || name.startsWith('shin') || name.startsWith('foot')) {
-    return name.endsWith('L') ? { r: 0.54, g: 0.60, b: 0.98, a: 1 } : { r: 1, g: 0.64, b: 0.30, a: 1 }
-  }
-  return { r: 0.8, g: 0.8, b: 0.8, a: 1 }
 }
 
 function widthForBone(name: string): number {
@@ -111,11 +101,12 @@ function createWalkClip(): AnimationClip {
 export function createScene(speed: number): Scene {
   const skeleton = createHumanoid('simple2d') // 18 骨
   const pose = createPose(skeleton)
+  const procedural = createProceduralAtlas()
   const slots: SlotData[] = []
   const attachments = new Map<string, Attachment>()
   const baseColors: RGBA[] = []
   for (const bone of skeleton.bones) {
-    const color = colorFor(bone.name)
+    const color = partColorFor(bone.name)
     baseColors.push(color)
     slots.push({
       id: bone.name,
@@ -130,13 +121,21 @@ export function createScene(speed: number): Scene {
     attachments.set(bone.name, {
       kind: 'region',
       id: bone.name,
-      region: { atlasKey: 'flat', uvs: null },
+      region: { atlasKey: bone.name, uvs: null },
       color,
     })
   }
   const skins = new Map<string, SkinData>([['default', { id: 'default', attachments }]])
   const slotSet = createSlotSet(slots, skins, 'default')
-  return { skeleton, pose, slotSet, baseColors, walkTrack: createTrack(createWalkClip(), { speed }) }
+  return {
+    skeleton,
+    pose,
+    slotSet,
+    baseColors,
+    atlas: procedural.data,
+    assets: procedural.assets,
+    walkTrack: createTrack(createWalkClip(), { speed }),
+  }
 }
 
 function packColor(c: RGBA): number {
@@ -218,12 +217,78 @@ export function applyPose(
   }
 }
 
+export type FrameBuildOptions = {
+  /** 默认 true；false 退回 flat 顶点色（?texture=0）。 */
+  readonly texture?: boolean
+  /** true 时给左臂挂 stencil mask（?mask=1）。 */
+  readonly mask?: boolean
+}
+
+const LEFT_ARM_BONES: ReadonlySet<string> = new Set(['upperArmL', 'lowerArmL', 'handL'])
+
+/** 把 bodyMaskPolygon（world 空间）打包成单层 stencil RenderMask。 */
+function buildBodyMask(): RenderMask {
+  const positions = new Float32Array(bodyMaskPolygon)
+  const count = Math.floor(positions.length / 2)
+  const indices = new Uint32Array(Math.max(0, (count - 2) * 3))
+  let cursor = 0
+  for (let i = 1; i + 1 < count; i += 1) {
+    indices[cursor++] = 0
+    indices[cursor++] = i
+    indices[cursor++] = i + 1
+  }
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (let i = 0; i + 1 < positions.length; i += 2) {
+    minX = Math.min(minX, positions[i]!)
+    minY = Math.min(minY, positions[i + 1]!)
+    maxX = Math.max(maxX, positions[i]!)
+    maxY = Math.max(maxY, positions[i + 1]!)
+  }
+  const bounds = Number.isFinite(minX)
+    ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    : { x: 0, y: 0, width: 0, height: 0 }
+  return {
+    id: 0,
+    mode: 'stencil',
+    invert: false,
+    feather: 0,
+    positions,
+    indices,
+    bounds,
+  }
+}
+
+/** 局部 0..1 UV 经 atlas uvMatrix 映射到页 UV；四边已由 uvMatrix 内缩半 texel。 */
+function atlasUvs(region: AtlasRegion): Float32Array {
+  const m = region.uvMatrix
+  const local = [0, 0, 1, 0, 1, 1, 0, 1]
+  const uvs = new Float32Array(8)
+  for (let i = 0; i < 4; i += 1) {
+    const u = local[i * 2]!
+    const v = local[i * 2 + 1]!
+    uvs[i * 2] = m[0]! * u + m[2]! * v + m[4]!
+    uvs[i * 2 + 1] = m[1]! * u + m[3]! * v + m[5]!
+  }
+  return uvs
+}
+
 /**
  * 生成一帧：每骨一个 world 空间四边形 packet，经 viewProjection2D 映射到设备像素。
- * 排序由引擎 sortPackets 完成；CPU 后端读取 frame.viewProjection 做投影。
+ * 默认走程序化图集（sprite 材质 id=1）；texture=false 退回 flat 顶点色。
+ * mask=true 时只给左臂三根骨挂 stencil mask，其余 packet maskPath=-1。
  */
-export function buildFrame(scene: Scene, width: number, height: number): RenderFrame {
+export function buildFrame(
+  scene: Scene,
+  width: number,
+  height: number,
+  options: FrameBuildOptions = {},
+): RenderFrame {
   const { pose, slotSet } = scene
+  const useTexture = options.texture !== false
+  const useMask = options.mask === true
   updateWorld(pose)
   const camera: Camera = {
     ...DEFAULT_CAMERA,
@@ -252,19 +317,37 @@ export function buildFrame(scene: Scene, width: number, height: number): RenderF
       const [lx, ly] = corners[i]!
       transformAffineInto(positions, i * 2, world, lx, ly)
     }
-    const c = slot.color
+
+    const region = scene.atlas.regions.get(bone.name)
+    const textured = useTexture && region !== undefined
+    const c = textured ? { r: 1, g: 1, b: 1, a: 1 } : slot.color
     packets.push(buildRegionPacket({
       id: slotIndex,
       positions,
+      ...(textured ? { uvs: atlasUvs(region), page: region.page } : {}),
       color: [c.r, c.g, c.b, c.a],
-      materialId: 0,
+      materialId: textured ? region.page + 1 : 0,
       order: boneId,
       depthKey: 0,
       seq: slotIndex,
       kind: 'region',
       blend: 'normal',
-      pma: false,
+      pma: textured,
+      maskPath: useMask ? (LEFT_ARM_BONES.has(bone.name) ? 0 : -1) : 0,
     }))
   }
-  return { packets: sortPackets(packets), width, height, viewProjection }
+
+  const frame: RenderFrame = {
+    packets: sortPackets(packets),
+    width,
+    height,
+    viewProjection,
+    assets: scene.assets,
+  }
+  if (!useMask) return frame
+  return {
+    ...frame,
+    maskPaths: [{ maskId: 0, parent: -1 }],
+    masks: buildMaskSet([buildBodyMask()]),
+  }
 }

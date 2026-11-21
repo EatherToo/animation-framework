@@ -43,6 +43,8 @@ const poseParam = params.get('pose')
 const poseKind = poseParam === 'walk' || poseParam === 'raise' ? poseParam : 'tpose'
 const speedParam = Number(params.get('speed') ?? '1')
 const speed = Number.isFinite(speedParam) ? speedParam : 1
+const useTexture = params.get('texture') !== '0'
+const useMask = params.get('mask') === '1'
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type)
@@ -68,19 +70,28 @@ in vec2 aUv;
 in vec4 aColor;
 uniform mat3 viewProjection;
 uniform vec2 uResolution;
+out vec2 vUv;
 out vec4 vColor;
 void main() {
   vec3 pixel = viewProjection * vec3(aPosition, 1.0);
   vec2 ndc = vec2(pixel.x / uResolution.x * 2.0 - 1.0,
                   1.0 - pixel.y / uResolution.y * 2.0);
   gl_Position = vec4(ndc, 0.0, 1.0);
+  vUv = aUv;
   vColor = aColor;
 }`
   const fs = `#version 300 es
 precision mediump float;
+in vec2 vUv;
 in vec4 vColor;
+uniform sampler2D uTexture;
+uniform int uUseTexture;
 out vec4 outColor;
-void main() { outColor = vColor; }`
+void main() {
+  // 顶点色与图集页都在 PMA 域；调制后用 ONE / ONE_MINUS_SRC_ALPHA 合成。
+  vec4 texel = uUseTexture == 1 ? texture(uTexture, vUv) : vec4(1.0);
+  outColor = vColor * texel;
+}`
   const program = gl.createProgram()
   if (program === null) throw new Error('WebGL2: createProgram 失败')
   const vertex = compileShader(gl, gl.VERTEX_SHADER, vs)
@@ -166,25 +177,31 @@ function boot(): void {
 
   const ctx2d = mode === 'cpu' ? view.getContext('2d', { alpha: false }) : null
   if (mode === 'cpu' && ctx2d === null) throw new Error('无法获取 2D 上下文')
-  const gl = mode === 'webgl' ? view.getContext('webgl2', { alpha: false, antialias: true }) : null
+  const gl = mode === 'webgl' ? view.getContext('webgl2', { alpha: false, antialias: true, stencil: true }) : null
   if (mode === 'webgl' && gl === null) throw new Error('当前浏览器/环境不支持 WebGL2')
 
   let program: WebGLProgram | null = null
   let resolutionLocation: WebGLUniformLocation | null = null
+  let textureLocation: WebGLUniformLocation | null = null
   if (mode === 'webgl' && gl !== null) {
     program = createProgram(gl)
     resolutionLocation = gl.getUniformLocation(program, 'uResolution')
     if (resolutionLocation === null) throw new Error('WebGL2: 找不到 uResolution')
+    textureLocation = gl.getUniformLocation(program, 'uTexture')
+    if (textureLocation === null) throw new Error('WebGL2: 找不到 uTexture')
     const vao = gl.createVertexArray()
     if (vao !== null) gl.bindVertexArray(vao)
     gl.enable(gl.BLEND)
-    // aColor 来自 packet.colors，已是 PMA 字节；这里用 ONE / ONE_MINUS_SRC_ALPHA 合成。
+    // aColor / 图集页都在 PMA 域；这里用 ONE / ONE_MINUS_SRC_ALPHA 合成。
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
   }
 
   const backend = mode === 'webgl'
     ? new WebGL2Backend(gl!, program!)
     : new CpuBackend({ width: 1, height: 1, background: BG })
+
+  // WebGL2 的纹理只在 prepare() 时上传；CPU 只需缓存引用。
+  let assetsPrepared = false
 
   let last = 0
   const tick = (now: number): void => {
@@ -195,7 +212,11 @@ function boot(): void {
       const width = view.width
       const height = view.height
       applyPose(scene, poseKind, offsets, dt)
-      const frame = buildFrame(scene, width, height)
+      const frame = buildFrame(scene, width, height, { texture: useTexture, mask: useMask })
+      if (!assetsPrepared && frame.assets !== undefined) {
+        backend.prepare?.(frame.assets)
+        assetsPrepared = true
+      }
 
       if (mode === 'cpu' && ctx2d !== null) {
         backend.draw(frame)
@@ -204,13 +225,15 @@ function boot(): void {
       } else if (mode === 'webgl' && gl !== null && program !== null) {
         gl.viewport(0, 0, width, height)
         gl.clearColor(BG[0] / 255, BG[1] / 255, BG[2] / 255, 1)
-        gl.clear(gl.COLOR_BUFFER_BIT)
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT)
         gl.useProgram(program)
         gl.uniform2f(resolutionLocation, width, height)
+        gl.uniform1i(textureLocation, 0)
         backend.draw(webglFrame(frame))
       }
       runtimeInfo.textContent =
-        `后端 ${mode} · 姿态 ${poseKind} · 速度 ${speed} · 骨骼 ${scene.skeleton.count} · ` +
+        `后端 ${mode} · 姿态 ${poseKind} · 速度 ${speed} · 纹理 ${useTexture ? 'atlas' : 'flat'} · ` +
+        `mask ${useMask ? 'left-arm' : 'off'} · 骨骼 ${scene.skeleton.count} · ` +
         `packets ${backend.stats.packets} · drawCalls ${backend.stats.drawCalls}`
     } catch (err) {
       showError(err)

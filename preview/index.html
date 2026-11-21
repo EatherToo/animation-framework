@@ -105,7 +105,7 @@
     </div>
     <aside id="pose">
       <h1>Render Engine · Core2D</h1>
-      <p class="note">新引擎 API 预览：createHumanoid('simple2d') 生成 18 骨人形，逐骨构建 world 空间 region packet，经 viewProjection2D 投影后由 CPU / WebGL2 后端绘制。</p>
+      <p class="note">新引擎 API 预览：createHumanoid('simple2d') 生成 18 骨人形，逐骨构建 world 空间 region packet，默认采样程序化图集纹理，经 viewProjection2D 投影后由 CPU / WebGL2 后端绘制。</p>
       <div id="runtimeInfo" class="info">初始化中…</div>
       <h2>骨骼旋转叠加（度）</h2>
       <div id="composerControls"></div>
@@ -114,6 +114,8 @@
       <pre class="help">?mode=cpu|webgl   渲染后端，默认 cpu
 ?pose=tpose|walk|raise   姿态，默认 tpose
 ?speed=1.0   walk 播放速度
+?texture=1|0   图集纹理 / flat 色块，默认 1
+?mask=0|1   左臂 stencil mask，默认 0
 
 walk 用 sampleAnimation 驱动 rotate/translate
 时间轴，滑杆作为叠加旋转增量。</pre>

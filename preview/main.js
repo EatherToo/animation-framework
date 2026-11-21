@@ -744,6 +744,7 @@
       depth: null,
       indices: fanIndices(vertexCount),
       materialId: args.materialId,
+      ...args.page !== void 0 ? { page: args.page } : {},
       blend: args.blend ?? "normal",
       maskPath: args.maskPath ?? 0,
       order: args.order,
@@ -760,10 +761,112 @@
     decorated.sort((a, b) => comparePackets(a.packet, b.packet) || a.index - b.index);
     return decorated.map((entry) => entry.packet);
   }
+  var mulU8 = (a, b) => (a * b + 127) / 255 | 0;
+  function roundByte(v) {
+    return Math.min(255, Math.max(0, Math.floor(v + 0.5)));
+  }
+  function sampleTexture(page, u, v, filter) {
+    const w = Math.max(1, Math.floor(page.width));
+    const h = Math.max(1, Math.floor(page.height));
+    const data = page.data;
+    const premultiply = page.pma === false;
+    const read = (x, y) => {
+      const cx = x < 0 ? 0 : x >= w ? w - 1 : x;
+      const cy = y < 0 ? 0 : y >= h ? h - 1 : y;
+      const o = (cy * w + cx) * 4;
+      const r = data[o] ?? 0;
+      const g = data[o + 1] ?? 0;
+      const b = data[o + 2] ?? 0;
+      const a = data[o + 3] ?? 0;
+      if (!premultiply) return [r, g, b, a];
+      return [mulU8(r, a), mulU8(g, a), mulU8(b, a), a];
+    };
+    const cu = clamp012(u);
+    const cv = clamp012(v);
+    if (filter === "nearest") {
+      const ix = Math.min(w - 1, Math.floor(cu * w));
+      const iy = Math.min(h - 1, Math.floor(cv * h));
+      return read(ix, iy);
+    }
+    const fx = cu * w - 0.5;
+    const fy = cv * h - 0.5;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const c00 = read(x0, y0);
+    const c10 = read(x0 + 1, y0);
+    const c01 = read(x0, y0 + 1);
+    const c11 = read(x0 + 1, y0 + 1);
+    const out = [0, 0, 0, 0];
+    for (let i = 0; i < 4; i += 1) {
+      const top = c00[i] * (1 - tx) + c10[i] * tx;
+      const bottom = c01[i] * (1 - tx) + c11[i] * tx;
+      out[i] = roundByte(top * (1 - ty) + bottom * ty);
+    }
+    return out;
+  }
+  function maskChain(path, maskPaths) {
+    if (path === -1) return { ids: [], error: false };
+    if (!Number.isInteger(path) || path < 0 || path >= maskPaths.length) {
+      return { ids: [], error: true };
+    }
+    const ids = [];
+    const seen = /* @__PURE__ */ new Set();
+    let cursor = path;
+    while (cursor !== -1) {
+      if (!Number.isInteger(cursor) || cursor < 0 || cursor >= maskPaths.length) {
+        return { ids: [], error: true };
+      }
+      if (seen.has(cursor)) return { ids: [], error: true };
+      if (ids.length >= 8) return { ids: [], error: true };
+      seen.add(cursor);
+      ids.push(maskPaths[cursor].maskId);
+      cursor = maskPaths[cursor].parent;
+    }
+    ids.reverse();
+    return { ids, error: false };
+  }
+  function buildMaskSet(masks) {
+    return { version: 1, masks: masks.slice() };
+  }
 
   // packages/render-engine/src/backend/backend.ts
   var EPS2 = 1e-12;
-  var mulU8 = (a, b) => (a * b + 127) / 255 | 0;
+  var mulU82 = (a, b) => (a * b + 127) / 255 | 0;
+  var clampUnit = (v) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+  function distanceToSegment(px, py, ax, ay, bx, by) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    if (len2 <= EPS2) return Math.hypot(px - ax, py - ay);
+    let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(px - (ax + dx * t), py - (ay + dy * t));
+  }
+  function pointInPolygon(poly, px, py) {
+    let inside = false;
+    const count = Math.floor(poly.length / 2);
+    for (let i = 0, j = count - 1; i < count; j = i, i += 1) {
+      const xi = poly[i * 2];
+      const yi = poly[i * 2 + 1];
+      const xj = poly[j * 2];
+      const yj = poly[j * 2 + 1];
+      const intersects = yi > py !== yj > py && px < (xj - xi) * (py - yi) / (yj - yi) + xi;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+  function distanceToPolygon(poly, px, py) {
+    const count = Math.floor(poly.length / 2);
+    let best = Infinity;
+    for (let i = 0; i < count; i += 1) {
+      const j = (i + 1) % count;
+      const d = distanceToSegment(px, py, poly[i * 2], poly[i * 2 + 1], poly[j * 2], poly[j * 2 + 1]);
+      if (d < best) best = d;
+    }
+    return best;
+  }
   function blendPixel(dst, di, sr, sg, sb, sa, mode2) {
     const dr = dst[di];
     const dg = dst[di + 1];
@@ -772,10 +875,10 @@
     const inv = 255 - sa;
     switch (mode2) {
       case "normal":
-        dst[di] = sr + mulU8(dr, inv);
-        dst[di + 1] = sg + mulU8(dg, inv);
-        dst[di + 2] = sb + mulU8(db, inv);
-        dst[di + 3] = sa + mulU8(da, inv);
+        dst[di] = sr + mulU82(dr, inv);
+        dst[di + 1] = sg + mulU82(dg, inv);
+        dst[di + 2] = sb + mulU82(db, inv);
+        dst[di + 3] = sa + mulU82(da, inv);
         break;
       case "add":
         dst[di] = sr + dr;
@@ -784,16 +887,16 @@
         dst[di + 3] = sa + da;
         break;
       case "multiply":
-        dst[di] = mulU8(sr, dr) + mulU8(dr, inv);
-        dst[di + 1] = mulU8(sg, dg) + mulU8(dg, inv);
-        dst[di + 2] = mulU8(sb, db) + mulU8(db, inv);
-        dst[di + 3] = sa + mulU8(da, inv);
+        dst[di] = mulU82(sr, dr) + mulU82(dr, inv);
+        dst[di + 1] = mulU82(sg, dg) + mulU82(dg, inv);
+        dst[di + 2] = mulU82(sb, db) + mulU82(db, inv);
+        dst[di + 3] = sa + mulU82(da, inv);
         break;
       case "screen":
-        dst[di] = sr + mulU8(dr, 255 - sr);
-        dst[di + 1] = sg + mulU8(dg, 255 - sg);
-        dst[di + 2] = sb + mulU8(db, 255 - sb);
-        dst[di + 3] = sa + mulU8(da, inv);
+        dst[di] = sr + mulU82(dr, 255 - sr);
+        dst[di + 1] = sg + mulU82(dg, 255 - sg);
+        dst[di + 2] = sb + mulU82(db, 255 - sb);
+        dst[di + 3] = sa + mulU82(da, inv);
         break;
     }
   }
@@ -809,13 +912,27 @@
   }
   var CpuBackend = class {
     kind = "cpu";
-    stats = { drawCalls: 0, packets: 0, uploadedVertices: 0 };
+    stats = {
+      drawCalls: 0,
+      packets: 0,
+      uploadedVertices: 0,
+      maskTests: 0,
+      textureSamples: 0
+    };
     width;
     height;
     ss;
     background;
     color;
     disposed = false;
+    /** prepare() 缓存的资产；frame.assets 优先。 */
+    assets = null;
+    depthBuffer = null;
+    depthMode = "none";
+    material = null;
+    page = null;
+    masks = [];
+    maskCache = /* @__PURE__ */ new Map();
     constructor(a = {}, b, c) {
       const opts = typeof a === "number" ? { width: a, height: b ?? 1, supersample: c ?? 1 } : a;
       this.width = Math.max(1, Math.floor(opts.width ?? 1));
@@ -825,6 +942,10 @@
       this.color = new Uint8ClampedArray(this.width * this.ss * this.height * this.ss * 4);
       this.clear();
     }
+    /** CPU 端资产只是引用；真正采样在 draw 时进行。 */
+    prepare(assets) {
+      this.assets = assets;
+    }
     resize(v) {
       const w = Math.max(1, Math.floor(v.width));
       const h = Math.max(1, Math.floor(v.height));
@@ -832,6 +953,7 @@
       this.width = w;
       this.height = h;
       this.color = new Uint8ClampedArray(w * this.ss * h * this.ss * 4);
+      this.depthBuffer = null;
       this.clear();
     }
     clear() {
@@ -892,10 +1014,118 @@
           const g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g);
           const b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b);
           const a = Math.round(b0 * p0.a + b1 * p1.a + b2 * p2.a);
-          if (a <= 0) continue;
-          blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend);
+          const u = b0 * p0.u + b1 * p1.u + b2 * p2.u;
+          const v = b0 * p0.v + b1 * p1.v + b2 * p2.v;
+          const z = b0 * p0.z + b1 * p1.z + b2 * p2.z;
+          this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z);
         }
       }
+    }
+    /** 片元着色：mask → 深度 → 纹理调制 → 混合；纹理/顶点色都在 PMA 域只乘一次。 */
+    shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z) {
+      if (a <= 0) return;
+      const ssW = this.width * this.ss;
+      if (this.masks.length > 0) {
+        let coverage = 1;
+        for (const ctx of this.masks) {
+          this.stats.maskTests += 1;
+          coverage *= this.maskCoverageAt(ctx, px / this.ss, py / this.ss);
+          if (coverage <= 0) return;
+        }
+        if (coverage < 1) {
+          const c = Math.round(coverage * 255);
+          r = mulU82(r, c);
+          g = mulU82(g, c);
+          b = mulU82(b, c);
+          a = mulU82(a, c);
+        }
+      }
+      if (this.depthMode !== "none" && this.depthBuffer !== null) {
+        const di = sy * ssW + sx;
+        const current = this.depthBuffer[di] ?? 1;
+        if (!Number.isFinite(z) || z >= current) return;
+        if (this.depthMode === "write") this.depthBuffer[di] = z;
+      }
+      if (this.material !== null && this.material.kind === "sprite" && this.page !== null) {
+        const texel = sampleTexture(this.page, u, v, this.material.filter);
+        this.stats.textureSamples += 1;
+        r = mulU82(texel[0], r);
+        g = mulU82(texel[1], g);
+        b = mulU82(texel[2], b);
+        a = mulU82(texel[3], a);
+      }
+      if (a <= 0) return;
+      blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend);
+    }
+    /** 把 mask 的 world 几何预转换到屏幕空间；同一帧内按对象缓存。 */
+    maskCtxFor(mask, frame, assets) {
+      const cached = this.maskCache.get(mask);
+      if (cached !== void 0) return cached;
+      const corners = [
+        this.toScreen(frame, mask.bounds.x, mask.bounds.y),
+        this.toScreen(frame, mask.bounds.x + mask.bounds.width, mask.bounds.y),
+        this.toScreen(frame, mask.bounds.x + mask.bounds.width, mask.bounds.y + mask.bounds.height),
+        this.toScreen(frame, mask.bounds.x, mask.bounds.y + mask.bounds.height)
+      ];
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const [x, y] of corners) {
+        if (x < x0) x0 = x;
+        if (y < y0) y0 = y;
+        if (x > x1) x1 = x;
+        if (y > y1) y1 = y;
+      }
+      let poly = null;
+      if (mask.mode === "stencil") {
+        poly = [];
+        for (let i = 0; i + 1 < mask.positions.length; i += 2) {
+          const [sx, sy] = this.toScreen(frame, mask.positions[i], mask.positions[i + 1]);
+          poly.push(sx, sy);
+        }
+      }
+      let alphaPage = null;
+      if (mask.mode === "alpha" && mask.alpha !== void 0 && assets !== null) {
+        alphaPage = assets.pages[mask.alpha.page] ?? null;
+      }
+      const ctx = { mask, rect: { x0, y0, x1, y1 }, poly, alphaPage };
+      this.maskCache.set(mask, ctx);
+      return ctx;
+    }
+    /** 像素点（设备像素）的 mask 覆盖率 0..1；invert 作用于单层。 */
+    maskCoverageAt(ctx, px, py) {
+      const mask = ctx.mask;
+      let coverage = 0;
+      if (mask.mode === "scissor") {
+        const r = ctx.rect;
+        coverage = px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1 ? 1 : 0;
+      } else if (mask.mode === "stencil") {
+        const poly = ctx.poly ?? [];
+        const inside = pointInPolygon(poly, px, py);
+        if (mask.feather > 0) {
+          const d = distanceToPolygon(poly, px, py);
+          coverage = clampUnit(0.5 + (inside ? d : -d) / mask.feather);
+        } else {
+          coverage = inside ? 1 : 0;
+        }
+      } else {
+        const page = ctx.alphaPage;
+        const alpha = mask.alpha;
+        if (page === null || alpha === void 0) {
+          coverage = 0;
+        } else {
+          const r = ctx.rect;
+          const u = r.x1 > r.x0 ? (px - r.x0) / (r.x1 - r.x0) : 0;
+          const v = r.y1 > r.y0 ? (py - r.y0) / (r.y1 - r.y0) : 0;
+          const m = alpha.uvMatrix;
+          const up = m[0] * u + m[2] * v + m[4];
+          const vp = m[1] * u + m[3] * v + m[5];
+          const a = sampleTexture(page, up, vp, "linear")[3];
+          coverage = mask.feather > 0 ? a / 255 : a >= 128 ? 1 : 0;
+        }
+      }
+      return mask.invert ? 1 - coverage : coverage;
     }
     currentBlend = "normal";
     draw(frame) {
@@ -907,13 +1137,39 @@
       this.stats.drawCalls = 0;
       this.stats.packets = 0;
       this.stats.uploadedVertices = 0;
+      this.stats.maskTests = 0;
+      this.stats.textureSamples = 0;
       const ss = this.ss;
       const ssW = this.width * ss;
       const ssH = this.height * ss;
+      const assets = frame.assets ?? this.assets;
+      this.depthMode = frame.depthMode ?? "none";
+      if (this.depthMode !== "none") {
+        const size = ssW * ssH;
+        if (this.depthBuffer === null || this.depthBuffer.length !== size) {
+          this.depthBuffer = new Float32Array(size);
+        }
+        this.depthBuffer.fill(1);
+      } else {
+        this.depthBuffer = null;
+      }
+      this.maskCache.clear();
       for (const packet of frame.packets) {
         this.stats.packets += 1;
         this.stats.drawCalls += 1;
         this.currentBlend = packet.blend;
+        this.material = assets?.materials.find((m) => m.id === packet.materialId) ?? null;
+        this.page = this.material !== null && this.material.kind === "sprite" && assets !== null ? assets.pages[this.material.page] ?? null : null;
+        this.masks = [];
+        if (frame.maskPaths !== void 0 && frame.masks !== void 0 && packet.maskPath >= 0) {
+          const chain = maskChain(packet.maskPath, frame.maskPaths);
+          if (!chain.error) {
+            for (const id of chain.ids) {
+              const mask = frame.masks.masks[id];
+              if (mask !== null && mask !== void 0) this.masks.push(this.maskCtxFor(mask, frame, assets));
+            }
+          }
+        }
         const vertexCount = Math.min(Math.floor(packet.uvs.length / 2), Math.floor(packet.positions.length / 2));
         if (vertexCount <= 0) continue;
         this.stats.uploadedVertices += vertexCount;
@@ -923,9 +1179,14 @@
         for (let i = 0; i < vertexCount; i += 1) {
           const [x, y] = this.toScreen(frame, packet.positions[i * stride], packet.positions[i * stride + 1]);
           const o = i * 4;
+          const uv = i * 2;
+          const z = packet.depth !== null ? clampUnit(packet.depth[i] ?? 1) : clampUnit(0.5 - packet.depthKey * 0.01);
           verts.push({
             x: x * ss,
             y: y * ss,
+            u: packet.uvs[uv] ?? 0,
+            v: packet.uvs[uv + 1] ?? 0,
+            z,
             r: packet.colors[o],
             g: packet.colors[o + 1],
             b: packet.colors[o + 2],
@@ -983,9 +1244,39 @@
   var GL_UNSIGNED_INT = 5125;
   var GL_TRIANGLES = 4;
   var GL_RGBA = 6408;
+  var GL_RGBA8 = 32856;
+  var GL_TEXTURE_2D = 3553;
+  var GL_TEXTURE0 = 33984;
+  var GL_TEXTURE1 = 33985;
+  var GL_TEXTURE_MIN_FILTER = 10241;
+  var GL_TEXTURE_MAG_FILTER = 10240;
+  var GL_TEXTURE_WRAP_S = 10242;
+  var GL_TEXTURE_WRAP_T = 10243;
+  var GL_LINEAR = 9729;
+  var GL_NEAREST = 9728;
+  var GL_CLAMP_TO_EDGE = 33071;
+  var GL_SCISSOR_TEST = 3089;
+  var GL_STENCIL_TEST = 2960;
+  var GL_DEPTH_TEST = 2929;
+  var GL_ALWAYS = 519;
+  var GL_EQUAL = 514;
+  var GL_NOTEQUAL = 517;
+  var GL_LEQUAL = 515;
+  var GL_KEEP = 7680;
+  var GL_REPLACE = 7681;
+  var GL_STENCIL_BUFFER_BIT = 1024;
+  var GL_DEPTH_BUFFER_BIT = 256;
   var WebGL2Backend = class {
     kind = "webgl2";
-    stats = { drawCalls: 0, packets: 0, uploadedVertices: 0 };
+    stats = {
+      drawCalls: 0,
+      packets: 0,
+      uploadedVertices: 0,
+      maskTests: 0,
+      textureSamples: 0
+    };
+    /** 上下文恢复次数，供测试/诊断。 */
+    restoreCount = 0;
     gl;
     buffers = null;
     capacities = /* @__PURE__ */ new Map();
@@ -994,6 +1285,9 @@
     height = 1;
     pixels = new Uint8ClampedArray(4);
     disposed = false;
+    assets = null;
+    textures = [];
+    whiteTexture = null;
     constructor(gl, program = {}) {
       if (gl === null || typeof gl !== "object") throw new Error("WebGL2Backend: \u7F3A\u5C11 gl \u4E0A\u4E0B\u6587");
       if (typeof gl.drawElements !== "function") throw new Error("WebGL2Backend: gl.drawElements \u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u63D0\u4EA4\u7ED8\u5236");
@@ -1007,6 +1301,82 @@
           indices: gl.createBuffer()
         };
       }
+    }
+    /** 上传页纹理与 1x1 白纹理；只在 prepare/热更新时调用，draw 内绝不上传。 */
+    prepare(assets) {
+      this.assets = assets;
+      this.uploadAssets(assets);
+    }
+    uploadAssets(assets) {
+      const gl = this.gl;
+      this.textures = [];
+      this.whiteTexture = null;
+      if (typeof gl.createTexture !== "function") return;
+      const filterOf = (index) => {
+        const material = assets.materials.find((m) => m.kind === "sprite" && m.page === index);
+        return material?.filter ?? "linear";
+      };
+      for (let i = 0; i < assets.pages.length; i += 1) {
+        const page = assets.pages[i];
+        const texture = gl.createTexture();
+        gl.activeTexture?.(GL_TEXTURE0 + i);
+        gl.bindTexture?.(GL_TEXTURE_2D, texture);
+        gl.texImage2D?.(
+          GL_TEXTURE_2D,
+          0,
+          GL_RGBA8,
+          page.width,
+          page.height,
+          0,
+          GL_RGBA,
+          GL_UNSIGNED_BYTE,
+          page.data
+        );
+        const nearest = filterOf(i) === "nearest";
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        this.textures.push(texture);
+      }
+      const white = gl.createTexture();
+      gl.activeTexture?.(GL_TEXTURE0);
+      gl.bindTexture?.(GL_TEXTURE_2D, white);
+      gl.texImage2D?.(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA8,
+        1,
+        1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        new Uint8Array([255, 255, 255, 255])
+      );
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+      this.whiteTexture = white;
+    }
+    /** 上下文恢复：重建 buffer/texture/Program 状态，并记录次数。 */
+    restore() {
+      this.disposed = false;
+      const gl = this.gl;
+      if (typeof gl.createBuffer === "function") {
+        this.buffers = {
+          positions: gl.createBuffer(),
+          uvs: gl.createBuffer(),
+          colors: gl.createBuffer(),
+          indices: gl.createBuffer()
+        };
+      } else {
+        this.buffers = null;
+      }
+      this.capacities.clear();
+      this.gl.useProgram?.(this.program);
+      if (this.assets !== null) this.uploadAssets(this.assets);
+      this.restoreCount += 1;
     }
     resize(v) {
       this.width = Math.max(1, Math.floor(v.width));
@@ -1043,6 +1413,118 @@
         gl.uniformMatrix3fv(loc, false, vp.subarray(0, 9));
       }
     }
+    setUniform1i(name, value) {
+      const gl = this.gl;
+      if (gl.getUniformLocation === void 0 || gl.uniform1i === void 0) return;
+      const loc = gl.getUniformLocation(this.program, name);
+      if (loc === null || loc === void 0) return;
+      gl.uniform1i(loc, value);
+    }
+    /** world 包围盒 → 设备像素矩形；无 viewProjection 时按像素坐标直通。 */
+    projectBounds(frame, bounds) {
+      const corners = [
+        this.toScreen(frame, bounds.x, bounds.y),
+        this.toScreen(frame, bounds.x + bounds.width, bounds.y),
+        this.toScreen(frame, bounds.x + bounds.width, bounds.y + bounds.height),
+        this.toScreen(frame, bounds.x, bounds.y + bounds.height)
+      ];
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [x2, y2] of corners) {
+        minX = Math.min(minX, x2);
+        minY = Math.min(minY, y2);
+        maxX = Math.max(maxX, x2);
+        maxY = Math.max(maxY, y2);
+      }
+      const x = Math.floor(minX);
+      const y = Math.floor(minY);
+      return { x, y, width: Math.max(0, Math.ceil(maxX) - x), height: Math.max(0, Math.ceil(maxY) - y) };
+    }
+    toScreen(frame, x, y) {
+      const m = frame.viewProjection;
+      if (m === void 0) return [x, y];
+      if (m.length >= 16) {
+        const cx = m[0] * x + m[4] * y + m[12];
+        const cy = m[1] * x + m[5] * y + m[13];
+        const cw = m[3] * x + m[7] * y + m[15];
+        const w = Math.abs(cw) < EPS2 ? EPS2 : cw;
+        return [(cx / w * 0.5 + 0.5) * frame.width, (0.5 - cy / w * 0.5) * frame.height];
+      }
+      if (m.length >= 9) {
+        const cx = m[0] * x + m[3] * y + m[6];
+        const cy = m[1] * x + m[4] * y + m[7];
+        const cw = m[2] * x + m[5] * y + m[8];
+        const w = Math.abs(cw) < EPS2 ? EPS2 : cw;
+        return [cx / w, cy / w];
+      }
+      return [x, y];
+    }
+    /** 应用 packet 的 mask 链；返回需要清理的状态。 */
+    applyMasks(frame, packetMaskPath, assets) {
+      const state = { scissor: false, stencil: false };
+      if (frame.maskPaths === void 0 || frame.masks === void 0 || packetMaskPath < 0) return state;
+      const chain = maskChain(packetMaskPath, frame.maskPaths);
+      if (chain.error) return state;
+      let rect = null;
+      for (const id of chain.ids) {
+        const mask = frame.masks.masks[id];
+        if (mask === null || mask === void 0) continue;
+        this.stats.maskTests += 1;
+        if (mask.mode !== "scissor") continue;
+        const r = this.projectBounds(frame, mask.bounds);
+        if (rect === null) rect = r;
+        else {
+          const x0 = Math.max(rect.x, r.x);
+          const y0 = Math.max(rect.y, r.y);
+          const x1 = Math.min(rect.x + rect.width, r.x + r.width);
+          const y1 = Math.min(rect.y + rect.height, r.y + r.height);
+          rect = { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) };
+        }
+      }
+      if (rect !== null) {
+        this.gl.enable?.(GL_SCISSOR_TEST);
+        this.gl.scissor?.(rect.x, rect.y, rect.width, rect.height);
+        state.scissor = true;
+      }
+      for (const id of chain.ids) {
+        const mask = frame.masks.masks[id];
+        if (mask === null || mask === void 0) continue;
+        if (mask.mode === "stencil") {
+          const gl = this.gl;
+          gl.enable?.(GL_STENCIL_TEST);
+          gl.colorMask?.(false, false, false, false);
+          gl.clearStencil?.(0);
+          gl.clear?.(GL_STENCIL_BUFFER_BIT);
+          gl.stencilFunc?.(GL_ALWAYS, 1, 255);
+          gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_REPLACE);
+          this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, mask.positions);
+          this.setAttrib("aPosition", 2, GL_FLOAT, false);
+          this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, mask.indices);
+          this.setUniform1i("uUseTexture", 0);
+          gl.drawElements?.(GL_TRIANGLES, mask.indices.length, GL_UNSIGNED_INT, 0);
+          gl.colorMask?.(true, true, true, true);
+          gl.stencilFunc?.(mask.invert ? GL_NOTEQUAL : GL_EQUAL, 1, 255);
+          gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_KEEP);
+          state.stencil = true;
+        } else if (mask.mode === "alpha" && mask.alpha !== void 0) {
+          const texture = this.textures[mask.alpha.page];
+          if (texture !== void 0) {
+            this.gl.activeTexture?.(GL_TEXTURE1);
+            this.gl.bindTexture?.(GL_TEXTURE_2D, texture);
+            this.setUniform1i("uMask", 1);
+          }
+        }
+      }
+      return state;
+    }
+    resetMaskState(state) {
+      if (state.scissor) this.gl.disable?.(GL_SCISSOR_TEST);
+      if (state.stencil) this.gl.disable?.(GL_STENCIL_TEST);
+      this.gl.colorMask?.(true, true, true, true);
+      this.gl.activeTexture?.(GL_TEXTURE0);
+    }
     draw(frame) {
       if (this.disposed) throw new Error("WebGL2Backend: \u5DF2 dispose\uFF0C\u4E0D\u80FD\u7EE7\u7EED draw");
       if (frame.width !== this.width || frame.height !== this.height) {
@@ -1051,11 +1533,39 @@
       this.stats.drawCalls = 0;
       this.stats.packets = 0;
       this.stats.uploadedVertices = 0;
-      this.gl.useProgram?.(this.program);
+      this.stats.maskTests = 0;
+      this.stats.textureSamples = 0;
+      const gl = this.gl;
+      gl.useProgram?.(this.program);
       this.setViewProjection(frame.viewProjection);
+      const depthMode = frame.depthMode ?? "none";
+      if (depthMode === "none") {
+        gl.disable?.(GL_DEPTH_TEST);
+      } else {
+        gl.enable?.(GL_DEPTH_TEST);
+        gl.depthFunc?.(GL_LEQUAL);
+        gl.depthMask?.(depthMode === "write");
+        gl.clear?.(GL_DEPTH_BUFFER_BIT);
+      }
+      const assets = frame.assets ?? this.assets;
       for (const packet of frame.packets) {
         const vertexCount = Math.floor(packet.uvs.length / 2);
         const stride = vertexCount > 0 ? packet.positions.length / vertexCount : 2;
+        const material = assets?.materials.find((m) => m.id === packet.materialId) ?? null;
+        const texture = material !== null && material.kind === "sprite" ? this.textures[material.page] : void 0;
+        if (texture !== void 0) {
+          gl.activeTexture?.(GL_TEXTURE0);
+          gl.bindTexture?.(GL_TEXTURE_2D, texture);
+          this.setUniform1i("uAtlas", 0);
+          this.setUniform1i("uUseTexture", 1);
+        } else {
+          if (this.whiteTexture !== null) {
+            gl.activeTexture?.(GL_TEXTURE0);
+            gl.bindTexture?.(GL_TEXTURE_2D, this.whiteTexture);
+          }
+          this.setUniform1i("uUseTexture", 0);
+        }
+        const maskState = this.applyMasks(frame, packet.maskPath, assets);
         this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, packet.positions);
         this.setAttrib("aPosition", Number.isFinite(stride) ? stride : 2, GL_FLOAT, false);
         this.upload(GL_ARRAY_BUFFER, this.buffers?.uvs, packet.uvs);
@@ -1063,10 +1573,15 @@
         this.upload(GL_ARRAY_BUFFER, this.buffers?.colors, packet.colors);
         this.setAttrib("aColor", 4, GL_UNSIGNED_BYTE, true);
         this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, packet.indices);
-        this.gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0);
+        gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0);
+        this.resetMaskState(maskState);
         this.stats.drawCalls += 1;
         this.stats.packets += 1;
         this.stats.uploadedVertices += vertexCount;
+      }
+      if (depthMode !== "none") {
+        gl.depthMask?.(false);
+        gl.disable?.(GL_DEPTH_TEST);
       }
     }
     readPixels(out) {
@@ -1097,6 +1612,12 @@
         gl.deleteBuffer(this.buffers.colors);
         gl.deleteBuffer(this.buffers.indices);
       }
+      if (typeof gl.deleteTexture === "function") {
+        for (const texture of this.textures) gl.deleteTexture(texture);
+        if (this.whiteTexture !== null) gl.deleteTexture(this.whiteTexture);
+      }
+      this.textures = [];
+      this.whiteTexture = null;
       this.buffers = null;
       this.capacities.clear();
     }
@@ -1194,6 +1715,7 @@
 
   // packages/render-engine/src/asset/importer.ts
   var DEG = Math.PI / 180;
+  var DEFAULT_REGION_UVS = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]);
   var K256 = new Uint32Array([
     1116352408,
     1899447441,
@@ -1260,6 +1782,82 @@
     3204031479,
     3329325298
   ]);
+
+  // packages/render-engine/src/app/foot.ts
+  var DEFAULT_FOOT_LENGTH = 0.15;
+  var DEFAULT_ANKLE_HEIGHT = 0.04;
+  var HEEL_BACK_RATIO = 0.3;
+  function assertFinite(value, code) {
+    if (!Number.isFinite(value)) throw new Error(code);
+  }
+  function createFootGeometry(footLength = DEFAULT_FOOT_LENGTH, ankleHeight = DEFAULT_ANKLE_HEIGHT) {
+    assertFinite(footLength, "foot.footLength");
+    assertFinite(ankleHeight, "foot.ankleHeight");
+    if (footLength <= 0) throw new Error("foot.footLength");
+    if (ankleHeight < 0) throw new Error("foot.ankleHeight");
+    const heelBack = HEEL_BACK_RATIO * footLength;
+    const soleLength = heelBack + footLength;
+    const soleRise = 2 * ankleHeight;
+    const point = (u) => ({
+      x: -heelBack + u * soleLength,
+      y: -soleRise * 0.5 + u * soleRise
+    });
+    return {
+      footLength,
+      ankleHeight,
+      heelBack,
+      soleLength,
+      soleRise,
+      heel: point(0),
+      flat: point(0.5),
+      toe: point(1)
+    };
+  }
+  var DEFAULT_GEOMETRY = createFootGeometry();
+
+  // packages/render-engine/src/app/params.ts
+  var DEFAULT_PARAM_TAUS = {
+    speed: 0.12,
+    turn: 0.16,
+    amplitude: 0.2
+  };
+  function smoothingAlpha(dt, tau) {
+    if (!Number.isFinite(dt) || dt <= 0) return 0;
+    if (!Number.isFinite(tau) || tau <= 0) throw new Error("params.tau");
+    return 1 - Math.exp(-dt / tau);
+  }
+  function copyParams(p) {
+    return { speed: p.speed, turn: p.turn, gait: p.gait, amplitude: p.amplitude };
+  }
+  var ParamSmoother = class {
+    taus;
+    constructor(taus) {
+      this.taus = {
+        speed: taus?.speed ?? DEFAULT_PARAM_TAUS.speed,
+        turn: taus?.turn ?? DEFAULT_PARAM_TAUS.turn,
+        amplitude: taus?.amplitude ?? DEFAULT_PARAM_TAUS.amplitude
+      };
+      for (const key of ["speed", "turn", "amplitude"]) {
+        if (!Number.isFinite(this.taus[key]) || this.taus[key] <= 0) throw new Error(`params.tau.${key}`);
+      }
+    }
+    /** 推进一次并写回 state.current；非法 dt 不改变状态。 */
+    step(state, dt) {
+      if (!Number.isFinite(dt) || dt <= 0) return copyParams(state.current);
+      const { current, target } = state;
+      const next = {
+        speed: current.speed + (target.speed - current.speed) * smoothingAlpha(dt, this.taus.speed),
+        turn: current.turn + (target.turn - current.turn) * smoothingAlpha(dt, this.taus.turn),
+        gait: target.gait,
+        amplitude: current.amplitude + (target.amplitude - current.amplitude) * smoothingAlpha(dt, this.taus.amplitude)
+      };
+      state.current = next;
+      return next;
+    }
+  };
+
+  // packages/render-engine/src/app/motion.ts
+  var smoother = new ParamSmoother();
 
   // packages/render-engine/src/app/app.ts
   var DEFAULT_HEIGHT = 1.7;
@@ -1358,18 +1956,22 @@
     if (profile === "full2d" && handLod !== "none") {
       for (let s = 0; s < SIDES.length; s += 1) {
         const { tag, sign } = SIDES[s];
+        const hand = handIds[s];
         if (handLod === "simple") {
-          add(`index1${tag}`, handIds[s], m.hand * 0.5, { rotation: sign * 0.03 }, ["finger"]);
+          add(`index1${tag}`, hand, m.hand * 0.5, { rotation: sign * 0.03 }, ["finger"]);
           continue;
         }
-        let parent = handIds[s];
         for (const finger of FINGERS) {
+          let parent = hand;
           for (let seg = 0; seg < finger.segments.length; seg += 1) {
             parent = add(
               `${finger.name}${seg + 1}${tag}`,
               parent,
               m.hand * finger.segments[seg],
-              { x: sign * finger.spread * m.hand, rotation: sign * 0.03 },
+              {
+                x: seg === 0 ? sign * finger.spread * m.hand : 0,
+                rotation: sign * 0.03
+              },
               ["finger"]
             );
           }
@@ -1386,24 +1988,74 @@
   function createHumanoid(profile, opts) {
     return compileSkeleton(humanoidSpec(profile, opts));
   }
-  var HEEL_BACK = 0.045;
-  var FOOT_LENGTH = 0.15;
-  var SOLE_LENGTH = HEEL_BACK + FOOT_LENGTH;
-  var SOLE_MID_X = -HEEL_BACK + 0.5 * SOLE_LENGTH;
 
   // packages/render-engine/src/tools/tools.ts
   var DEFAULT_FIXED_DT = 1 / 60;
 
-  // preview/core2d.ts
-  var SLIDER_BONES = ["upperArmR", "lowerArmR", "upperArmL", "thighR", "thighL"];
-  var BONE_LABEL = {
-    upperArmR: "\u53F3\u4E0A\u81C2",
-    lowerArmR: "\u53F3\u524D\u81C2",
-    upperArmL: "\u5DE6\u4E0A\u81C2",
-    thighR: "\u53F3\u5927\u817F",
-    thighL: "\u5DE6\u5927\u817F"
+  // preview/procedural-atlas.ts
+  var PAGE_SIZE = 512;
+  var CELL_SIZE = 128;
+  var COLUMNS = 4;
+  var MAX_MIP = 6;
+  var ATLAS_BONE_ORDER = [
+    "root",
+    "pelvis",
+    "spine",
+    "chest",
+    "neck",
+    "head",
+    "upperArmL",
+    "lowerArmL",
+    "handL",
+    "upperArmR",
+    "lowerArmR",
+    "handR",
+    "thighL",
+    "shinL",
+    "footL",
+    "thighR",
+    "shinR",
+    "footR"
+  ];
+  var CELL_BONE = [
+    "pelvis",
+    "chest",
+    "neck",
+    "head",
+    "upperArmL",
+    "lowerArmL",
+    "handL",
+    "upperArmR",
+    "lowerArmR",
+    "handR",
+    "thighL",
+    "shinL",
+    "footL",
+    "thighR",
+    "shinR",
+    "footR"
+  ];
+  var CELL_OF_BONE = {
+    root: 0,
+    pelvis: 0,
+    spine: 0,
+    chest: 1,
+    neck: 2,
+    head: 3,
+    upperArmL: 4,
+    lowerArmL: 5,
+    handL: 6,
+    upperArmR: 7,
+    lowerArmR: 8,
+    handR: 9,
+    thighL: 10,
+    shinL: 11,
+    footL: 12,
+    thighR: 13,
+    shinR: 14,
+    footR: 15
   };
-  function colorFor(name) {
+  function partColorFor(name) {
     if (name === "root") return { r: 0.93, g: 0.95, b: 1, a: 1 };
     if (name === "head") return { r: 1, g: 0.82, b: 0.45, a: 1 };
     if (name === "neck") return { r: 0.95, g: 0.72, b: 0.42, a: 1 };
@@ -1421,6 +2073,145 @@
     }
     return { r: 0.8, g: 0.8, b: 0.8, a: 1 };
   }
+  var clamp013 = (v) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+  var toByte2 = (v) => Math.min(255, Math.max(0, Math.round(clamp013(v) * 255)));
+  function writePixel(data, x, y, r, g, b, a) {
+    const o = (y * PAGE_SIZE + x) * 4;
+    data[o] = toByte2(r);
+    data[o + 1] = toByte2(g);
+    data[o + 2] = toByte2(b);
+    data[o + 3] = toByte2(a);
+  }
+  function fillBackground(data) {
+    for (let y = 0; y < PAGE_SIZE; y += 1) {
+      for (let x = 0; x < PAGE_SIZE; x += 1) writePixel(data, x, y, 16 / 255, 20 / 255, 28 / 255, 1);
+    }
+  }
+  function paintCell(data, cell, boneName) {
+    const base = partColorFor(boneName);
+    const originX = cell % COLUMNS * CELL_SIZE;
+    const originY = Math.floor(cell / COLUMNS) * CELL_SIZE;
+    for (let y = 0; y < CELL_SIZE; y += 1) {
+      for (let x = 0; x < CELL_SIZE; x += 1) {
+        const u = x / (CELL_SIZE - 1);
+        const v = y / (CELL_SIZE - 1);
+        const gradient = 0.72 + 0.28 * (1 - v) + 0.1 * u;
+        const checker = ((x >> 4) + (y >> 4) & 1) === 0 ? 1.16 : 0.86;
+        const stripe = (x + 2 * y + cell * 13) % 28 < 9 ? 1.18 : 1;
+        const border = x < 3 || y < 3 || x > CELL_SIZE - 4 || y > CELL_SIZE - 4 ? 1.5 : 1;
+        const sparkle = (x * 7 + y * 11 + cell * 5) % 97 === 0 ? 1.6 : 1;
+        const k = gradient * checker * stripe * border * sparkle;
+        const r = clamp013(base.r * k + 0.04);
+        const g = clamp013(base.g * k + 0.04);
+        const b = clamp013(base.b * k + 0.04);
+        writePixel(data, originX + x, originY + y, r, g, b, 1);
+      }
+    }
+  }
+  function paintPage() {
+    const data = new Uint8Array(PAGE_SIZE * PAGE_SIZE * 4);
+    fillBackground(data);
+    for (let cell = 0; cell < CELL_BONE.length; cell += 1) {
+      paintCell(data, cell, CELL_BONE[cell]);
+    }
+    return data;
+  }
+  function rectForCell(cell) {
+    return {
+      x: cell % COLUMNS * CELL_SIZE,
+      y: Math.floor(cell / COLUMNS) * CELL_SIZE,
+      width: CELL_SIZE,
+      height: CELL_SIZE
+    };
+  }
+  function uvMatrixOf(rect) {
+    const spanU = (rect.width - 1) / PAGE_SIZE;
+    const spanV = (rect.height - 1) / PAGE_SIZE;
+    const tx = (rect.x + 0.5) / PAGE_SIZE;
+    const ty = (rect.y + 0.5) / PAGE_SIZE;
+    return new Float32Array([spanU, 0, 0, spanV, tx, ty]);
+  }
+  function fnv1a(text) {
+    let hash = 0xcbf29ce484222325n;
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= BigInt(text.charCodeAt(i));
+      hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+    }
+    return hash.toString(16).padStart(16, "0");
+  }
+  function createProceduralAtlas() {
+    const pixels = paintPage();
+    const page = Object.freeze({
+      index: 0,
+      width: PAGE_SIZE,
+      height: PAGE_SIZE,
+      image: Object.freeze({ width: PAGE_SIZE, height: PAGE_SIZE, data: pixels })
+    });
+    const regions = /* @__PURE__ */ new Map();
+    for (const name of ATLAS_BONE_ORDER) {
+      const cell = CELL_OF_BONE[name];
+      const rect = rectForCell(cell);
+      const region = Object.freeze({
+        id: name,
+        page: 0,
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+        uvMatrix: uvMatrixOf(rect),
+        trim: Object.freeze({ offsetX: 0, offsetY: 0, sourceWidth: CELL_SIZE, sourceHeight: CELL_SIZE }),
+        maxMip: MAX_MIP
+      });
+      regions.set(name, region);
+    }
+    const signature = [
+      `procedural:${PAGE_SIZE}x${PAGE_SIZE}:${CELL_SIZE}`,
+      ...ATLAS_BONE_ORDER.map((name) => {
+        const cell = CELL_OF_BONE[name];
+        const rect = rectForCell(cell);
+        return `${name}@0:${rect.x},${rect.y},${rect.width},${rect.height}`;
+      })
+    ].join("|");
+    const data = Object.freeze({
+      format: "dsh-2d-atlas",
+      version: 1,
+      hash: fnv1a(signature),
+      pages: Object.freeze([page]),
+      regions,
+      pma: true,
+      colorSpace: "srgb",
+      padding: 0,
+      bleed: 0,
+      source: "procedural"
+    });
+    const texture = Object.freeze({
+      width: PAGE_SIZE,
+      height: PAGE_SIZE,
+      data: pixels,
+      pma: true
+    });
+    const materials = Object.freeze([
+      { id: 0, kind: "flat", page: -1, filter: "linear" },
+      { id: 1, kind: "sprite", page: 0, filter: "linear" }
+    ]);
+    const assets = Object.freeze({
+      pages: Object.freeze([texture]),
+      materials,
+      maxTexturePages: 4
+    });
+    return { data, texture, assets };
+  }
+  var bodyMaskPolygon = [-0.38, 0.8, 0.38, 0.8, 0.38, 1.72, -0.38, 1.72];
+
+  // preview/core2d.ts
+  var SLIDER_BONES = ["upperArmR", "lowerArmR", "upperArmL", "thighR", "thighL"];
+  var BONE_LABEL = {
+    upperArmR: "\u53F3\u4E0A\u81C2",
+    lowerArmR: "\u53F3\u524D\u81C2",
+    upperArmL: "\u5DE6\u4E0A\u81C2",
+    thighR: "\u53F3\u5927\u817F",
+    thighL: "\u5DE6\u5927\u817F"
+  };
   function widthForBone(name) {
     if (name === "head") return 0.24;
     if (name === "neck") return 0.07;
@@ -1451,11 +2242,12 @@
   function createScene(speed2) {
     const skeleton = createHumanoid("simple2d");
     const pose = createPose(skeleton);
+    const procedural = createProceduralAtlas();
     const slots = [];
     const attachments = /* @__PURE__ */ new Map();
     const baseColors = [];
     for (const bone of skeleton.bones) {
-      const color = colorFor(bone.name);
+      const color = partColorFor(bone.name);
       baseColors.push(color);
       slots.push({
         id: bone.name,
@@ -1470,13 +2262,21 @@
       attachments.set(bone.name, {
         kind: "region",
         id: bone.name,
-        region: { atlasKey: "flat", uvs: null },
+        region: { atlasKey: bone.name, uvs: null },
         color
       });
     }
     const skins = /* @__PURE__ */ new Map([["default", { id: "default", attachments }]]);
     const slotSet = createSlotSet(slots, skins, "default");
-    return { skeleton, pose, slotSet, baseColors, walkTrack: createTrack(createWalkClip(), { speed: speed2 }) };
+    return {
+      skeleton,
+      pose,
+      slotSet,
+      baseColors,
+      atlas: procedural.data,
+      assets: procedural.assets,
+      walkTrack: createTrack(createWalkClip(), { speed: speed2 })
+    };
   }
   function packColor(c) {
     const byte = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
@@ -1535,8 +2335,54 @@
       if (id !== void 0) addRotation(scene.pose, id, delta2);
     }
   }
-  function buildFrame(scene, width, height) {
+  var LEFT_ARM_BONES = /* @__PURE__ */ new Set(["upperArmL", "lowerArmL", "handL"]);
+  function buildBodyMask() {
+    const positions = new Float32Array(bodyMaskPolygon);
+    const count = Math.floor(positions.length / 2);
+    const indices = new Uint32Array(Math.max(0, (count - 2) * 3));
+    let cursor = 0;
+    for (let i = 1; i + 1 < count; i += 1) {
+      indices[cursor++] = 0;
+      indices[cursor++] = i;
+      indices[cursor++] = i + 1;
+    }
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (let i = 0; i + 1 < positions.length; i += 2) {
+      minX = Math.min(minX, positions[i]);
+      minY = Math.min(minY, positions[i + 1]);
+      maxX = Math.max(maxX, positions[i]);
+      maxY = Math.max(maxY, positions[i + 1]);
+    }
+    const bounds = Number.isFinite(minX) ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY } : { x: 0, y: 0, width: 0, height: 0 };
+    return {
+      id: 0,
+      mode: "stencil",
+      invert: false,
+      feather: 0,
+      positions,
+      indices,
+      bounds
+    };
+  }
+  function atlasUvs(region) {
+    const m = region.uvMatrix;
+    const local = [0, 0, 1, 0, 1, 1, 0, 1];
+    const uvs = new Float32Array(8);
+    for (let i = 0; i < 4; i += 1) {
+      const u = local[i * 2];
+      const v = local[i * 2 + 1];
+      uvs[i * 2] = m[0] * u + m[2] * v + m[4];
+      uvs[i * 2 + 1] = m[1] * u + m[3] * v + m[5];
+    }
+    return uvs;
+  }
+  function buildFrame(scene, width, height, options = {}) {
     const { pose, slotSet } = scene;
+    const useTexture2 = options.texture !== false;
+    const useMask2 = options.mask === true;
     updateWorld(pose);
     const camera = {
       ...DEFAULT_CAMERA,
@@ -1567,21 +2413,37 @@
         const [lx, ly] = corners[i];
         transformAffineInto(positions, i * 2, world, lx, ly);
       }
-      const c = slot.color;
+      const region = scene.atlas.regions.get(bone.name);
+      const textured = useTexture2 && region !== void 0;
+      const c = textured ? { r: 1, g: 1, b: 1, a: 1 } : slot.color;
       packets.push(buildRegionPacket({
         id: slotIndex,
         positions,
+        ...textured ? { uvs: atlasUvs(region), page: region.page } : {},
         color: [c.r, c.g, c.b, c.a],
-        materialId: 0,
+        materialId: textured ? region.page + 1 : 0,
         order: boneId,
         depthKey: 0,
         seq: slotIndex,
         kind: "region",
         blend: "normal",
-        pma: false
+        pma: textured,
+        maskPath: useMask2 ? LEFT_ARM_BONES.has(bone.name) ? 0 : -1 : 0
       }));
     }
-    return { packets: sortPackets(packets), width, height, viewProjection };
+    const frame = {
+      packets: sortPackets(packets),
+      width,
+      height,
+      viewProjection,
+      assets: scene.assets
+    };
+    if (!useMask2) return frame;
+    return {
+      ...frame,
+      maskPaths: [{ maskId: 0, parent: -1 }],
+      masks: buildMaskSet([buildBodyMask()])
+    };
   }
 
   // preview/main.ts
@@ -1614,6 +2476,8 @@ ${text}`;
   var poseKind = poseParam === "walk" || poseParam === "raise" ? poseParam : "tpose";
   var speedParam = Number(params.get("speed") ?? "1");
   var speed = Number.isFinite(speedParam) ? speedParam : 1;
+  var useTexture = params.get("texture") !== "0";
+  var useMask = params.get("mask") === "1";
   function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     if (shader === null) throw new Error("WebGL2: createShader \u5931\u8D25");
@@ -1634,19 +2498,28 @@ in vec2 aUv;
 in vec4 aColor;
 uniform mat3 viewProjection;
 uniform vec2 uResolution;
+out vec2 vUv;
 out vec4 vColor;
 void main() {
   vec3 pixel = viewProjection * vec3(aPosition, 1.0);
   vec2 ndc = vec2(pixel.x / uResolution.x * 2.0 - 1.0,
                   1.0 - pixel.y / uResolution.y * 2.0);
   gl_Position = vec4(ndc, 0.0, 1.0);
+  vUv = aUv;
   vColor = aColor;
 }`;
     const fs = `#version 300 es
 precision mediump float;
+in vec2 vUv;
 in vec4 vColor;
+uniform sampler2D uTexture;
+uniform int uUseTexture;
 out vec4 outColor;
-void main() { outColor = vColor; }`;
+void main() {
+  // \u9876\u70B9\u8272\u4E0E\u56FE\u96C6\u9875\u90FD\u5728 PMA \u57DF\uFF1B\u8C03\u5236\u540E\u7528 ONE / ONE_MINUS_SRC_ALPHA \u5408\u6210\u3002
+  vec4 texel = uUseTexture == 1 ? texture(uTexture, vUv) : vec4(1.0);
+  outColor = vColor * texel;
+}`;
     const program = gl.createProgram();
     if (program === null) throw new Error("WebGL2: createProgram \u5931\u8D25");
     const vertex = compileShader(gl, gl.VERTEX_SHADER, vs);
@@ -1725,20 +2598,24 @@ void main() { outColor = vColor; }`;
     });
     const ctx2d = mode === "cpu" ? view.getContext("2d", { alpha: false }) : null;
     if (mode === "cpu" && ctx2d === null) throw new Error("\u65E0\u6CD5\u83B7\u53D6 2D \u4E0A\u4E0B\u6587");
-    const gl = mode === "webgl" ? view.getContext("webgl2", { alpha: false, antialias: true }) : null;
+    const gl = mode === "webgl" ? view.getContext("webgl2", { alpha: false, antialias: true, stencil: true }) : null;
     if (mode === "webgl" && gl === null) throw new Error("\u5F53\u524D\u6D4F\u89C8\u5668/\u73AF\u5883\u4E0D\u652F\u6301 WebGL2");
     let program = null;
     let resolutionLocation = null;
+    let textureLocation = null;
     if (mode === "webgl" && gl !== null) {
       program = createProgram(gl);
       resolutionLocation = gl.getUniformLocation(program, "uResolution");
       if (resolutionLocation === null) throw new Error("WebGL2: \u627E\u4E0D\u5230 uResolution");
+      textureLocation = gl.getUniformLocation(program, "uTexture");
+      if (textureLocation === null) throw new Error("WebGL2: \u627E\u4E0D\u5230 uTexture");
       const vao = gl.createVertexArray();
       if (vao !== null) gl.bindVertexArray(vao);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     }
     const backend = mode === "webgl" ? new WebGL2Backend(gl, program) : new CpuBackend({ width: 1, height: 1, background: BG });
+    let assetsPrepared = false;
     let last = 0;
     const tick = (now) => {
       try {
@@ -1748,7 +2625,11 @@ void main() { outColor = vColor; }`;
         const width = view.width;
         const height = view.height;
         applyPose(scene, poseKind, offsets, dt);
-        const frame = buildFrame(scene, width, height);
+        const frame = buildFrame(scene, width, height, { texture: useTexture, mask: useMask });
+        if (!assetsPrepared && frame.assets !== void 0) {
+          backend.prepare?.(frame.assets);
+          assetsPrepared = true;
+        }
         if (mode === "cpu" && ctx2d !== null) {
           backend.draw(frame);
           const pixels = new Uint8ClampedArray(backend.readPixels());
@@ -1756,12 +2637,13 @@ void main() { outColor = vColor; }`;
         } else if (mode === "webgl" && gl !== null && program !== null) {
           gl.viewport(0, 0, width, height);
           gl.clearColor(BG[0] / 255, BG[1] / 255, BG[2] / 255, 1);
-          gl.clear(gl.COLOR_BUFFER_BIT);
+          gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
           gl.useProgram(program);
           gl.uniform2f(resolutionLocation, width, height);
+          gl.uniform1i(textureLocation, 0);
           backend.draw(webglFrame(frame));
         }
-        runtimeInfo.textContent = `\u540E\u7AEF ${mode} \xB7 \u59FF\u6001 ${poseKind} \xB7 \u901F\u5EA6 ${speed} \xB7 \u9AA8\u9ABC ${scene.skeleton.count} \xB7 packets ${backend.stats.packets} \xB7 drawCalls ${backend.stats.drawCalls}`;
+        runtimeInfo.textContent = `\u540E\u7AEF ${mode} \xB7 \u59FF\u6001 ${poseKind} \xB7 \u901F\u5EA6 ${speed} \xB7 \u7EB9\u7406 ${useTexture ? "atlas" : "flat"} \xB7 mask ${useMask ? "left-arm" : "off"} \xB7 \u9AA8\u9ABC ${scene.skeleton.count} \xB7 packets ${backend.stats.packets} \xB7 drawCalls ${backend.stats.drawCalls}`;
       } catch (err) {
         showError(err);
         return;
