@@ -17,6 +17,7 @@ import { multiplyRigid, RIGID_STRIDE, setRigidParentFromBone } from '../skeleton
 import { bindLength, bindTranslation, type Skeleton } from '../skeleton/skeleton'
 import { validateMesh } from '../topology/validate'
 import { createHumanoidWeights, type WeightSet } from '../weight/humanoid'
+import { isArmPart } from '../outline/arm'
 
 /** 编译后的只读角色。运行时只读这份结果。 */
 export type CompiledRig = {
@@ -73,6 +74,7 @@ export function compileRig(input: CompileInput): CompiledRig {
   assertMeshes(parts, meshes)
   assertWeights(parts, meshes, weights)
   assertChains(humanoid)
+  assertBindSwing(humanoid)
   const bindRig = writeBindRig(humanoid)
   const inverseBind = invertAll(bindRig, humanoid.skeleton.boneCount)
   const foot = createFootShape(humanoid.proportions.footLength, humanoid.proportions.ankleHeight)
@@ -117,7 +119,8 @@ function assertWeights(parts: PartSet, meshes: MeshSet, weights: WeightSet): voi
   for (let i = 0; i < parts.parts.length; i += 1) {
     const part = parts.parts[i]!
     const found = weights.weights.find((item) => item.partId === part.id)
-    if (part.kind === 'rigid') {
+    if (part.kind === 'rigid' || isArmPart(part.id)) {
+      // 2D 手臂不走蒙皮，没有权重记录。
       if (found !== undefined) throw new Error('weight')
       continue
     }
@@ -130,6 +133,17 @@ function assertWeights(parts: PartSet, meshes: MeshSet, weights: WeightSet): voi
       found.twistU.length !== vertexCount
     ) {
       throw new Error('weight')
+    }
+  }
+}
+
+function assertBindSwing(humanoid: Humanoid): void {
+  const skeleton = humanoid.skeleton
+  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+    const swing = skeleton.bindSwing[bone]!
+    // 上臂外展只有 6°，但锁骨要用 90° 的绑定侧摆把骨轴指向 ±Z，因此上限放到 90°。
+    if (!Number.isFinite(swing) || Math.abs(swing) > Math.PI / 2 + 1e-6) {
+      throw new Error('bindSwing')
     }
   }
 }

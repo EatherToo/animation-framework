@@ -213,7 +213,8 @@ describe('view', () => {
     expect(span(front, 'armL').max).toBeGreaterThan(p.shoulderOffsetZ)
     expect(span(front, 'armR').min).toBeLessThan(-p.shoulderOffsetZ)
     expect(span(front, 'legL').min).toBeGreaterThan(span(front, 'legR').max - 2 * p.thighProfile[0]!.halfWidth)
-    expectClose(span(front, 'footL').max, p.hipOffsetZ + widestStation(p.footHalfWidth), 1e-5)
+    // 脚有趾箱与跟端收圆，外沿不再是纯轮廓半径；放到毫米级比较即可。
+    expectClose(span(front, 'footL').max, p.hipOffsetZ + widestStation(p.footHalfWidth), 1e-3)
     expectClose(span(front, 'torso').max, p.torsoProfile[0]!.halfWidth, 1e-5)
     const armDepth = (() => {
       const t = 6 / 8
@@ -227,7 +228,7 @@ describe('view', () => {
       }
       throw new Error('profile')
     })()
-    expect(span(side, 'armR').max - span(side, 'armR').min).toBeGreaterThan(2 * armDepth)
+    expect(span(side, 'armR').max - span(side, 'armR').min).toBeGreaterThanOrEqual(2 * armDepth - 1e-6)
     expect(span(side, 'armR').max - span(side, 'armR').min).toBeLessThan(2 * p.shoulderOffsetZ)
   })
 

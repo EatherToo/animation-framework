@@ -16,6 +16,8 @@ export type BoneSpec = {
   /** 相对父骨的横向偏移，米。角色左侧为正。不进入 parentFromBone。 */
   readonly translationZ: number
   readonly rotation: number
+  /** 绑定侧摆，弧度。与姿态侧摆同一通道，左右由关节符号决定。默认 0。 */
+  readonly swing?: number
   readonly length: number
 }
 
@@ -30,6 +32,8 @@ export type Skeleton = {
   readonly parent: Int16Array
   readonly bindTranslation: Float32Array
   readonly bindLateral: Float32Array
+  /** 每根骨头的绑定侧摆，弧度；默认 0。只有三轴刚体路径会用到它。 */
+  readonly bindSwing: Float32Array
   readonly bindRotation: Float32Array
   readonly bindLength: Float32Array
 }
@@ -46,6 +50,7 @@ export type SkeletonBuilder = {
   translationY: number[]
   translationZ: number[]
   rotation: number[]
+  swing: number[]
   length: number[]
 }
 
@@ -62,6 +67,7 @@ export function createSkeletonBuilder(): SkeletonBuilder {
     translationY: [],
     translationZ: [],
     rotation: [],
+    swing: [],
     length: [],
   }
 }
@@ -92,11 +98,13 @@ export function addBone(builder: SkeletonBuilder, spec: BoneSpec): number {
   }
 
   const { translationX: tx, translationY: ty, translationZ: tz, rotation, length } = spec
+  const swing = spec.swing ?? 0
   if (
     !Number.isFinite(tx) ||
     !Number.isFinite(ty) ||
     !Number.isFinite(tz) ||
     !Number.isFinite(rotation) ||
+    !Number.isFinite(swing) ||
     !Number.isFinite(length) ||
     length < 0
   ) {
@@ -109,6 +117,7 @@ export function addBone(builder: SkeletonBuilder, spec: BoneSpec): number {
   builder.translationY.push(ty)
   builder.translationZ.push(tz)
   builder.rotation.push(normalizeAngle(rotation))
+  builder.swing.push(swing)
   builder.length.push(length === 0 ? 0 : length)
   builder.count = index + 1
   return index
@@ -128,6 +137,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
   const parent = new Int16Array(boneCount)
   const bindTranslation = new Float32Array(boneCount * 2)
   const bindLateral = new Float32Array(boneCount)
+  const bindSwing = new Float32Array(boneCount)
   const bindRotation = new Float32Array(boneCount)
   const bindLength = new Float32Array(boneCount)
 
@@ -136,6 +146,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
     bindTranslation[i * 2] = builder.translationX[i]!
     bindTranslation[i * 2 + 1] = builder.translationY[i]!
     bindLateral[i] = builder.translationZ[i]!
+    bindSwing[i] = builder.swing[i]!
     bindRotation[i] = builder.rotation[i]!
     bindLength[i] = builder.length[i]!
   }
@@ -148,6 +159,7 @@ export function finishSkeleton(builder: SkeletonBuilder): Skeleton {
     parent,
     bindTranslation,
     bindLateral,
+    bindSwing,
     bindRotation,
     bindLength,
   }

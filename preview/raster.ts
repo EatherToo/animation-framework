@@ -91,6 +91,7 @@ export function flatTriangle(
   point: readonly [number, number, number, number, number, number],
   z: number,
   color: readonly [number, number, number],
+  depthTest = true,
 ): void {
   const [ax, ay, bx, by, cx, cy] = point
   const basis = barycentric(ax, ay, bx, by, cx, cy)
@@ -106,12 +107,12 @@ export function flatTriangle(
       const w1 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / denom
       if (w0 < -1e-6 || w1 < -1e-6 || 1 - w0 - w1 < -1e-6) continue
       const pixel = y * width + x
-      if (z >= depth[pixel]!) continue
+      if (depthTest && z >= depth[pixel]!) continue
       pixels[pixel * 4] = color[0]
       pixels[pixel * 4 + 1] = color[1]
       pixels[pixel * 4 + 2] = color[2]
       pixels[pixel * 4 + 3] = 255
-      depth[pixel] = z
+      if (depthTest) depth[pixel] = z
     }
   }
 }
@@ -128,6 +129,7 @@ export function shadedTriangle(
   point: readonly [number, number, number, number, number, number],
   z: readonly [number, number, number],
   shade: (px: number, py: number) => readonly [number, number, number] | null,
+  depthTest = true,
 ): void {
   const [ax, ay, bx, by, cx, cy] = point
   const basis = barycentric(ax, ay, bx, by, cx, cy)
@@ -145,14 +147,14 @@ export function shadedTriangle(
       if (w0 < -1e-6 || w1 < -1e-6 || 1 - w0 - w1 < -1e-6) continue
       const pixel = y * width + x
       const value = w0 * za + w1 * zb + (1 - w0 - w1) * zc
-      if (value >= depth[pixel]!) continue
+      if (depthTest && value >= depth[pixel]!) continue
       const color = shade(px, py)
       if (color === null) continue
       pixels[pixel * 4] = color[0]
       pixels[pixel * 4 + 1] = color[1]
       pixels[pixel * 4 + 2] = color[2]
       pixels[pixel * 4 + 3] = 255
-      depth[pixel] = value
+      if (depthTest) depth[pixel] = value
     }
   }
 }

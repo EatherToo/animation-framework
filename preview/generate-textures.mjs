@@ -1,6 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { crc32, deflateSync } from 'node:zlib'
 import {
   createHumanoid,
   createHumanoidMeshes,
@@ -18,22 +17,22 @@ const textureRoot = join(process.cwd(), 'preview', 'textures')
 const humanoid = createHumanoid(HEIGHT)
 const meshes = createHumanoidMeshes(humanoid, createHumanoidParts(humanoid.skeleton))
 const parts = []
+/** 每个三角形一个灰度字节，按部件顺序拼在一起；页面只需一次请求。 */
+const packed = []
 
+await mkdir(textureRoot, { recursive: true })
 for (const mesh of meshes.meshes) {
   const triangleCount = mesh.indices.length / 3
   const grays = assignGrays(mesh.indices)
-  const dir = join(textureRoot, mesh.partId)
-  await mkdir(dir, { recursive: true })
-  for (let triangle = 0; triangle < triangleCount; triangle += 1) {
-    await writeFile(join(dir, `${triangle}.png`), png(grays[triangle], EDGE))
-  }
+  for (let triangle = 0; triangle < triangleCount; triangle += 1) packed.push(grays[triangle])
   parts.push({ partId: mesh.partId, count: triangleCount })
 }
 
+await writeFile(join(textureRoot, 'packed.bin'), Buffer.from(packed))
 await writeFile(join(textureRoot, 'manifest.json'), `${JSON.stringify({ edge: EDGE, parts }, null, 2)}\n`)
 
 const total = parts.reduce((sum, part) => sum + part.count, 0)
-console.log(`纹理已生成：${parts.length} 件，共 ${total} 张（${EDGE}×${EDGE}）`)
+console.log(`纹理已生成：${parts.length} 件，共 ${total} 张，打包成 ${total} 字节`)
 
 function assignGrays(indices) {
   const triangleCount = indices.length / 3
@@ -86,39 +85,4 @@ function addEdge(shared, a, b, triangle) {
   const list = shared.get(key)
   if (list === undefined) shared.set(key, [triangle])
   else list.push(triangle)
-}
-
-function png(gray, size) {
-  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-  const header = Buffer.alloc(13)
-  header.writeUInt32BE(size, 0)
-  header.writeUInt32BE(size, 4)
-  header[8] = 8
-  header[9] = 2
-  const stride = size * 3 + 1
-  const raw = Buffer.alloc(stride * size)
-  for (let y = 0; y < size; y += 1) {
-    const row = y * stride
-    for (let x = 0; x < size; x += 1) {
-      const pixel = row + 1 + x * 3
-      raw[pixel] = gray
-      raw[pixel + 1] = gray
-      raw[pixel + 2] = gray
-    }
-  }
-  return Buffer.concat([
-    signature,
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ])
-}
-
-function chunk(type, data) {
-  const length = Buffer.alloc(4)
-  length.writeUInt32BE(data.length, 0)
-  const name = Buffer.from(type)
-  const checksum = Buffer.alloc(4)
-  checksum.writeUInt32BE(crc32(Buffer.concat([name, data])) >>> 0, 0)
-  return Buffer.concat([length, name, data, checksum])
 }

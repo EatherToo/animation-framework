@@ -62,10 +62,10 @@ export type SectionOffset = {
 }
 
 /** 圆管截面的采样数。`θ = j · 2π / TUBE_SIDES`。 */
-export const TUBE_SIDES = 16
+export const TUBE_SIDES = 24
 
 /** 每根骨头沿轴向切开的等长子段数。 */
-export const AXIAL_STEPS = 8
+export const AXIAL_STEPS = 12
 
 /**
  * 把中心线段收成两端敞开的圆管。空段列表抛出 `segments`。

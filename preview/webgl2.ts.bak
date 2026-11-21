@@ -1,0 +1,324 @@
+import type { HumanoidAtlas, RenderPacket } from '@animation-framework/render-engine/pipeline2d'
+
+type Frame = { scale: number; originX: number; originY: number }
+
+const VERT = `#version 300 es
+in vec2 a_pos;
+in vec2 a_uv;
+in vec4 a_color;
+uniform vec2 u_res;
+uniform float u_scale;
+uniform vec2 u_origin;
+out vec2 v_uv;
+out vec4 v_color;
+void main() {
+  vec2 px = a_pos * u_scale + u_origin;
+  vec2 clip = vec2(px.x / u_res.x * 2.0 - 1.0, 1.0 - px.y / u_res.y * 2.0);
+  gl_Position = vec4(clip, 0.0, 1.0);
+  v_uv = a_uv;
+  v_color = a_color;
+}`
+
+const FRAG = `#version 300 es
+precision highp float;
+in vec2 v_uv;
+in vec4 v_color;
+uniform sampler2D u_atlas;
+uniform sampler2D u_mask;
+uniform bool u_useAtlas;
+uniform bool u_useMask;
+uniform vec2 u_res;
+out vec4 outColor;
+void main() {
+  vec4 c = u_useAtlas ? texture(u_atlas, v_uv) * v_color : v_color;
+  if (u_useMask) {
+    vec2 muv = vec2(gl_FragCoord.x / u_res.x, 1.0 - gl_FragCoord.y / u_res.y);
+    if (texture(u_mask, muv).r < 0.5) discard;
+  }
+  outColor = c;
+}`
+
+type DrawRange = { first: number; count: number; hasAtlas: boolean; useMask: boolean }
+
+/** 浏览器 WebGL2 后端：把 RenderPacket 直接画到离屏 canvas，再交给 2D canvas 显示。 */
+export class PacketWebGLRenderer {
+  readonly canvas: HTMLCanvasElement
+  private readonly gl: WebGL2RenderingContext
+  private readonly program: WebGLProgram
+  private readonly vao: WebGLVertexArrayObject
+  private readonly vbo: WebGLBuffer
+  private readonly ibo: WebGLBuffer
+  private readonly edgeVao: WebGLVertexArrayObject
+  private readonly edgeVbo: WebGLBuffer
+  private readonly atlas: WebGLTexture
+  private readonly mask: WebGLTexture
+  private readonly ranges: DrawRange[] = []
+  private readonly edgeRanges: number[] = []
+  private readonly uRes: WebGLUniformLocation
+  private readonly uScale: WebGLUniformLocation
+  private readonly uOrigin: WebGLUniformLocation
+  private readonly uUseAtlas: WebGLUniformLocation
+  private readonly uUseMask: WebGLUniformLocation
+  readonly stats = { packets: 0, ranges: 0, vertices: 0, edgeVertices: 0, error: 0 }
+
+  constructor() {
+    this.canvas = document.createElement('canvas')
+    const gl = this.canvas.getContext('webgl2', { alpha: false, antialias: true, premultipliedAlpha: true })
+    if (gl === null) throw new Error('webgl2')
+    this.gl = gl
+    this.program = program(gl)
+    this.vao = vao(gl)
+    this.vbo = buffer(gl)
+    this.ibo = buffer(gl)
+    this.edgeVao = vao(gl)
+    this.edgeVbo = buffer(gl)
+    this.atlas = texture(gl)
+    this.mask = texture(gl)
+    gl.bindVertexArray(this.vao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 32, 0)
+    gl.enableVertexAttribArray(1)
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 8)
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16)
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo)
+    gl.bindVertexArray(this.edgeVao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.edgeVbo)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 24, 0)
+    gl.enableVertexAttribArray(1)
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 32, 8)
+    gl.enableVertexAttribArray(2)
+    gl.vertexAttribPointer(2, 4, gl.FLOAT, false, 32, 16)
+    gl.bindVertexArray(null)
+    gl.useProgram(this.program)
+    this.uRes = loc(gl, this.program, 'u_res')
+    this.uScale = loc(gl, this.program, 'u_scale')
+    this.uOrigin = loc(gl, this.program, 'u_origin')
+    this.uUseAtlas = loc(gl, this.program, 'u_useAtlas')
+    this.uUseMask = loc(gl, this.program, 'u_useMask')
+    gl.uniform1i(loc(gl, this.program, 'u_atlas'), 0)
+    gl.uniform1i(loc(gl, this.program, 'u_mask'), 1)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.disable(gl.DEPTH_TEST)
+  }
+
+  render(
+    packets: readonly RenderPacket[],
+    atlas: HumanoidAtlas,
+    frame: Frame,
+    width: number,
+    height: number,
+    mask: Uint8Array | null,
+  ): void {
+    const gl = this.gl
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width
+      this.canvas.height = height
+      gl.viewport(0, 0, width, height)
+    }
+    gl.clearColor(92 / 255, 92 / 255, 92 / 255, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    this.uploadAtlas(atlas)
+    if (mask !== null) this.uploadMask(mask, width, height)
+    let totalVertices = 0
+    let totalIndices = 0
+    for (const packet of packets) {
+      totalVertices += packet.vertices.length / 2
+      totalIndices += packet.indices.length
+    }
+    const fill = new Float32Array(totalVertices * 8)
+    const fillIndices = new Uint32Array(totalIndices)
+    const edge = new Float32Array(Math.max(16, totalIndices * 16))
+    let fillFloats = 0
+    let edgeFloats = 0
+    let indexCount = 0
+    let vertexBase = 0
+    this.ranges.length = 0
+    this.edgeRanges.length = 0
+    for (const packet of packets) {
+      const start = fillFloats / 8
+      const count = packet.vertices.length / 2
+      for (let v = 0; v < count; v += 1) {
+        if (fillFloats + 8 > fill.length) break
+        fill[fillFloats] = packet.vertices[v * 2]!
+        fill[fillFloats + 1] = packet.vertices[v * 2 + 1]!
+        fill[fillFloats + 2] = packet.uvs[v * 2] ?? 0
+        fill[fillFloats + 3] = packet.uvs[v * 2 + 1] ?? 0
+        fill[fillFloats + 4] = (packet.colors[v * 4] ?? 255) / 255
+        fill[fillFloats + 5] = (packet.colors[v * 4 + 1] ?? 255) / 255
+        fill[fillFloats + 6] = (packet.colors[v * 4 + 2] ?? 255) / 255
+        fill[fillFloats + 7] = (packet.colors[v * 4 + 3] ?? 255) / 255
+        fillFloats += 8
+      }
+      for (let i = 0; i < packet.indices.length; i += 1) fillIndices[indexCount + i] = packet.indices[i]! + vertexBase
+      indexCount += packet.indices.length
+      vertexBase += count
+      this.ranges.push({
+        first: start,
+        count: packet.indices.length,
+        hasAtlas: packet.atlasPage >= 0,
+        useMask: packet.mask !== null,
+      })
+      const edgeStart = edgeFloats / 8
+      const seen = new Set<string>()
+      for (let t = 0; t < packet.indices.length; t += 3) {
+        for (let e = 0; e < 3; e += 1) {
+          const a = packet.indices[t + e]!
+          const b = packet.indices[t + ((e + 1) % 3)]!
+          const lo = Math.min(a, b)
+          const hi = Math.max(a, b)
+          const key = `${lo}:${hi}`
+          if (seen.has(key)) continue
+          seen.add(key)
+          if (edgeFloats + 16 > edge.length) break
+          const ax = packet.vertices[lo * 2]!
+          const ay = packet.vertices[lo * 2 + 1]!
+          const bx = packet.vertices[hi * 2]!
+          const by = packet.vertices[hi * 2 + 1]!
+          edge[edgeFloats] = ax
+          edge[edgeFloats + 1] = ay
+          edge[edgeFloats + 2] = 0
+          edge[edgeFloats + 3] = 0
+          edge[edgeFloats + 4] = 0.08
+          edge[edgeFloats + 5] = 0.08
+          edge[edgeFloats + 6] = 0.08
+          edge[edgeFloats + 7] = 1
+          edge[edgeFloats + 8] = bx
+          edge[edgeFloats + 9] = by
+          edge[edgeFloats + 10] = 0
+          edge[edgeFloats + 11] = 0
+          edge[edgeFloats + 12] = 0.08
+          edge[edgeFloats + 13] = 0.08
+          edge[edgeFloats + 14] = 0.08
+          edge[edgeFloats + 15] = 1
+          edgeFloats += 16
+        }
+      }
+      this.edgeRanges.push(edgeStart, edgeFloats / 8 - edgeStart)
+    }
+    gl.bindVertexArray(this.vao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo)
+    gl.bufferData(gl.ARRAY_BUFFER, fill.subarray(0, fillFloats), gl.DYNAMIC_DRAW)
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibo)
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, fillIndices, gl.DYNAMIC_DRAW)
+    gl.useProgram(this.program)
+    gl.uniform2f(this.uRes, width, height)
+    gl.uniform1f(this.uScale, frame.scale)
+    gl.uniform2f(this.uOrigin, frame.originX, frame.originY)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas)
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.mask)
+    for (let i = 0; i < this.ranges.length; i += 1) {
+      const range = this.ranges[i]!
+      gl.uniform1i(this.uUseAtlas, range.hasAtlas ? 1 : 0)
+      gl.uniform1i(this.uUseMask, range.useMask && mask !== null ? 1 : 0)
+      gl.drawElements(gl.TRIANGLES, range.count, gl.UNSIGNED_INT, (i === 0 ? 0 : this.indexOffset(i)) * 4)
+    }
+    gl.bindVertexArray(this.edgeVao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.edgeVbo)
+    gl.bufferData(gl.ARRAY_BUFFER, edge.subarray(0, edgeFloats), gl.DYNAMIC_DRAW)
+    gl.uniform1i(this.uUseAtlas, 0)
+    gl.uniform1i(this.uUseMask, 0)
+    for (let i = 0; i < this.edgeRanges.length; i += 2) {
+      gl.drawArrays(gl.LINES, this.edgeRanges[i]!, this.edgeRanges[i + 1]!)
+    }
+    gl.bindVertexArray(null)
+    this.stats.packets = packets.length
+    this.stats.ranges = this.ranges.length
+    this.stats.vertices = vertexBase
+    this.stats.edgeVertices = edgeFloats / 8
+    this.stats.error = gl.getError()
+  }
+
+  private indexOffset(packet: number): number {
+    let total = 0
+    for (let i = 0; i < packet; i += 1) total += this.ranges[i]!.count
+    return total
+  }
+
+  private uploadAtlas(atlas: HumanoidAtlas): void {
+    const gl = this.gl
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      atlas.atlas.width,
+      atlas.atlas.height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      atlas.image.rgba,
+    )
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  }
+
+  private uploadMask(mask: Uint8Array, width: number, height: number): void {
+    const gl = this.gl
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.mask)
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, width, height, 0, gl.RED, gl.UNSIGNED_BYTE, mask)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+  }
+}
+
+function program(gl: WebGL2RenderingContext): WebGLProgram {
+  const vertex = shader(gl, gl.VERTEX_SHADER, VERT)
+  const fragment = shader(gl, gl.FRAGMENT_SHADER, FRAG)
+  const result = gl.createProgram()
+  if (result === null) throw new Error('program')
+  gl.attachShader(result, vertex)
+  gl.attachShader(result, fragment)
+  gl.bindAttribLocation(result, 0, 'a_pos')
+  gl.bindAttribLocation(result, 1, 'a_uv')
+  gl.bindAttribLocation(result, 2, 'a_color')
+  gl.linkProgram(result)
+  if (!gl.getProgramParameter(result, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(result) ?? 'link')
+  return result
+}
+
+function shader(gl: WebGL2RenderingContext, kind: number, source: string): WebGLShader {
+  const result = gl.createShader(kind)
+  if (result === null) throw new Error('shader')
+  gl.shaderSource(result, source)
+  gl.compileShader(result)
+  if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(result) ?? 'compile')
+  return result
+}
+
+function vao(gl: WebGL2RenderingContext): WebGLVertexArrayObject {
+  const result = gl.createVertexArray()
+  if (result === null) throw new Error('vao')
+  return result
+}
+
+function buffer(gl: WebGL2RenderingContext): WebGLBuffer {
+  const result = gl.createBuffer()
+  if (result === null) throw new Error('buffer')
+  return result
+}
+
+function texture(gl: WebGL2RenderingContext): WebGLTexture {
+  const result = gl.createTexture()
+  if (result === null) throw new Error('texture')
+  return result
+}
+
+function loc(gl: WebGL2RenderingContext, program: WebGLProgram, name: string): WebGLUniformLocation {
+  const result = gl.getUniformLocation(program, name)
+  if (result === null) throw new Error('uniform')
+  return result
+}

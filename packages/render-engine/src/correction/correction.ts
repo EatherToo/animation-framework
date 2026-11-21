@@ -60,8 +60,8 @@ export function applyCorrection(
   out.set(positions)
   if (!correction.enabled) return out
   if (context === undefined) throw new Error('correction')
-  pushRadial(out, positions, correction.twistGain, context, twistAngle)
-  pushRadial(out, positions, correction.bendGain, context, bendAngle)
+  pushRadial(out, positions, correction.twistGain, context, twistAngle, 'uniform')
+  pushRadial(out, positions, correction.bendGain, context, bendAngle, 'bend')
   return out
 }
 
@@ -73,12 +73,17 @@ function bendAngle(pose: Pose, bone: number): number {
   return Math.hypot(poseSwing(pose, bone), poseRotation(pose, bone))
 }
 
+/**
+ * 沿关节径向推。`mode = 'uniform'` 用于扭转（整圈外鼓），
+ * `'bend'` 用于弯曲：内侧收、外侧鼓，模拟皮肤自挤压。
+ */
 function pushRadial(
   out: Float32Array,
   positions: Float32Array,
   gain: number,
   context: CorrectionContext,
   angleOf: (pose: Pose, bone: number) => number,
+  mode: 'uniform' | 'bend',
 ): void {
   if (gain === 0) return
   const { bones, weights, influences, bindRig, pose } = context
@@ -115,7 +120,22 @@ function pushRadial(
     const r = Math.hypot(px, py, pz)
     if (r < 1e-12) continue
     const blend = 4 * bestWeight * (1 - bestWeight)
-    const push = r * gain * (1 - Math.cos(bestPhi)) * blend
+    let signed = 1
+    if (mode === 'bend') {
+      // 弯曲平面里，朝关节内侧的顶点收、外侧的鼓。
+      const parentAxis = parentBindAxis(bindRig, skeleton, bestBone)
+      if (parentAxis !== null) {
+        const bx = axis.ay * parentAxis.az - axis.az * parentAxis.ay
+        const by = axis.az * parentAxis.ax - axis.ax * parentAxis.az
+        const bz = axis.ax * parentAxis.ay - axis.ay * parentAxis.ax
+        const sx = by * axis.az - bz * axis.ay
+        const sy = bz * axis.ax - bx * axis.az
+        const sz = bx * axis.ay - by * axis.ax
+        const side = px * sx + py * sy + pz * sz
+        signed = side >= 0 ? 1 : -0.6
+      }
+    }
+    const push = signed * r * gain * (1 - Math.cos(bestPhi)) * blend
     const inv = 1 / r
     out[v * 3] = out[v * 3]! + px * inv * push
     out[v * 3 + 1] = out[v * 3 + 1]! + py * inv * push
@@ -130,6 +150,17 @@ function isCorrectionBone(name: string): boolean {
     name.startsWith('thigh') ||
     name.startsWith('shin')
   )
+}
+
+function parentBindAxis(
+  bindRig: Float32Array,
+  skeleton: { readonly parent: Int16Array | Int32Array },
+  bone: number,
+): { ax: number; ay: number; az: number } | null {
+  const parent = skeleton.parent[bone]!
+  if (parent < 0) return null
+  const base = parent * RIGID_STRIDE
+  return { ax: bindRig[base]!, ay: bindRig[base + 1]!, az: bindRig[base + 2]! }
 }
 
 function bindAxis(

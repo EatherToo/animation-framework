@@ -1,4 +1,4 @@
-import { parentOf } from '../skeleton/skeleton'
+import { PARENT_NONE, parentOf } from '../skeleton/skeleton'
 import {
   claimFill,
   type Fill,
@@ -10,6 +10,8 @@ import {
 export type SkinnedSpec = {
   readonly id: string
   readonly bones: readonly number[]
+  /** 允许骨表是「父在前」的树序而非严格链（躯干挂左右锁骨时用）。 */
+  readonly allowFork?: boolean
   readonly fill: Fill
 }
 
@@ -31,8 +33,12 @@ export function addSkinned(builder: PartSetBuilder, spec: SkinnedSpec): number {
     if (!Number.isInteger(bone) || bone! < 0 || bone! >= boneCount) {
       throw new Error('bones')
     }
-    if (i > 0 && parentOf(builder.skeleton, bone!) !== source[i - 1]) {
-      throw new Error('bones')
+    if (i > 0) {
+      const parent = parentOf(builder.skeleton, bone!)
+      const ok = spec.allowFork
+        ? parent !== PARENT_NONE && source.slice(0, i).includes(parent)
+        : parent === source[i - 1]
+      if (!ok) throw new Error('bones')
     }
     bones.push(bone!)
   }

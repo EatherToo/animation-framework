@@ -1,4 +1,5 @@
 import type { Humanoid } from '../body/assemble'
+import { applyClavicleFollow } from '../body/follow'
 import { compileHumanoid, type CompiledRig } from '../compile/compile'
 import { evaluateFk } from '../fk/evaluate'
 import { ankleFromContact } from '../foot/contact'
@@ -316,6 +317,11 @@ function recoverTick(solver: Solver, dt: number, candidate: SpeedCandidate): voi
 }
 
 export function stepSolver(solver: Solver, dt: number): void {
+  stepSolverInner(solver, dt)
+  applyClavicleFollow(solver.pose, solver.compiled)
+}
+
+function stepSolverInner(solver: Solver, dt: number): void {
   if (!Number.isFinite(dt) || dt <= 0) throw new Error('dt')
   stepParams(solver.params, dt)
   if (movedGeneration(solver.generation, solver.placement.generation)) snap(solver)

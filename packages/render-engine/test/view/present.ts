@@ -1,7 +1,8 @@
 import type { CompiledRig } from '@/compile/compile'
 import { evaluateFk } from '@/fk/evaluate'
 import { fillProjected, type FilledPart } from '@/fill/fill'
-import { skinMesh } from '@/skin/skin'
+import { armOutlineBones, skinMesh } from '@/skin/skin'
+import { isArmPart } from '@/outline/arm'
 import type { Pose } from '@/skeleton/pose'
 import { drawOrder } from '@/slot/slot'
 import type { Facing } from '@/space/facing'
@@ -25,6 +26,15 @@ export function skinPose(compiled: CompiledRig, pose: Pose): ViewSource[] {
   return compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
     skinMesh(positions, compiled, fk, index, pose)
+    if (isArmPart(mesh.partId)) {
+      return {
+        partId: mesh.partId,
+        positions,
+        indices: mesh.indices,
+        seam: mesh.seam,
+        arm: armOutlineBones(compiled, fk, mesh.partId),
+      }
+    }
     return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam }
   })
 }

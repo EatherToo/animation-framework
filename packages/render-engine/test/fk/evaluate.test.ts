@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { createHumanoid } from '@/body/assemble'
+import { ARM_BIND_SWING, createHumanoid } from '@/body/assemble'
 import { compileHumanoid } from '@/compile/compile'
 import { evaluateFk } from '@/fk/evaluate'
 import { createPose, setPoseRotation, setPoseSwing, setPoseTranslation } from '@/skeleton/pose'
@@ -41,12 +41,20 @@ describe('fk', () => {
     for (const name of ['thighR', 'shinR', 'footR'] as const) {
       expectClose(z(name), -p.hipOffsetZ)
     }
-    for (const name of ['upperArmL', 'lowerArmL', 'handL'] as const) {
-      expectClose(z(name), p.shoulderOffsetZ)
-    }
-    for (const name of ['upperArmR', 'lowerArmR', 'handR'] as const) {
-      expectClose(z(name), -p.shoulderOffsetZ)
-    }
+    // 上臂骨原点仍只由横向偏移决定；外展让后继骨沿骨轴向下、向外展开。
+    const outward = Math.sin(ARM_BIND_SWING)
+    expectClose(z('upperArmL'), p.shoulderOffsetZ)
+    expectClose(z('lowerArmL'), p.shoulderOffsetZ + outward * p.upperArmLength)
+    expectClose(
+      z('handL'),
+      p.shoulderOffsetZ + outward * (p.upperArmLength + p.lowerArmLength),
+    )
+    expectClose(z('upperArmR'), -p.shoulderOffsetZ)
+    expectClose(z('lowerArmR'), -(p.shoulderOffsetZ + outward * p.upperArmLength))
+    expectClose(
+      z('handR'),
+      -(p.shoulderOffsetZ + outward * (p.upperArmLength + p.lowerArmLength)),
+    )
   })
 
   it('步行偏移改刚体，不改横向', () => {

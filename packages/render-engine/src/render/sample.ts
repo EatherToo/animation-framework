@@ -1,4 +1,5 @@
 import type { CompiledRig } from '../compile/compile'
+import type { ArmOutlineBones } from '../outline/arm'
 import { evaluateFk } from '../fk/evaluate'
 import { ankleFromContact } from '../foot/contact'
 import { stationLocal } from '../foot/shape'
@@ -10,7 +11,8 @@ import type { PelvisGait } from '../modulate/modulate'
 import { writePelvis, writeUpper } from '../modulate/modulate'
 import { createPlacement, setPlacement, type Placement } from '../place/place'
 import { PLAN_HIP_DROP_RATIO, type FootId, type LatchedStep } from '../plan/plan'
-import { skinMesh } from '../skin/skin'
+import { armOutlineBones, skinMesh } from '../skin/skin'
+import { isArmPart } from '../outline/arm'
 import { drawOrder } from '../slot/slot'
 import { copyPose, createPose, poseTranslation, setPoseRotation, setPoseTranslation, type Pose } from '../skeleton/pose'
 import { bindTranslation } from '../skeleton/skeleton'
@@ -61,6 +63,8 @@ export type SampledPart = {
   readonly positions: Float32Array
   readonly indices: Uint16Array
   readonly seam: Uint8Array
+  /** 2D 手臂的三维骨轴端点；投影时按视角重建屏幕轮廓。 */
+  readonly arm?: ArmOutlineBones
 }
 
 export type SampledView = {
@@ -213,6 +217,15 @@ function present(compiled: CompiledRig, pose: Pose, facing: Facing, snapped: boo
   const parts = compiled.meshes.meshes.map((mesh, index) => {
     const positions = new Float32Array(mesh.positions.length)
     skinMesh(positions, compiled, fk, index, pose)
+    if (isArmPart(mesh.partId)) {
+      return {
+        partId: mesh.partId,
+        positions,
+        indices: mesh.indices,
+        seam: mesh.seam,
+        arm: armOutlineBones(compiled, fk, mesh.partId),
+      }
+    }
     return { partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam }
   })
   const order = drawOrder(new Array<string>(compiled.slots.slots.length), compiled.slots, facing)

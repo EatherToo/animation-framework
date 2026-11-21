@@ -37,13 +37,13 @@ describe('correction', () => {
 
   it('开启时零姿态不变；扭转与侧摆分别抬升过渡带半径', () => {
     const compiled = compileHumanoid(createHumanoid(1.7))
-    const index = compiled.meshes.meshes.findIndex((mesh) => mesh.partId === 'armL')
+    const index = compiled.meshes.meshes.findIndex((mesh) => mesh.partId === 'legL')
     const mesh = compiled.meshes.meshes[index]!
     const part = compiled.parts.parts[index]!
     if (part.kind !== 'skinned') throw new Error('kind')
-    const weights = compiled.weights.weights.find((item) => item.partId === 'armL')!
+    const weights = compiled.weights.weights.find((item) => item.partId === 'legL')!
     const pose = createPose(compiled.skeleton)
-    const bone = findBone(compiled.skeleton, 'upperArmL')
+    const bone = findBone(compiled.skeleton, 'thighL')
     const base = bone * 12
     const ox = compiled.bindRig[base + 9]!
     const oy = compiled.bindRig[base + 10]!
@@ -97,6 +97,20 @@ describe('correction', () => {
     const bendOff = createCorrection({ enabled: true, twistGain: 0.35, bendGain: 0 })
     const noBend = new Float32Array(mesh.positions.length)
     applyCorrection(noBend, mesh.positions, bendOff, context)
-    expect(meanRadius(bent) / bindRadius).toBeGreaterThan(meanRadius(noBend) / bindRadius)
+    // 弯曲改成分侧修正：内侧收、外侧鼓，均值不一定变大，但最大半径必须变大。
+    const maxRadius = (positions: Float32Array): number => {
+      let max = 0
+      for (let v = 0; v < positions.length / 3; v += 1) {
+        const w = weights.weights[v * weights.influences + 1]!
+        if (w < 0.4 || w > 0.6) continue
+        const x = positions[v * 3]! - ox
+        const y = positions[v * 3 + 1]! - oy
+        const z = positions[v * 3 + 2]! - oz
+        const along = x * ax + y * ay + z * az
+        max = Math.max(max, Math.hypot(x - ax * along, y - ay * along, z - az * along))
+      }
+      return max
+    }
+    expect(maxRadius(bent)).toBeGreaterThan(maxRadius(noBend))
   })
 })

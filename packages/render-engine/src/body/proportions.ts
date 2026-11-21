@@ -70,6 +70,8 @@ export type BodyProportions = {
   readonly fingerLengths: readonly [number, number, number, number]
   /** 四指中心相对掌心的横向偏移，米；顺序是指到小指 */
   readonly fingerOffsets: readonly [number, number, number, number]
+  /** 远节半径，米 */
+  readonly fingerTipRadius: number
   readonly thumbRadius: number
   readonly thumbAlong: number
   readonly thumbTipAlong: number
@@ -162,23 +164,24 @@ export function createProportions(height: number): BodyProportions {
     ]),
     headProfile: section(H, [
       [0, 0.033, 0.033, 0.033, 2.0],
-      [0.1, 0.032, 0.055, 0.045, 2.2],
-      [0.22, 0.0347, 0.054, 0.051, 2.2],
-      [0.36, 0.038, 0.052, 0.056, 2.2],
+      [0.1, 0.036, 0.056, 0.046, 2.2],
+      [0.22, 0.04, 0.054, 0.051, 2.2],
+      [0.36, 0.041, 0.052, 0.056, 2.2],
       [0.52, 0.0425, 0.052, 0.056, 2.2],
-      [0.7, 0.041, 0.046, 0.054, 2.2],
-      [0.86, 0.031, 0.032, 0.043, 2.2],
-      [1, 0.007, 0.008, 0.012, 2.0],
+      [0.7, 0.042, 0.046, 0.054, 2.2],
+      [0.86, 0.036, 0.032, 0.043, 2.2],
+      [0.96, 0.024, 0.018, 0.026, 2.2],
+      [1, 0.016, 0.012, 0.018, 2.0],
     ]),
     upperArmProfile: section(H, [
-      [0, 0.034, 0.0323, 0.0323, 2.0],
-      [0.15, 0.033, 0.03135, 0.03135, 2.0],
-      [0.4, 0.032, 0.0304, 0.0304, 2.0],
-      [0.7, 0.03, 0.0285, 0.0285, 2.0],
-      [1, 0.022, 0.0209, 0.0209, 2.0],
+      [0, 0.033, 0.0314, 0.0314, 2.0],
+      [0.15, 0.031, 0.02945, 0.02945, 2.0],
+      [0.4, 0.028, 0.0266, 0.0266, 2.0],
+      [0.7, 0.026, 0.0247, 0.0247, 2.0],
+      [1, 0.02, 0.019, 0.019, 2.0],
     ]),
     lowerArmProfile: section(H, [
-      [0, 0.022, 0.0209, 0.0209, 2.0],
+      [0, 0.02, 0.019, 0.019, 2.0],
       [0.15, 0.0255, 0.021675, 0.021675, 2.0],
       [0.4, 0.0245, 0.020825, 0.020825, 2.0],
       [0.7, 0.02, 0.017, 0.017, 2.0],
@@ -201,9 +204,10 @@ export function createProportions(height: number): BodyProportions {
     palmWrist: { halfWidth: 0.019 * H, halfThickness: 0.0095 * H },
     palmKnuckle: { halfWidth: 0.024 * H, halfThickness: 0.0085 * H },
     palmFraction: 0.42,
-    fingerRadius: 0.0045 * H,
+    fingerRadius: 0.0048 * H,
+    fingerTipRadius: 0.0038 * H,
     fingerLengths: [0.96, 1.0, 0.93, 0.85],
-    fingerOffsets: [0.0161 * H, 0.0054 * H, -0.0054 * H, -0.0161 * H],
+    fingerOffsets: [0.0166 * H, 0.0055 * H, -0.0055 * H, -0.0166 * H],
     thumbRadius: 0.007 * H,
     thumbAlong: 0.22,
     thumbTipAlong: 0.52,

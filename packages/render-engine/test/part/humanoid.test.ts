@@ -30,9 +30,9 @@ const EXPECTED: readonly {
 }[] = [
   { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck', 'head'] },
   { id: 'head', kind: 'rigid', bones: ['head'] },
-  { id: 'armL', kind: 'skinned', bones: ['chest', 'upperArmL', 'lowerArmL', 'handL'] },
+  { id: 'armL', kind: 'skinned', bones: ['chest', 'clavicleL', 'upperArmL', 'lowerArmL', 'handL'] },
   { id: 'handL', kind: 'rigid', bones: ['handL'] },
-  { id: 'armR', kind: 'skinned', bones: ['chest', 'upperArmR', 'lowerArmR', 'handR'] },
+  { id: 'armR', kind: 'skinned', bones: ['chest', 'clavicleR', 'upperArmR', 'lowerArmR', 'handR'] },
   { id: 'handR', kind: 'rigid', bones: ['handR'] },
   { id: 'legL', kind: 'skinned', bones: ['pelvis', 'thighL', 'shinL', 'footL'] },
   { id: 'footL', kind: 'rigid', bones: ['footL'] },
@@ -45,6 +45,8 @@ const SHARED_BONE_COUNT: Readonly<Record<BoneId, number>> = {
   pelvis: 3,
   spine: 1,
   chest: 3,
+  clavicleL: 1,
+  clavicleR: 1,
   neck: 1,
   head: 2,
   upperArmL: 1,
@@ -73,19 +75,21 @@ function bone(name: string, parent: number): BoneSpec {
   }
 }
 
-/** 17 个名字都在，但前臂不挂在上臂上。 */
+/** 19 个名字都在，但前臂不挂在上臂上。 */
 function brokenForearm(): Skeleton {
   const builder = createSkeletonBuilder()
   const parentOf: Record<BoneId, BoneId | null> = {
     pelvis: null,
     spine: 'pelvis',
     chest: 'spine',
+    clavicleL: 'chest',
+    clavicleR: 'chest',
     neck: 'chest',
     head: 'neck',
-    upperArmL: 'chest',
+    upperArmL: 'clavicleL',
     lowerArmL: 'chest',
     handL: 'lowerArmL',
-    upperArmR: 'chest',
+    upperArmR: 'clavicleR',
     lowerArmR: 'upperArmR',
     handR: 'lowerArmR',
     thighL: 'pelvis',
@@ -113,10 +117,12 @@ function missingNeck(): Skeleton {
     spine: 'pelvis',
     chest: 'spine',
     head: 'chest',
-    upperArmL: 'chest',
+    clavicleL: 'chest',
+    clavicleR: 'chest',
+    upperArmL: 'clavicleL',
     lowerArmL: 'upperArmL',
     handL: 'lowerArmL',
-    upperArmR: 'chest',
+    upperArmR: 'clavicleR',
     lowerArmR: 'upperArmR',
     handR: 'lowerArmR',
     thighL: 'pelvis',
@@ -144,7 +150,7 @@ describe('humanoid', () => {
     expect(part.HUMANOID_FILL).toBe(HUMANOID_FILL)
   })
 
-  it('10 件按登记顺序覆盖 17 根骨头，整段体积只出现一次', () => {
+  it('10 件按登记顺序覆盖 19 根骨头，整段体积只出现一次', () => {
     const skeleton = createHumanoid(1.7).skeleton
     const set = createHumanoidParts(skeleton)
     expect(set.skeleton).toBe(skeleton)
@@ -193,6 +199,7 @@ describe('humanoid', () => {
     if (head.kind !== 'rigid') throw new Error('kind')
     expect(armL.bones).toEqual([
       findBone(skeleton, 'chest'),
+      findBone(skeleton, 'clavicleL'),
       findBone(skeleton, 'upperArmL'),
       findBone(skeleton, 'lowerArmL'),
       findBone(skeleton, 'handL'),

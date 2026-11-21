@@ -1,29 +1,43 @@
 import { describe, expect, it } from '@jest/globals'
-import { createHumanoid } from '@/body/assemble'
+import { ARM_BIND_SWING, createHumanoid } from '@/body/assemble'
 import { compileHumanoid } from '@/compile'
 import { createPose } from '@/skeleton'
 import { evaluateFk } from '@/fk'
 import { skinMesh } from '@/skin'
+import { ARM_JOINT_RINGS, ARM_SECTIONS, armOutlineVertexCount, halfWidthAt, isArmPart } from '@/outline/arm'
+import { armOutlineBones } from '@/skin/skin'
+import { projectParts } from '@/view/project'
 
 const HEIGHT = 1.8
 const TOLERANCE = 0.05
 
 type WorldPart = { id: string; positions: Float32Array }
 
-function worldParts(): { parts: Map<string, Float32Array>; height: number; proportion: ReturnType<typeof createHumanoid>['proportions'] } {
+function worldParts(): {
+  parts: Map<string, Float32Array>
+  front: Map<string, Float32Array>
+  height: number
+  proportion: ReturnType<typeof createHumanoid>['proportions']
+} {
   const humanoid = createHumanoid(HEIGHT)
   const compiled = compileHumanoid(humanoid)
   const pose = createPose(humanoid.skeleton)
   const fk = new Float32Array(humanoid.skeleton.boneCount * 12)
   evaluateFk(fk, compiled, pose, humanoid.skeleton.boneCount)
   const parts = new Map<string, Float32Array>()
+  const sources = []
   for (let i = 0; i < compiled.meshes.meshes.length; i += 1) {
     const mesh = compiled.meshes.meshes[i]!
     const positions = new Float32Array(mesh.positions.length)
     skinMesh(positions, compiled, fk, i, pose)
     parts.set(mesh.partId, positions)
+    const arm = isArmPart(mesh.partId) ? armOutlineBones(compiled, fk, mesh.partId) : undefined
+    sources.push({ partId: mesh.partId, positions, indices: mesh.indices, seam: mesh.seam, ...(arm === undefined ? {} : { arm }) })
   }
-  return { parts, height: HEIGHT, proportion: humanoid.proportions }
+  const front = new Map(
+    projectParts(sources, 90).map((part) => [part.partId, part.positions] as const),
+  )
+  return { parts, front, height: HEIGHT, proportion: humanoid.proportions }
 }
 
 function bounds(positions: Float32Array): { w: number; d: number; h: number } {
@@ -65,7 +79,7 @@ function expectRatio(actual: number, expected: number, tolerance = TOLERANCE): v
 }
 
 describe('humanoid landmarks', () => {
-  const { parts, height, proportion } = worldParts()
+  const { parts, front, height, proportion } = worldParts()
   const ratio = (value: number): number => value / height
 
   it('头、手、脚的整体比例', () => {
@@ -88,7 +102,7 @@ describe('humanoid landmarks', () => {
     expectRatio(ratio(chest.w), 0.184)
     expectRatio(ratio(chest.d), 0.122)
 
-    const waist = slice(torso, 0.62 * height)
+    const waist = slice(torso, 0.614 * height)
     expectRatio(ratio(waist.w), 0.158)
     expectRatio(ratio(waist.d), 0.104)
 
@@ -98,34 +112,75 @@ describe('humanoid landmarks', () => {
   })
 
   it('肩宽与四肢直径', () => {
-    const span = (id: string): { min: number; max: number } => {
-      const positions = parts.get(id)!
-      let min = Infinity
-      let max = -Infinity
-      for (let i = 2; i < positions.length; i += 3) {
-        min = Math.min(min, positions[i]!)
-        max = Math.max(max, positions[i]!)
+    // 2D 手臂在绑定姿态下是矢状面 (x, y) 的轮廓带；肩宽要在正视投影里量。
+    const shoulderY = proportion.hipHeight + proportion.spineLength + proportion.chestLength - proportion.shoulderDropY
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (const id of ['armL', 'armR']) {
+      const positions = front.get(id)!
+      for (let i = 0; i < positions.length; i += 2) {
+        const dy = shoulderY - positions[i + 1]!
+        if (dy < -0.005 || dy > 0.08 * height) continue
+        minZ = Math.min(minZ, positions[i]!)
+        maxZ = Math.max(maxZ, positions[i]!)
       }
-      return { min, max }
     }
-    const shoulder = span('armL').max - span('armR').min
-    expectRatio(ratio(shoulder), 0.25)
+    // 2D 轮廓带的肩根向躯干里收了 0.02 H；可见肩峰跨度约 0.241 H。
+    expectRatio(ratio(maxZ - minZ), 0.241)
 
-    const upperArm = slice(parts.get('armL')!, 0.6585 * height)
-    expectRatio(ratio(upperArm.w), 0.058)
-    const forearm = slice(parts.get('armL')!, 0.5937 * height)
-    expectRatio(ratio(forearm.w), 0.05)
-    const thigh = slice(parts.get('legL')!, 0.34625 * height)
-    expectRatio(ratio(thigh.w), 0.066)
+    // 手臂宽度按 (x, y) 量：每个截面两个点关于中线对称，距离就是 2×半宽。
+    const arm = parts.get('armL')!
+    const ringWidth = (ring: number): number => {
+      const first = ring * 2
+      return Math.abs(arm[(first + 1) * 3]! - arm[first * 3]!)
+    }
+    expect(arm.length / 3).toBe(armOutlineVertexCount())
+    for (let v = 0; v < arm.length / 3; v += 1) expect(arm[v * 3 + 2]).toBe(0)
+
+    expectRatio(ratio(ringWidth(ARM_SECTIONS)), 0.04)
+    expectRatio(
+      ratio(
+        ringWidth(ARM_SECTIONS + ARM_JOINT_RINGS + 1 + Math.round(ARM_SECTIONS / 8)),
+      ),
+      0.05,
+    )
+    expect(ringWidth(ARM_SECTIONS)).toBeCloseTo(
+      2 * halfWidthAt(proportion.upperArmProfile, 1),
+      6,
+    )
+    const thigh = slice(parts.get('legL')!, 0.3769 * height)
+    expectRatio(ratio(thigh.w), 0.0725)
     const calf = slice(parts.get('legL')!, 0.19275 * height)
     expectRatio(ratio(calf.w), 0.063)
   })
 
   it('手掌是扁的，指与掌的比例合理', () => {
     const hand = parts.get('handL')!
-    const palm = slice(hand, 0.432 * height)
-    expectRatio(ratio(palm.d), 0.017)
-    expectRatio(ratio(palm.w), 0.046)
+    // 手臂外展后手心不再水平，按手骨轴投影取掌中段，而不是按世界高度切。
+    const axis = { y: -Math.cos(ARM_BIND_SWING), z: Math.sin(ARM_BIND_SWING) }
+    const wristY = (proportion.hipHeight +
+      proportion.spineLength +
+      proportion.chestLength -
+      proportion.shoulderDropY) +
+      axis.y * (proportion.upperArmLength + proportion.lowerArmLength)
+    const wristZ = proportion.shoulderOffsetZ +
+      axis.z * (proportion.upperArmLength + proportion.lowerArmLength)
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, found = 0
+    const centerZ = wristZ + axis.z * 0.35 * proportion.handLength
+    for (let i = 0; i < hand.length; i += 3) {
+      const along = ((hand[i + 1]! - wristY) * axis.y + (hand[i + 2]! - wristZ) * axis.z) /
+        proportion.handLength
+      if (along < 0.28 || along > 0.42) continue
+      // 拇指位于掌心外侧，会同时抬高厚度与宽度；只取掌心一侧。
+      if (hand[i + 2]! - centerZ > 0.02) continue
+      x0 = Math.min(x0, hand[i]!)
+      x1 = Math.max(x1, hand[i]!)
+      z0 = Math.min(z0, hand[i + 2]!)
+      found += 1
+    }
+    expect(found).toBeGreaterThan(8)
+    expectRatio(ratio(x1 - x0), 0.017)
+    expectRatio(ratio(2 * (centerZ - z0)), 0.046)
 
     const lengths = proportion.fingerLengths
     expect(lengths[1]).toBeGreaterThan(lengths[0]!)

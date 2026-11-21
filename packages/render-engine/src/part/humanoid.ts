@@ -36,9 +36,9 @@ type HumanoidEntry = {
 const HUMANOID_PARTS: readonly HumanoidEntry[] = [
   { id: 'torso', kind: 'skinned', bones: ['pelvis', 'spine', 'chest', 'neck', 'head'] },
   { id: 'head', kind: 'rigid', bones: ['head'] },
-  { id: 'armL', kind: 'skinned', bones: ['chest', 'upperArmL', 'lowerArmL', 'handL'] },
+  { id: 'armL', kind: 'skinned', bones: ['chest', 'clavicleL', 'upperArmL', 'lowerArmL', 'handL'] },
   { id: 'handL', kind: 'rigid', bones: ['handL'] },
-  { id: 'armR', kind: 'skinned', bones: ['chest', 'upperArmR', 'lowerArmR', 'handR'] },
+  { id: 'armR', kind: 'skinned', bones: ['chest', 'clavicleR', 'upperArmR', 'lowerArmR', 'handR'] },
   { id: 'handR', kind: 'rigid', bones: ['handR'] },
   { id: 'legL', kind: 'skinned', bones: ['pelvis', 'thighL', 'shinL', 'footL'] },
   { id: 'footL', kind: 'rigid', bones: ['footL'] },
@@ -92,7 +92,12 @@ export function appendHumanoidParts(builder: PartSetBuilder, skeleton: Skeleton)
     if (entry.kind !== 'skinned') continue
     const bones = resolved[i]!
     for (let b = 1; b < bones.length; b += 1) {
-      if (parentOf(skeleton, bones[b]!) !== bones[b - 1]) throw new Error('bones')
+      const parent = parentOf(skeleton, bones[b]!)
+      const ok =
+        entry.id === 'torso'
+          ? parent !== PARENT_NONE && bones.slice(0, b).includes(parent)
+          : parent === bones[b - 1]
+      if (!ok) throw new Error('bones')
     }
   }
 
@@ -124,6 +129,7 @@ export function appendHumanoidParts(builder: PartSetBuilder, skeleton: Skeleton)
       addSkinned(builder, {
         id: entry.id,
         bones,
+        allowFork: entry.id === 'torso',
         fill,
       })
     }

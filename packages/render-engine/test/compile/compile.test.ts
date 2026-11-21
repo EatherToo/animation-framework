@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { createHumanoid } from '@/body/assemble'
+import { ARM_BIND_SWING, createHumanoid } from '@/body/assemble'
 import { compileHumanoid, compileRig } from '@/compile/compile'
 import { createCorrection } from '@/correction/correction'
 import { createHumanoidMeshes, type Mesh } from '@/mesh/humanoid'
@@ -20,10 +20,15 @@ describe('compile', () => {
     expect(compiled.correction.enabled).toBe(true)
     expect(compiled.correction.twistGain).toBeCloseTo(0.35)
     expect(compiled.correction.bendGain).toBeCloseTo(0.35)
-    expect(compiled.joints).toHaveLength(17)
+    expect(compiled.joints).toHaveLength(humanoid.skeleton.boneCount)
     const lateral = (bone: number) => compiled.bindRig[bone * 12 + 11]
     expect(lateral(humanoid.boneIndex.footL)).toBeCloseTo(humanoid.proportions.hipOffsetZ, 6)
-    expect(lateral(humanoid.boneIndex.handR)).toBeCloseTo(-humanoid.proportions.shoulderOffsetZ, 6)
+    expect(lateral(humanoid.boneIndex.handR)).toBeCloseTo(
+      -(humanoid.proportions.shoulderOffsetZ +
+        Math.sin(ARM_BIND_SWING) *
+          (humanoid.proportions.upperArmLength + humanoid.proportions.lowerArmLength)),
+      6,
+    )
     expect(lateral(humanoid.boneIndex.head)).toBe(0)
   })
 

@@ -1,3 +1,11 @@
+import {
+  ARM_SHOULDER_DEPTH_BIAS,
+  buildArmOutline,
+  shoulderRoot,
+  wristHalfWidth,
+  type ArmOutlineBones,
+} from '../outline/arm'
+
 /** 绕身一圈的视角档数。 */
 export const VIEW_COUNT = 360
 
@@ -19,6 +27,8 @@ export type ViewSource = {
   readonly positions: Float32Array
   readonly indices: Uint16Array
   readonly seam: Uint8Array
+  /** 2D 手臂：当前姿态的三维骨轴端点与宽度；投影时按视角重建屏幕轮廓。 */
+  readonly arm?: ArmOutlineBones
 }
 
 /**
@@ -32,6 +42,8 @@ export type ProjectedPart = {
   readonly indices: Uint16Array
   readonly depth: number
   readonly seam: Uint8Array
+  /** 逐顶点深度；只有按屏幕轮廓重建的 2D 手臂提供。 */
+  readonly depths?: Float32Array
 }
 
 const QUARTER = VIEW_COUNT / 4
@@ -155,12 +167,76 @@ export function projectParts(parts: readonly ViewSource[], view: ViewIndex): Pro
   const projected: ProjectedPart[] = []
   for (let i = 0; i < parts.length; i += 1) {
     const part = parts[i]!
+    if (part.arm !== undefined) {
+      const outline = projectArm(part.arm, view)
+      if (outline.positions.length / 2 !== part.positions.length / 3) throw new Error('arm')
+      const indices = windIndices(new Uint16Array(part.indices.length), part.indices, outline.positions)
+      let depth = 0
+      for (let v = 0; v < outline.depths.length; v += 1) depth += outline.depths[v]!
+      projected.push({
+        partId: part.partId,
+        positions: outline.positions,
+        indices,
+        depth: depth / outline.depths.length,
+        seam: part.seam,
+        depths: outline.depths,
+      })
+      continue
+    }
     const positions = new Float32Array((part.positions.length / 3) * 2)
     const depth = projectPositions(positions, part.positions, view)
     const indices = windIndices(new Uint16Array(part.indices.length), part.indices, positions)
     projected.push({ partId: part.partId, positions, indices, depth, seam: part.seam })
   }
   return projected
+}
+
+/**
+ * 按当前视角把一条 2D 手臂的三根骨轴投影到屏幕平面，再重建轮廓带。
+ * 顶点仍然是 2D 的 (屏幕横, 屏幕竖)，深度单独给排序。
+ * @param arm 三维骨轴端点与宽度曲线
+ * @param view 视角下标
+ */
+function projectArm(arm: ArmOutlineBones, view: ViewIndex): ReturnType<typeof buildArmOutline> {
+  const sin = SIN[view]!
+  const cos = COS[view]!
+  const root = shoulderRoot(
+    { x: arm.shoulder.x * cos + arm.shoulder.z * sin, y: arm.shoulder.y },
+    arm.height,
+  )
+  const wrist = { x: arm.wrist.x * cos + arm.wrist.z * sin, y: arm.wrist.y }
+  const handTip = {
+    x: arm.handTip.x * cos + arm.handTip.z * sin,
+    y: arm.handTip.y,
+  }
+  const handDir = { x: handTip.x - wrist.x, y: handTip.y - wrist.y }
+  const wristWidth = wristHalfWidth(
+    handDir,
+    {
+      x: arm.handLateral.x * cos + arm.handLateral.z * sin,
+      y: arm.handLateral.y,
+    },
+    {
+      x: arm.handThicknessAxis.x * cos + arm.handThicknessAxis.z * sin,
+      y: arm.handThicknessAxis.y,
+    },
+    arm.palmHalfWidth,
+    arm.palmHalfThickness,
+  )
+  return buildArmOutline({
+    shoulder: root,
+    elbow: { x: arm.elbow.x * cos + arm.elbow.z * sin, y: arm.elbow.y },
+    wrist,
+    handDir,
+    wristWidth,
+    upperWidth: arm.upperWidth,
+    lowerWidth: arm.lowerWidth,
+    sections: arm.sections,
+    shoulderDepth:
+      arm.shoulder.z * cos - arm.shoulder.x * sin + ARM_SHOULDER_DEPTH_BIAS * arm.height,
+    elbowDepth: arm.elbow.z * cos - arm.elbow.x * sin,
+    wristDepth: arm.wrist.z * cos - arm.wrist.x * sin,
+  })
 }
 
 /**

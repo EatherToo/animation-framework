@@ -1,9 +1,15 @@
 import { describe, expect, it } from '@jest/globals'
-import { createHumanoid } from '@/body/assemble'
+import { ARM_BIND_SWING, createHumanoid } from '@/body/assemble'
 import * as meshEntry from '@/mesh'
 import { createHumanoidMeshes, type Mesh } from '@/mesh/humanoid'
 import type { RadiusProfile, SectionProfile } from '@/body/proportions'
 import { AXIAL_STEPS, TUBE_SIDES, meshFromCappedSection, meshFromCappedTube, meshFromRectangle, meshFromStrip } from '@/mesh/strip'
+import {
+  ARM_SECTIONS,
+  ARM_SHOULDER_INSET_Y,
+  armOutlineTriangles,
+  halfWidthAt,
+} from '@/outline/arm'
 import { createHumanoidParts } from '@/part/humanoid'
 import { validateMesh } from '@/topology/validate'
 
@@ -142,11 +148,11 @@ describe('humanoid meshes', () => {
     expect(meshEntry.meshFromCappedTube).toBe(meshFromCappedTube)
     expect(meshEntry.meshFromCappedSection).toBe(meshFromCappedSection)
     expect(meshEntry.meshFromRectangle).toBe(meshFromRectangle)
-    expect(TUBE_SIDES).toBe(16)
-    expect(AXIAL_STEPS).toBe(8)
+    expect(TUBE_SIDES).toBe(24)
+    expect(AXIAL_STEPS).toBe(12)
   })
 
-  it('按部件生成圆管、开孔接头段和刚性头手脚', () => {
+  it('按部件生成圆管、2D 手臂和刚性头手脚', () => {
     const humanoid = createHumanoid(1.7)
     const p = humanoid.proportions
     const parts = createHumanoidParts(humanoid.skeleton)
@@ -172,16 +178,16 @@ describe('humanoid meshes', () => {
       }
       total += triangles(mesh)
     }
-    expect(triangles(byId.get('torso')!)).toBe(784)
-    expect(triangles(byId.get('armL')!)).toBe(736)
-    expect(triangles(byId.get('armR')!)).toBe(736)
-    expect(triangles(byId.get('legL')!)).toBe(736)
-    expect(triangles(byId.get('legR')!)).toBe(736)
-    expect(triangles(byId.get('head')!)).toBe(272)
-    expect(triangles(byId.get('footL')!)).toBe(264)
-    expect(triangles(byId.get('footR')!)).toBe(264)
-    expect(triangles(byId.get('handL')!)).toBe(1720)
-    expect(total).toBe(7968)
+    expect(triangles(byId.get('torso')!)).toBe(1920)
+    expect(triangles(byId.get('armL')!)).toBe(armOutlineTriangles())
+    expect(triangles(byId.get('armR')!)).toBe(armOutlineTriangles())
+    expect(triangles(byId.get('legL')!)).toBe(1536)
+    expect(triangles(byId.get('legR')!)).toBe(1536)
+    expect(triangles(byId.get('head')!)).toBe(600)
+    expect(triangles(byId.get('footL')!)).toBe(600)
+    expect(triangles(byId.get('footR')!)).toBe(600)
+    expect(triangles(byId.get('handL')!)).toBe(3728)
+    expect(total).toBe(14404)
 
     const torso = byId.get('torso')!
     expect(range(torso, 1).max).toBeGreaterThan(p.hipHeight + p.spineLength)
@@ -213,7 +219,7 @@ describe('humanoid meshes', () => {
     }
   })
 
-  it('肩髋腕踝接缝成对，接头段有长度', () => {
+  it('肩髋腕踝接缝成对，2D 手臂两端是开口', () => {
     const humanoid = createHumanoid(1.7)
     const p = humanoid.proportions
     const set = createHumanoidMeshes(humanoid, createHumanoidParts(humanoid.skeleton))
@@ -226,39 +232,51 @@ describe('humanoid meshes', () => {
     const head = byId.get('head')!
     const shoulderY = p.hipHeight + p.spineLength + p.chestLength - p.shoulderDropY
 
+    const count = arm.positions.length / 3
     let shoulderSeam = 0
-    for (let i = 0; i < arm.positions.length / 3; i += 1) {
-      if (arm.seam[i] !== 1 || arm.endShare[i * 2]! < 0.99) continue
+    let wristSeam = 0
+    for (let i = 0; i < count; i += 1) {
       const v = vertex(arm, i)
-      expect(nearest(torso, v)).toBeLessThan(1e-6)
-      expect(arm.endShare[i * 2]!).toBeCloseTo(1, 5)
-      shoulderSeam += 1
+      expect(v.z).toBe(0)
+      if (arm.seam[i] !== 1) continue
+      if (i < 2) shoulderSeam += 1
+      if (i >= count - 2) wristSeam += 1
     }
-    expect(shoulderSeam).toBe(TUBE_SIDES)
+    expect(shoulderSeam).toBe(2)
+    expect(wristSeam).toBe(2)
 
-    const armEnd = 6 / 8
-    const collarSection = sectionAt(p.upperArmProfile, armEnd)
-    let collarEnd = 0
-    for (let i = 0; i < arm.positions.length / 3; i += 1) {
-      const v = vertex(arm, i)
-      if (Math.abs(v.y - (shoulderY - armEnd * p.upperArmLength)) > 1e-4) continue
-      const ellipse =
-        (v.x / collarSection.frontDepth) ** 2 +
-        ((v.z - p.shoulderOffsetZ) / collarSection.halfWidth) ** 2
-      if (Math.abs(ellipse - 1) > 1e-4) continue
-      expect(arm.endShare[i * 2]!).toBeCloseTo(0, 5)
-      collarEnd += 1
-    }
-    expect(collarEnd).toBe(TUBE_SIDES)
+    // 肩环与腕环关于中线对称；宽度按 (x, y) 量，等于体型截面表的半宽。
+    const armFirst = vertex(arm, 0)
+    const armSecond = vertex(arm, 1)
+    // 绑定姿态的肩在 x=0；横向内收为 0，肩根只向下挪。
+    expect((armFirst.x + armSecond.x) / 2).toBeCloseTo(0, 5)
+    expect(armFirst.y).toBeCloseTo(shoulderY - ARM_SHOULDER_INSET_Y * p.height, 5)
+    expect(Math.abs(armSecond.x - armFirst.x) / 2).toBeCloseTo(
+      halfWidthAt(p.upperArmProfile, 0),
+      5,
+    )
+    const wristY =
+      shoulderY - Math.cos(ARM_BIND_SWING) * (p.upperArmLength + p.lowerArmLength)
+    const wristFirst = vertex(arm, count - 2)
+    const wristSecond = vertex(arm, count - 1)
+    expect((wristFirst.x + wristSecond.x) / 2).toBeCloseTo(0, 5)
+    expect(wristFirst.y).toBeCloseTo(wristY, 5)
+    // 腕口半宽跟着掌根在侧视里的厚度走，手臂在这里收细，手掌才不会像一根棍子。
+    expect(Math.abs(wristSecond.x - wristFirst.x) / 2).toBeCloseTo(
+      p.palmWrist.halfThickness,
+      5,
+    )
 
-    let wrist = 0
-    for (let i = 0; i < arm.positions.length / 3; i += 1) {
-      if (arm.seam[i] !== 1 || arm.endShare[i * 2 + 1]! < 0.99) continue
-      expect(arm.endShare[i * 2 + 1]!).toBeCloseTo(1, 5)
-      wrist += 1
-    }
-    expect(wrist).toBe(TUBE_SIDES)
-    expect(hand.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
+    // 肘截面由两段共用：上臂末与下臂首取同一个半宽。
+    const elbowIndex = 2 * ARM_SECTIONS
+    const elbowFirst = vertex(arm, elbowIndex)
+    const elbowSecond = vertex(arm, elbowIndex + 1)
+    expect((elbowFirst.x + elbowSecond.x) / 2).toBeCloseTo(0, 5)
+    expect(Math.abs(elbowSecond.x - elbowFirst.x) / 2).toBeCloseTo(
+      halfWidthAt(p.upperArmProfile, 1),
+      5,
+    )
+    expect(halfWidthAt(p.upperArmProfile, 1)).toBeCloseTo(halfWidthAt(p.lowerArmProfile, 0), 8)
 
     let hip = 0
     for (let i = 0; i < leg.positions.length / 3; i += 1) {
@@ -286,24 +304,6 @@ describe('humanoid meshes', () => {
     expect(neck).toBe(TUBE_SIDES)
     expect(head.seam.reduce((sum, value) => sum + value, 0)).toBe(TUBE_SIDES)
 
-    const elbowY = shoulderY - p.upperArmLength
-    const elbowSection = sectionAt(p.upperArmProfile, 1)
-    const forearmStart = sectionAt(p.lowerArmProfile, 0)
-    expect(elbowSection.halfWidth).toBeCloseTo(forearmStart.halfWidth, 8)
-    expect(elbowSection.frontDepth).toBeCloseTo(forearmStart.frontDepth, 8)
-    expect(elbowSection.backDepth).toBeCloseTo(forearmStart.backDepth, 8)
-    expect(elbowSection.exponent).toBeCloseTo(forearmStart.exponent, 8)
-    let elbow = 0
-    for (let i = 0; i < arm.positions.length / 3; i += 1) {
-      const v = vertex(arm, i)
-      if (Math.abs(v.y - elbowY) > 1e-5) continue
-      const ellipse =
-        (v.x / elbowSection.frontDepth) ** 2 +
-        ((v.z - p.shoulderOffsetZ) / elbowSection.halfWidth) ** 2
-      expect(ellipse).toBeCloseTo(1, 4)
-      elbow += 1
-    }
-    expect(elbow).toBe(TUBE_SIDES)
   })
 
   it('空段列表抛出 segments', () => {

@@ -10,9 +10,10 @@ describe('rigid', () => {
   it('侧摆和扭转为 0 时退回绕 +Z，平移 z 是绑定横向', () => {
     const humanoid = createHumanoid(1.8)
     const pose = createPose(humanoid.skeleton)
-    setPoseSwing(pose, humanoid.boneIndex.upperArmL, 0.4)
-    setPoseTwist(pose, humanoid.boneIndex.upperArmL, -0.2)
-    const bone = humanoid.boneIndex.upperArmL
+    // 上臂有绑定外展，2D 路径按契约拒绝；用没有 bindSwing 的腿骨比这条公式。
+    const bone = humanoid.boneIndex.thighL
+    setPoseSwing(pose, bone, 0.4)
+    setPoseTwist(pose, bone, -0.2)
     const out = new Float32Array(RIGID_STRIDE)
     setRigidParentFromBone(out, humanoid.skeleton, pose, bone, 0, 0)
     const parent = createMat3()

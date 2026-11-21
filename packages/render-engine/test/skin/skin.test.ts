@@ -1,16 +1,24 @@
 import { describe, expect, it } from '@jest/globals'
-import { createHumanoid } from '@/body/assemble'
+import { ARM_BIND_SWING, createHumanoid } from '@/body/assemble'
 import { compileHumanoid, compileRig, type CompiledRig } from '@/compile/compile'
 import { createCorrection } from '@/correction/correction'
 import { evaluateFk } from '@/fk/evaluate'
 import { createHumanoidMeshes } from '@/mesh/humanoid'
 import { createHumanoidParts } from '@/part/humanoid'
-import { skinMesh } from '@/skin/skin'
+import { armOutlineBones, skinMesh } from '@/skin/skin'
 import { createHumanoidSlots } from '@/slot/humanoid'
-import { createPose, setPoseRotation, setPoseTwist, type Pose } from '@/skeleton/pose'
+import { createPose, setPoseRotation, setPoseSwing, setPoseTwist, type Pose } from '@/skeleton/pose'
 import { RIGID_STRIDE } from '@/skeleton/rigid'
 import { findBone } from '@/skeleton/skeleton'
 import { createHumanoidWeights } from '@/weight/humanoid'
+import {
+  ARM_JOINT_RINGS,
+  ARM_SECTIONS,
+  ARM_WRIST_RINGS,
+  armOutlineVertexCount,
+  halfWidthAt,
+  wristHalfWidth,
+} from '@/outline/arm'
 import { expectClose } from '../math/assert'
 
 function rig(compiled: CompiledRig, pose: Pose): Float32Array {
@@ -35,6 +43,12 @@ describe('skin', () => {
       const out = new Float32Array(mesh.positions.length)
       skinMesh(out, compiled, fk, index, pose)
       for (let i = 0; i < out.length; i += 1) expectClose(out[i]!, mesh.positions[i]!, 1e-4)
+    }
+    for (const id of ['armL', 'armR']) {
+      const mesh = compiled.meshes.meshes[meshIndex(compiled, id)]!
+      for (let v = 0; v < mesh.positions.length / 3; v += 1) {
+        expect(mesh.positions[v * 3 + 2]).toBe(0)
+      }
     }
     expect(meshIndex(compiled, 'torso')).toBe(0)
   })
@@ -74,7 +88,12 @@ describe('skin', () => {
     }
     const hand = compiled.parts.parts[meshIndex(compiled, 'handL')]!
     if (hand.kind !== 'rigid') throw new Error('kind')
-    expectClose(fk[hand.bone * RIGID_STRIDE + 11]!, compiled.proportions.shoulderOffsetZ)
+    const outward = Math.sin(ARM_BIND_SWING)
+    expectClose(
+      fk[hand.bone * RIGID_STRIDE + 11]!,
+      compiled.proportions.shoulderOffsetZ +
+        outward * (compiled.proportions.upperArmLength + compiled.proportions.lowerArmLength),
+    )
   })
 
   it('屈膝只移动矢状面，顶点的 z 留在骨头两侧', () => {
@@ -110,50 +129,97 @@ describe('skin', () => {
     expect(moved).toBe(true)
   })
 
-  it('前臂扭转沿 twistU 分布：腕满拧、肩接缝不拧', () => {
+  it('抬臂 90°：顶点 z 恒 0，宽度按 (x, y) 量，腕口跟手走', () => {
     const compiled = compileHumanoid(createHumanoid(1.7))
     const index = meshIndex(compiled, 'armL')
     const mesh = compiled.meshes.meshes[index]!
-    const weights = compiled.weights.weights.find((item) => item.partId === 'armL')!
     const pose = createPose(compiled.skeleton)
-    setPoseTwist(pose, findBone(compiled.skeleton, 'lowerArmL'), Math.PI / 2)
-    const out = new Float32Array(mesh.positions.length)
-    skinMesh(out, compiled, rig(compiled, pose), index, pose)
+    const fkBind = rig(compiled, pose)
+    const bind = new Float32Array(mesh.positions.length)
+    skinMesh(bind, compiled, fkBind, index, pose)
 
-    let distalMove = 0
-    let distalCount = 0
-    let proximalMove = 0
-    let proximalCount = 0
-    let shoulderCount = 0
-    for (let v = 0; v < mesh.positions.length / 3; v += 1) {
-      const u = weights.twistU[v]!
-      const forearm = weights.weights[v * 4 + 2]!
-      const bx = mesh.positions[v * 3]!
-      const by = mesh.positions[v * 3 + 1]!
-      const bz = mesh.positions[v * 3 + 2]!
-      const ox = out[v * 3]!
-      const oy = out[v * 3 + 1]!
-      const oz = out[v * 3 + 2]!
-      const move = Math.abs(ox - bx) + Math.abs(oy - by) + Math.abs(oz - bz)
-      if (mesh.seam[v] === 1 && weights.weights[v * 4]! > 0.99) {
-        expectClose(ox, bx, 1e-3)
-        expectClose(oy, by, 1e-3)
-        expectClose(oz, bz, 1e-3)
-        shoulderCount += 1
+    const widths = (positions: Float32Array): number[] => {
+      const result: number[] = []
+      for (let v = 0; v < positions.length / 3; v += 2) {
+        const dx = positions[(v + 1) * 3]! - positions[v * 3]!
+        const dy = positions[(v + 1) * 3 + 1]! - positions[v * 3 + 1]!
+        result.push(Math.hypot(dx, dy))
       }
-      if (forearm > 0.5 && u >= 0.5) {
-        distalMove += move
-        distalCount += 1
-      }
-      if (forearm > 0.5 && u <= 0.125) {
-        proximalMove += move
-        proximalCount += 1
+      return result
+    }
+    const p = compiled.proportions
+    const jointWidth = Math.min(
+      halfWidthAt(p.upperArmProfile, 1),
+      halfWidthAt(p.lowerArmProfile, 0),
+    )
+    const lowerStart = ARM_SECTIONS + ARM_JOINT_RINGS + 1
+    const wristStart = lowerStart + ARM_SECTIONS
+    const expectedFor = (fk: Float32Array): ((ring: number) => number) => {
+      const bones = armOutlineBones(compiled, fk, 'armL')
+      const handDir = { x: bones.handTip.x - bones.wrist.x, y: bones.handTip.y - bones.wrist.y }
+      const wristWidth = wristHalfWidth(
+        handDir,
+        { x: bones.handLateral.x, y: bones.handLateral.y },
+        { x: bones.handThicknessAxis.x, y: bones.handThicknessAxis.y },
+        bones.palmHalfWidth,
+        bones.palmHalfThickness,
+      )
+      const startWidth = halfWidthAt(p.lowerArmProfile, 1)
+      return (ring: number): number => {
+        if (ring <= ARM_SECTIONS) return 2 * halfWidthAt(p.upperArmProfile, ring / ARM_SECTIONS)
+        if (ring <= ARM_SECTIONS + ARM_JOINT_RINGS) return 2 * jointWidth
+        if (ring <= wristStart) {
+          return 2 * halfWidthAt(p.lowerArmProfile, (ring - lowerStart) / ARM_SECTIONS)
+        }
+        const u = Math.min(1, (ring - wristStart) / (ARM_WRIST_RINGS + 1))
+        return 2 * (startWidth + (wristWidth - startWidth) * u)
       }
     }
-    expect(shoulderCount).toBeGreaterThan(0)
-    expect(distalCount).toBeGreaterThan(0)
-    expect(proximalCount).toBeGreaterThan(0)
-    expect(distalMove / distalCount).toBeGreaterThan((proximalMove / proximalCount) * 2)
+    const expectedBind = expectedFor(fkBind)
+    for (let ring = 0; ring < widths(bind).length; ring += 1) {
+      expectClose(widths(bind)[ring]!, expectedBind(ring), 1e-5)
+    }
+
+    setPoseSwing(pose, findBone(compiled.skeleton, 'upperArmL'), Math.PI / 2)
+    const fkRaised = rig(compiled, pose)
+    const raised = new Float32Array(mesh.positions.length)
+    skinMesh(raised, compiled, fkRaised, index, pose)
+    for (let v = 0; v < raised.length / 3; v += 1) {
+      expect(Number.isFinite(raised[v * 3]!)).toBe(true)
+      expect(Number.isFinite(raised[v * 3 + 1]!)).toBe(true)
+      expect(raised[v * 3 + 2]).toBe(0)
+    }
+    const expectedRaised = expectedFor(fkRaised)
+    for (let ring = 0; ring < widths(raised).length; ring += 1) {
+      expectClose(widths(raised)[ring]!, expectedRaised(ring), 1e-5)
+    }
+    // 侧摆 90° 后腕端明显升高，直臂被真正抬起来。
+    const wrist = raised.length / 3 - 1
+    expect(raised[wrist * 3 + 1]!).toBeGreaterThan(bind[wrist * 3 + 1]! + 0.2)
+    expect(raised.length / 3).toBe(armOutlineVertexCount())
+  })
+
+  it('前臂扭转只改变腕口宽度，跟着手掌转', () => {
+    const compiled = compileHumanoid(createHumanoid(1.7))
+    const index = meshIndex(compiled, 'armL')
+    const mesh = compiled.meshes.meshes[index]!
+    const pose = createPose(compiled.skeleton)
+    const base = new Float32Array(mesh.positions.length)
+    skinMesh(base, compiled, rig(compiled, pose), index, pose)
+    setPoseTwist(pose, findBone(compiled.skeleton, 'lowerArmL'), Math.PI / 2)
+    const twisted = new Float32Array(mesh.positions.length)
+    skinMesh(twisted, compiled, rig(compiled, pose), index, pose)
+    const wristStart = 2 * (2 * ARM_SECTIONS + ARM_JOINT_RINGS + 1)
+    for (let v = 0; v < wristStart; v += 1) {
+      expect(Object.is(twisted[v * 3], base[v * 3])).toBe(true)
+      expect(Object.is(twisted[v * 3 + 1], base[v * 3 + 1])).toBe(true)
+      expect(Object.is(twisted[v * 3 + 2], base[v * 3 + 2])).toBe(true)
+    }
+    let changed = false
+    for (let v = wristStart; v < twisted.length / 3; v += 1) {
+      if (!Object.is(twisted[v * 3], base[v * 3])) changed = true
+    }
+    expect(changed).toBe(true)
   })
 
   it('长度不符时依次抛出 mesh、fk、out，且不写 out', () => {

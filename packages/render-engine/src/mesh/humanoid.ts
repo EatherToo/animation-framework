@@ -7,9 +7,18 @@ import type {
   SectionProfile,
 } from '../body/proportions'
 import { createMat3, multiplyMat3, type Mat3 } from '../math/mat3'
+import {
+  ARM_SECTIONS,
+  armOutlineVertexCount,
+  buildArmOutline,
+  shoulderRoot,
+  widthProfile,
+  wristHalfWidth,
+} from '../outline/arm'
 import type { Fill, PartSet, SkinnedPart } from '../part/set'
+import { createPose } from '../skeleton/pose'
+import { multiplyRigid, RIGID_STRIDE, setRigidParentFromBone } from '../skeleton/rigid'
 import { bindLength, boneName, findBone, type Skeleton } from '../skeleton/skeleton'
-import { setBindParentFromBone } from '../skeleton/parent-from-bone'
 import { createMeshTextures } from './texture'
 import { AXIAL_STEPS, TUBE_SIDES, type Mesh, type MeshSet, type MeshSpace } from './strip'
 
@@ -21,10 +30,18 @@ type Frame = {
   readonly ox: number
   readonly oy: number
   readonly oz: number
+  /** 骨轴，单位向量 */
   readonly ax: number
   readonly ay: number
-  readonly px: number
-  readonly py: number
+  readonly az: number
+  /** 截面法线（前后），`cross(lateral, axis)`；直立骨得到 −X */
+  readonly nx: number
+  readonly ny: number
+  readonly nz: number
+  /** 截面横向（左右），世界 +Z 在垂直于骨轴的平面上的投影 */
+  readonly ux: number
+  readonly uy: number
+  readonly uz: number
   readonly length: number
 }
 
@@ -42,13 +59,12 @@ type Draft = {
  */
 export function createHumanoidMeshes(humanoid: Humanoid, parts: PartSet): MeshSet {
   if (parts.skeleton !== humanoid.skeleton) throw new Error('skeleton')
-  const rig = writeBindRig(humanoid.skeleton)
-  const lateral = writeBindLateral(humanoid.skeleton)
+  const rig = writeBindRig(humanoid)
   const meshes: Mesh[] = []
   for (let i = 0; i < parts.parts.length; i += 1) {
     const part = parts.parts[i]!
     if (part.kind === 'skinned') {
-      meshes.push(skinnedMesh(part, humanoid.skeleton, humanoid.proportions, rig, lateral))
+      meshes.push(skinnedMesh(part, humanoid.skeleton, humanoid.proportions, rig))
     } else {
       meshes.push(rigidMesh(part.id, part.bone, humanoid.skeleton, humanoid.proportions, part.fill))
     }
@@ -65,11 +81,10 @@ function skinnedMesh(
   skeleton: Skeleton,
   proportions: BodyProportions,
   rig: Float32Array,
-  lateral: Float32Array,
 ): Mesh {
-  if (part.id === 'torso') return torsoMesh(part, skeleton, proportions, rig, lateral)
-  if (part.id === 'armL' || part.id === 'armR') return armMesh(part, skeleton, proportions, rig, lateral)
-  if (part.id === 'legL' || part.id === 'legR') return legMesh(part, skeleton, proportions, rig, lateral)
+  if (part.id === 'torso') return torsoMesh(part, skeleton, proportions, rig)
+  if (part.id === 'armL' || part.id === 'armR') return armOutlineMesh(part, skeleton, proportions, rig)
+  if (part.id === 'legL' || part.id === 'legR') return legMesh(part, skeleton, proportions, rig)
   throw new Error('part')
 }
 
@@ -78,12 +93,11 @@ function torsoMesh(
   skeleton: Skeleton,
   proportions: BodyProportions,
   rig: Float32Array,
-  lateral: Float32Array,
 ): Mesh {
   const d = draft(true)
-  const spine = frameOf(rig, lateral, skeleton, findBone(skeleton, 'spine'))
-  const chest = frameOf(rig, lateral, skeleton, findBone(skeleton, 'chest'))
-  const neck = frameOf(rig, lateral, skeleton, findBone(skeleton, 'neck'))
+  const spine = frameOf(rig, skeleton, findBone(skeleton, 'spine'))
+  const chest = frameOf(rig, skeleton, findBone(skeleton, 'chest'))
+  const neck = frameOf(rig, skeleton, findBone(skeleton, 'neck'))
   const tS = 1 - proportions.shoulderDropY / proportions.chestLength
   const chestTs = chestStations(tS)
 
@@ -110,12 +124,8 @@ function torsoMesh(
     setShare(d, ring, 0, 0)
     chestRings.push(ring)
   }
-  const holeLo = 3
-  const holeHi = 9
-  linkExcept(d.indices, chestRings, (interval, j) => {
-    if (interval < holeLo || interval >= holeHi) return false
-    return j === 3 || j === 4 || j === 11 || j === 12
-  })
+  // 2D 手臂不再从肩孔接出去；胸段保留完整表面，手臂轮廓带叠在它上面。
+  link(d.indices, chestRings)
 
   const neckRings: number[] = [chestRings[chestRings.length - 1]!]
   for (let k = 1; k <= AXIAL_STEPS; k += 1) {
@@ -128,86 +138,70 @@ function torsoMesh(
   markSeam(d, neckRings[neckRings.length - 1]!)
   link(d.indices, neckRings)
 
-  for (const side of [1, -1] as const) {
-    const rim = shoulderRimIndices(chestRings, holeLo, holeHi, side)
-    for (const vertex of rim) d.seam[vertex] = 1
-  }
   return finish(part.id, 'character', d, part.fill)
 }
 
-function armMesh(
+function armOutlineMesh(
   part: SkinnedPart,
   skeleton: Skeleton,
   proportions: BodyProportions,
   rig: Float32Array,
-  lateral: Float32Array,
 ): Mesh {
-  const d = draft(true)
-  const side = part.id === 'armL' ? 1 : -1
-  const chest = frameOf(rig, lateral, skeleton, findBone(skeleton, 'chest'))
-  const upper = frameOf(rig, lateral, skeleton, findBone(skeleton, `upperArm${side > 0 ? 'L' : 'R'}`))
-  const lower = frameOf(rig, lateral, skeleton, findBone(skeleton, `lowerArm${side > 0 ? 'L' : 'R'}`))
-  const tS = 1 - proportions.shoulderDropY / proportions.chestLength
-  const chestTs = chestStations(tS)
-  const chestRingsPoints = chestTs.map((t) =>
-    ringPoints(
-      chest,
-      t,
-      torsoSectionAt(proportions, proportions.spineLength + t * proportions.chestLength),
-      TORSO_FRONT,
-    ),
+  // 2D 轮廓带：绑定姿态下先把肩、肘、腕投到矢状面 (x, y)，z 恒为 0。
+  // 采样阶段再按当前 fk 重建；投影阶段按当前视角重建屏幕轮廓。
+  const side = part.id === 'armL' ? 'L' : 'R'
+  const shoulder = originOf(rig, findBone(skeleton, `upperArm${side}`))
+  const elbow = originOf(rig, findBone(skeleton, `lowerArm${side}`))
+  const hand = findBone(skeleton, `hand${side}`)
+  const wrist = originOf(rig, hand)
+  const axis = axisOf(rig, hand)
+  const handLength = bindLength(skeleton, hand)
+  const handTip = {
+    x: wrist.x + axis.x * handLength,
+    y: wrist.y + axis.y * handLength,
+  }
+  const handDir = { x: handTip.x - wrist.x, y: handTip.y - wrist.y }
+  const handBase = hand * RIGID_STRIDE
+  const wristWidth = wristHalfWidth(
+    handDir,
+    { x: rig[handBase + 6]!, y: rig[handBase + 7]! },
+    { x: rig[handBase + 3]!, y: rig[handBase + 4]! },
+    proportions.palmWrist.halfWidth,
+    proportions.palmWrist.halfThickness,
   )
-  const rim = shoulderRimPoints(chestRingsPoints, 3, 9, side)
-  const end = ringPoints(upper, 6 / 8, sectionAt(proportions.upperArmProfile, 6 / 8), LIMB_FRONT)
-  const collar = addCollar(d, rim, end, upper, proportions.upperArmProfile, 0, true, null, LIMB_FRONT)
-  markSeam(d, collar[0]!)
-  link(d.indices, collar)
-
-  const upperTail = addProfile(
-    d,
-    upper,
-    proportions.upperArmProfile,
-    [6 / 8, 7 / 8, 1],
-    collar[collar.length - 1]!,
-    LIMB_FRONT,
-  )
-  link(d.indices, upperTail)
-
-  const forearm = addProfile(
-    d,
-    lower,
-    proportions.lowerArmProfile,
-    [0, 1 / 8, 2 / 8, 3 / 8, 4 / 8, 5 / 8],
-    upperTail[upperTail.length - 1]!,
-    LIMB_FRONT,
-  )
-  link(d.indices, forearm)
-
-  const wristTo = ringPoints(
-    lower,
-    1,
-    {
-      halfWidth: proportions.palmWrist.halfWidth,
-      frontDepth: proportions.palmWrist.halfThickness,
-      backDepth: proportions.palmWrist.halfThickness,
-      exponent: 3,
-    },
-    LIMB_FRONT,
-  )
-  const wristRings = addCollar(
-    d,
-    ringPoints(lower, 5 / 8, sectionAt(proportions.lowerArmProfile, 5 / 8), LIMB_FRONT),
-    wristTo,
-    lower,
-    null,
-    1,
-    false,
-    forearm[forearm.length - 1]!,
-    LIMB_FRONT,
-  )
-  markSeam(d, wristRings[wristRings.length - 1]!)
-  link(d.indices, wristRings)
-  return finish(part.id, 'character', d, part.fill)
+  const root = shoulderRoot({ x: shoulder.x, y: shoulder.y }, proportions.height)
+  const outline = buildArmOutline({
+    shoulder: root,
+    elbow: { x: elbow.x, y: elbow.y },
+    wrist: { x: wrist.x, y: wrist.y },
+    handDir,
+    wristWidth,
+    upperWidth: widthProfile(proportions.upperArmProfile),
+    lowerWidth: widthProfile(proportions.lowerArmProfile),
+    sections: ARM_SECTIONS,
+  })
+  const vertexCount = armOutlineVertexCount(ARM_SECTIONS)
+  const positions = new Float32Array(vertexCount * 3)
+  for (let v = 0; v < vertexCount; v += 1) {
+    positions[v * 3] = outline.positions[v * 2]!
+    positions[v * 3 + 1] = outline.positions[v * 2 + 1]!
+    positions[v * 3 + 2] = 0
+  }
+  // 肩、腕两端是开口：标成接缝，描边不会在那里画封口线。
+  const seam = new Uint8Array(vertexCount)
+  seam[0] = 1
+  seam[1] = 1
+  seam[vertexCount - 2] = 1
+  seam[vertexCount - 1] = 1
+  return {
+    partId: part.id,
+    space: 'character',
+    positions,
+    indices: outline.indices,
+    ...createMeshTextures(outline.indices, part.fill),
+    seam,
+    endShare: new Float32Array(vertexCount * 2),
+  }
 }
 
 function legMesh(
@@ -215,17 +209,16 @@ function legMesh(
   skeleton: Skeleton,
   proportions: BodyProportions,
   rig: Float32Array,
-  lateral: Float32Array,
 ): Mesh {
   const d = draft(true)
   const side = part.id === 'legL' ? 1 : -1
-  const spine = frameOf(rig, lateral, skeleton, findBone(skeleton, 'spine'))
-  const thigh = frameOf(rig, lateral, skeleton, findBone(skeleton, `thigh${side > 0 ? 'L' : 'R'}`))
-  const shin = frameOf(rig, lateral, skeleton, findBone(skeleton, `shin${side > 0 ? 'L' : 'R'}`))
-  const foot = frameOf(rig, lateral, skeleton, findBone(skeleton, `foot${side > 0 ? 'L' : 'R'}`))
+  const spine = frameOf(rig, skeleton, findBone(skeleton, 'spine'))
+  const thigh = frameOf(rig, skeleton, findBone(skeleton, `thigh${side > 0 ? 'L' : 'R'}`))
+  const shin = frameOf(rig, skeleton, findBone(skeleton, `shin${side > 0 ? 'L' : 'R'}`))
+  const foot = frameOf(rig, skeleton, findBone(skeleton, `foot${side > 0 ? 'L' : 'R'}`))
   const rim = hipRimPoints(spine, proportions, side)
-  const end = ringPoints(thigh, 6 / 8, sectionAt(proportions.thighProfile, 6 / 8), LIMB_FRONT)
-  const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true, null, LIMB_FRONT)
+  const end = ringPoints(thigh, 3 / 8, sectionAt(proportions.thighProfile, 3 / 8), LIMB_FRONT)
+  const collar = addCollar(d, rim, end, thigh, proportions.thighProfile, 0, true, null, LIMB_FRONT, 3 / 8)
   markSeam(d, collar[0]!)
   link(d.indices, collar)
 
@@ -233,7 +226,7 @@ function legMesh(
     d,
     thigh,
     proportions.thighProfile,
-    [6 / 8, 7 / 8, 1],
+    [3 / 8, 5 / 8, 7 / 8, 1],
     collar[collar.length - 1]!,
     LIMB_FRONT,
   )
@@ -249,7 +242,7 @@ function legMesh(
   )
   link(d.indices, shinRings)
 
-  const ankleRim = footHoleRimPoints(proportions).map((point) => transformPartPoint(foot, point))
+  const ankleRim = footHoleRimPoints(proportions, side).map((point) => transformPartPoint(foot, point))
   const ankleRings = addCollar(
     d,
     ringPoints(shin, 5 / 8, sectionAt(proportions.shinProfile, 5 / 8), LIMB_FRONT),
@@ -285,7 +278,13 @@ function rigidMesh(
 
 function headMesh(partId: string, length: number, proportions: BodyProportions, fill: Fill): Mesh {
   const d = draft(false)
-  const frame: Frame = { ox: 0, oy: 0, oz: 0, ax: 1, ay: 0, px: 0, py: 1, length }
+  const frame: Frame = {
+    ox: 0, oy: 0, oz: 0,
+    ax: 1, ay: 0, az: 0,
+    nx: 0, ny: 1, nz: 0,
+    ux: 0, uy: 0, uz: 1,
+    length,
+  }
   const rings = addProfile(d, frame, proportions.headProfile, uniformStations(), null, HEAD_FRONT)
   markSeam(d, rings[0]!)
   link(d.indices, rings)
@@ -313,7 +312,17 @@ function handMesh(
   for (let f = 0; f < 4; f += 1) {
     const spread = side * proportions.fingerOffsets[f]!
     const tip = proportions.fingerLengths[f]! * length
-    const root = tubeAlongX(d, palmEnd, 0, spread, tip, 0, spread, proportions.fingerRadius)
+    const root = tubeAlongX(
+      d,
+      palmEnd,
+      0,
+      spread,
+      tip,
+      0,
+      spread,
+      proportions.fingerRadius,
+      proportions.fingerTipRadius,
+    )
     link(d.indices, root)
     addCap(d, root[root.length - 1]!, true)
     const ring = root[0]!
@@ -376,14 +385,20 @@ function palmTube(
 
 function footMesh(partId: string, proportions: BodyProportions, fill: Fill): Mesh {
   const d = draft(false)
+  const side = partId === 'footL' ? 1 : -1
   const x0 = -proportions.heelBack
   const x1 = proportions.footLength
   const rings: number[] = []
   for (let k = 0; k <= AXIAL_STEPS; k += 1) {
     const t = k / AXIAL_STEPS
-    rings.push(addRing(d, footSection(proportions, t, x0, x1)))
+    rings.push(addRing(d, footSection(proportions, t, x0, x1, side)))
   }
-  linkExcept(d.indices, rings, (interval, j) => interval >= 1 && interval < 3 && j >= 1 && j <= 6)
+  linkExcept(
+    d.indices,
+    rings,
+    (interval, j) =>
+      interval >= FOOT_HOLE_LO && interval < FOOT_HOLE_HI && j >= 1 && j <= 6,
+  )
   for (const vertex of footHoleRimIndices(rings)) d.seam[vertex] = 1
   addCap(d, rings[0]!, false)
   addCap(d, rings[rings.length - 1]!, true)
@@ -391,131 +406,73 @@ function footMesh(partId: string, proportions: BodyProportions, fill: Fill): Mes
 }
 
 function chestStations(tS: number): number[] {
-  const ts = [0, 1 / 8, 2 / 8, 3 / 8]
-  for (let i = 1; i <= 6; i += 1) ts.push(3 / 8 + (i * (tS - 3 / 8)) / 6)
-  ts.push(1)
+  // 肩孔要 9 个插值点，胸段至少得给 11 圈；这里取 17 圈，孔占 5..15。
+  const ts: number[] = []
+  for (let i = 0; i <= 16; i += 1) ts.push(i / 16)
+  void tS
   return ts
-}
-
-function shoulderRimPoints(
-  chestRings: readonly Point[][],
-  holeLo: number,
-  holeHi: number,
-  side: number,
-): Point[] {
-  const jf = side > 0 ? 5 : 11
-  const jc = side > 0 ? 4 : 12
-  const jb = side > 0 ? 3 : 13
-  const left: Point[] = new Array(TUBE_SIDES)
-  left[4] = chestRings[holeHi]![jc]!
-  left[3] = chestRings[holeHi]![jf]!
-  left[5] = chestRings[holeHi]![jb]!
-  left[12] = chestRings[holeLo]![jc]!
-  left[13] = chestRings[holeLo]![jf]!
-  left[11] = chestRings[holeLo]![jb]!
-  const frontK = [14, 15, 0, 1, 2]
-  const backK = [10, 9, 8, 7, 6]
-  for (let m = 0; m < 5; m += 1) {
-    left[frontK[m]!] = chestRings[holeLo + 1 + m]![jf]!
-    left[backK[m]!] = chestRings[holeLo + 1 + m]![jb]!
-  }
-  if (side > 0) return left
-  return Array.from({ length: TUBE_SIDES }, (_, k) => left[(TUBE_SIDES - k) % TUBE_SIDES]!)
-}
-
-function shoulderRimIndices(
-  chestRings: readonly number[],
-  holeLo: number,
-  holeHi: number,
-  side: number,
-): number[] {
-  const jf = side > 0 ? 5 : 11
-  const jc = side > 0 ? 4 : 12
-  const jb = side > 0 ? 3 : 13
-  const left: number[] = new Array(TUBE_SIDES)
-  left[4] = chestRings[holeHi]! + jc
-  left[3] = chestRings[holeHi]! + jf
-  left[5] = chestRings[holeHi]! + jb
-  left[12] = chestRings[holeLo]! + jc
-  left[13] = chestRings[holeLo]! + jf
-  left[11] = chestRings[holeLo]! + jb
-  const frontK = [14, 15, 0, 1, 2]
-  const backK = [10, 9, 8, 7, 6]
-  for (let m = 0; m < 5; m += 1) {
-    left[frontK[m]!] = chestRings[holeLo + 1 + m]! + jf
-    left[backK[m]!] = chestRings[holeLo + 1 + m]! + jb
-  }
-  if (side > 0) return left
-  return Array.from({ length: TUBE_SIDES }, (_, k) => left[(TUBE_SIDES - k) % TUBE_SIDES]!)
 }
 
 function hipRimPoints(spine: Frame, proportions: BodyProportions, side: number): Point[] {
   const base = torsoSectionAt(proportions, 0)
-  const drop = proportions.thighLength / 8
+  const half = TUBE_SIDES / 2
+  const crotchCount = TUBE_SIDES - (half + 1)
+  const drop = proportions.thighLength / 10
   const crotch = (m: number): Point => {
-    const beta = (m * Math.PI) / 8
+    const beta = (m * Math.PI) / (crotchCount + 1)
     const depth = beta <= Math.PI / 2 ? base.backDepth : base.frontDepth
     return { x: -depth * Math.cos(beta), y: spine.oy - drop * Math.sin(beta), z: 0 }
   }
   const rim: Point[] = []
   if (side > 0) {
     // 前 → +Z → 后 → 裆线回到前
-    for (let k = 0; k <= 8; k += 1) rim.push(sample(spine, 0, base, 8 - k, TORSO_FRONT))
-    for (let m = 1; m <= 7; m += 1) rim.push(crotch(m))
+    for (let k = 0; k <= half; k += 1) {
+      rim.push(sample(spine, 0, base, (half - k + TUBE_SIDES) % TUBE_SIDES, TORSO_FRONT))
+    }
+    for (let m = 1; m <= crotchCount; m += 1) rim.push(crotch(m))
   } else {
     // 前 → 裆线到后 → −Z 回到前，使裆线与左腿走向相反
-    rim.push(sample(spine, 0, base, 8, TORSO_FRONT))
-    for (let m = 7; m >= 1; m -= 1) rim.push(crotch(m))
+    rim.push(sample(spine, 0, base, half, TORSO_FRONT))
+    for (let m = crotchCount; m >= 1; m -= 1) rim.push(crotch(m))
     rim.push(sample(spine, 0, base, 0, TORSO_FRONT))
-    for (let j = 15; j >= 9; j -= 1) rim.push(sample(spine, 0, base, j, TORSO_FRONT))
+    for (let j = TUBE_SIDES - 1; j >= half + 1; j -= 1) {
+      rim.push(sample(spine, 0, base, j, TORSO_FRONT))
+    }
   }
   return rim
 }
 
-function footHoleRimPoints(proportions: BodyProportions): Point[] {
+/** 脚背孔占的环号：随 `AXIAL_STEPS` 变，孔只跨两段，边界正好三圈。 */
+const FOOT_HOLE_LO = Math.round((1 / 6) * AXIAL_STEPS)
+const FOOT_HOLE_MID = FOOT_HOLE_LO + 1
+const FOOT_HOLE_HI = FOOT_HOLE_LO + 2
+/** 脚背孔跨的列：从 1 到 `(TUBE_SIDES - 2) / 2`，经过 90° 列。 */
+const FOOT_HOLE_CM = TUBE_SIDES / 4
+const FOOT_HOLE_C1 = (TUBE_SIDES - 2) / 2
+
+function footHoleRimPoints(proportions: BodyProportions, side = 1): Point[] {
   const x0 = -proportions.heelBack
   const x1 = proportions.footLength
-  const at = (s: number, j: number) => footSection(proportions, s, x0, x1)[j]!
-  return [
-    at(3 / 8, 4),
-    at(3 / 8, 5),
-    at(3 / 8, 6),
-    at(3 / 8, 7),
-    at(2 / 8, 7),
-    at(1 / 8, 7),
-    at(1 / 8, 6),
-    at(1 / 8, 5),
-    at(1 / 8, 4),
-    at(1 / 8, 3),
-    at(1 / 8, 2),
-    at(1 / 8, 1),
-    at(2 / 8, 1),
-    at(3 / 8, 1),
-    at(3 / 8, 2),
-    at(3 / 8, 3),
-  ]
+  const at = (ring: number, j: number) =>
+    footSection(proportions, ring / AXIAL_STEPS, x0, x1, side)[j]!
+  const rim: Point[] = []
+  for (let j = FOOT_HOLE_CM; j <= FOOT_HOLE_C1; j += 1) rim.push(at(FOOT_HOLE_HI, j))
+  rim.push(at(FOOT_HOLE_MID, FOOT_HOLE_C1))
+  for (let j = FOOT_HOLE_C1; j >= 1; j -= 1) rim.push(at(FOOT_HOLE_LO, j))
+  rim.push(at(FOOT_HOLE_MID, 1))
+  for (let j = 1; j < FOOT_HOLE_CM; j += 1) rim.push(at(FOOT_HOLE_HI, j))
+  return rim
 }
 
 function footHoleRimIndices(rings: readonly number[]): number[] {
-  const at = (s: number, j: number) => rings[s]! + j
-  return [
-    at(3, 4),
-    at(3, 5),
-    at(3, 6),
-    at(3, 7),
-    at(2, 7),
-    at(1, 7),
-    at(1, 6),
-    at(1, 5),
-    at(1, 4),
-    at(1, 3),
-    at(1, 2),
-    at(1, 1),
-    at(2, 1),
-    at(3, 1),
-    at(3, 2),
-    at(3, 3),
-  ]
+  const at = (ring: number, j: number) => rings[ring]! + j
+  const rim: number[] = []
+  for (let j = FOOT_HOLE_CM; j <= FOOT_HOLE_C1; j += 1) rim.push(at(FOOT_HOLE_HI, j))
+  rim.push(at(FOOT_HOLE_MID, FOOT_HOLE_C1))
+  for (let j = FOOT_HOLE_C1; j >= 1; j -= 1) rim.push(at(FOOT_HOLE_LO, j))
+  rim.push(at(FOOT_HOLE_MID, 1))
+  for (let j = 1; j < FOOT_HOLE_CM; j += 1) rim.push(at(FOOT_HOLE_HI, j))
+  return rim
 }
 
 /**
@@ -532,6 +489,7 @@ function addCollar(
   writeFirst: boolean,
   reuseFirst: number | null = null,
   frontSign: FrontSign = LIMB_FRONT,
+  tEnd = 1,
 ): number[] {
   const rings: number[] = []
   for (let i = 0; i <= AXIAL_STEPS; i += 1) {
@@ -548,14 +506,16 @@ function addCollar(
     for (let k = 0; k < TUBE_SIDES; k += 1) {
       const a = from[k]!
       const b = to[k]!
-      const tk = clamp01(dotAxis(a, frame) / (frame.length * frame.length))
+      // 墙按圈号推进，不再用接缝点的投影：否则整段都取到最粗的一站，肩头会鼓成球。
+      const tk = clamp01((i / AXIAL_STEPS) * tEnd)
       const wall =
         profile === null ? b : sample(frame, tk, sectionAt(profile, tk), k, frontSign)
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 }
+      // 控制点偏向墙，让三角肌从接缝鼓出去；0.5/0.5 会把肩头压平。
       const c = {
-        x: 0.5 * mid.x + 0.5 * wall.x,
-        y: 0.5 * mid.y + 0.5 * wall.y,
-        z: 0.5 * mid.z + 0.5 * wall.z,
+        x: 0.35 * mid.x + 0.65 * wall.x,
+        y: 0.35 * mid.y + 0.65 * wall.y,
+        z: 0.35 * mid.z + 0.65 * wall.z,
       }
       const u = 1 - s
       points.push({
@@ -675,16 +635,31 @@ function finish(partId: string, space: MeshSpace, d: Draft, fill: Fill): Mesh {
   }
 }
 
-function footSection(proportions: BodyProportions, t: number, x0: number, x1: number): Point[] {
+function footSection(
+  proportions: BodyProportions,
+  t: number,
+  x0: number,
+  x1: number,
+  side = 1,
+): Point[] {
   const x = x0 + (x1 - x0) * t
+  // 跟端收成圆角，前掌先加宽再收到趾端，形成脚跟与趾箱。
+  const heelRound =
+    t < 0.12 ? 0.22 + 0.78 * Math.sqrt(Math.max(0, 1 - ((0.12 - t) / 0.12) ** 2)) : 1
+  const toeBox = t > 0.8 ? 1 + 0.1 * Math.sin(((t - 0.8) / 0.2) * Math.PI) : 1
+  // 内侧足弓：脚掌靠中线的一侧在中段抬起，外侧保持贴地。
+  const arch = 0.006 * proportions.height * Math.sin(Math.PI * Math.min(1, Math.max(0, (t - 0.2) / 0.5)))
+  const halfWidth = radiusAt(proportions.footHalfWidth, t) * heelRound * toeBox
+  const instep = radiusAt(proportions.footInstep, t) * heelRound
   const points: Point[] = []
   for (let j = 0; j < TUBE_SIDES; j += 1) {
     const theta = (j * 2 * Math.PI) / TUBE_SIDES
     const lifted = Math.max(0, (Math.sin(theta) + 1) / 2)
+    const medial = Math.max(0, -side * Math.cos(theta))
     points.push({
       x,
-      y: -proportions.ankleHeight + radiusAt(proportions.footInstep, t) * lifted,
-      z: -radiusAt(proportions.footHalfWidth, t) * Math.cos(theta),
+      y: -proportions.ankleHeight + instep * lifted + arch * medial,
+      z: -halfWidth * Math.cos(theta),
     })
   }
   return points
@@ -692,9 +667,9 @@ function footSection(proportions: BodyProportions, t: number, x0: number, x1: nu
 
 function transformPartPoint(frame: Frame, point: Point): Point {
   return {
-    x: frame.ox + frame.ax * point.x + frame.px * point.y,
-    y: frame.oy + frame.ay * point.x + frame.py * point.y,
-    z: frame.oz + point.z,
+    x: frame.ox + frame.ax * point.x + frame.nx * point.y + frame.ux * point.z,
+    y: frame.oy + frame.ay * point.x + frame.ny * point.y + frame.uy * point.z,
+    z: frame.oz + frame.az * point.x + frame.nz * point.y + frame.uz * point.z,
   }
 }
 
@@ -934,17 +909,22 @@ function tubeAlongX(
   y1: number,
   z1: number,
   radius: number,
+  tipRadius = radius,
 ): number[] {
   const rings: number[] = []
   for (let k = 0; k <= AXIAL_STEPS; k += 1) {
     const u = k / AXIAL_STEPS
+    // 近节粗、远节细，指节处留一个小鼓包；单段管也能看出分节。
+    const taper = radius + (tipRadius - radius) * u
+    const knuckle = 0.00035 * Math.exp(-(((u - 0.55) / 0.12) ** 2))
+    const at = taper + knuckle
     const points: Point[] = []
     for (let j = 0; j < TUBE_SIDES; j += 1) {
       const theta = (j * 2 * Math.PI) / TUBE_SIDES
       points.push({
         x: x0 + (x1 - x0) * u,
-        y: y0 + (y1 - y0) * u + radius * Math.cos(theta),
-        z: z0 + (z1 - z0) * u + radius * Math.sin(theta),
+        y: y0 + (y1 - y0) * u + at * Math.cos(theta),
+        z: z0 + (z1 - z0) * u + at * Math.sin(theta),
       })
     }
     rings.push(addRing(d, points))
@@ -1041,17 +1021,19 @@ function sample(
 ): Point {
   const theta = (j * 2 * Math.PI) / TUBE_SIDES
   const { along, lateral } = sectionPoint(section, theta, frontSign)
+  const at = frame.length * t
   return {
-    x: frame.ox + frame.ax * frame.length * t + frame.px * along,
-    y: frame.oy + frame.ay * frame.length * t + frame.py * along,
-    z: frame.oz + lateral,
+    x: frame.ox + frame.ax * at + frame.nx * along + frame.ux * lateral,
+    y: frame.oy + frame.ay * at + frame.ny * along + frame.uy * lateral,
+    z: frame.oz + frame.az * at + frame.nz * along + frame.uz * lateral,
   }
 }
 
 function dotAxis(point: Point, frame: Frame): number {
   const dx = point.x - frame.ox
   const dy = point.y - frame.oy
-  return dx * frame.ax * frame.length + dy * frame.ay * frame.length
+  const dz = point.z - frame.oz
+  return (dx * frame.ax + dy * frame.ay + dz * frame.az) * frame.length
 }
 
 function clamp01(value: number): number {
@@ -1060,19 +1042,34 @@ function clamp01(value: number): number {
   return value
 }
 
-function frameOf(rig: Float32Array, lateral: Float32Array, skeleton: Skeleton, bone: number): Frame {
-  const length = bindLength(skeleton, bone)
-  const base = bone * 9
+function frameOf(rig: Float32Array, skeleton: Skeleton, bone: number): Frame {
+  const base = bone * RIGID_STRIDE
   const ax = rig[base]!
   const ay = rig[base + 1]!
+  const az = rig[base + 2]!
+  const length = bindLength(skeleton, bone)
+  // 世界 +Z 去掉沿骨轴的分量，得到截面的横向；直立骨得到 (0, 0, 1)。
+  let ux = -az * ax
+  let uy = -az * ay
+  let uz = 1 - az * az
+  const norm = Math.hypot(ux, uy, uz) || 1
+  ux /= norm
+  uy /= norm
+  uz /= norm
+  // 法线 = cross(lateral, axis)：直立骨得到 −X，与既有 frontSign 常量一致。
   return {
-    ox: rig[base + 6]!,
-    oy: rig[base + 7]!,
-    oz: lateral[bone]!,
+    ox: rig[base + 9]!,
+    oy: rig[base + 10]!,
+    oz: rig[base + 11]!,
     ax,
     ay,
-    px: -ay,
-    py: ax,
+    az,
+    nx: uy * az - uz * ay,
+    ny: uz * ax - ux * az,
+    nz: ux * ay - uy * ax,
+    ux,
+    uy,
+    uz,
     length,
   }
 }
@@ -1089,29 +1086,39 @@ function radiusAt(profile: readonly RadiusSample[], t: number): number {
   throw new Error('radius')
 }
 
-function writeBindRig(skeleton: Skeleton): Float32Array {
-  const rig = new Float32Array(skeleton.boneCount * 9)
-  const local = createMat3()
-  const parent = createMat3()
-  const combined = createMat3()
-  for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
-    setBindParentFromBone(local, skeleton, bone)
-    const parentIndex = skeleton.parent[bone]!
-    const dst = bone * 9
-    const source = parentIndex < 0 ? local : combine(combined, parent, rig, parentIndex, local)
-    for (let k = 0; k < 9; k += 1) rig[dst + k] = source[k]!
-  }
-  return rig
+/** 绑定刚体里某根骨的平移。 */
+function originOf(rig: Float32Array, bone: number): { x: number; y: number; z: number } {
+  const base = bone * RIGID_STRIDE
+  return { x: rig[base + 9]!, y: rig[base + 10]!, z: rig[base + 11]! }
 }
 
-function writeBindLateral(skeleton: Skeleton): Float32Array {
-  const lateral = new Float32Array(skeleton.boneCount)
+/** 绑定刚体里某根骨的单位轴。 */
+function axisOf(rig: Float32Array, bone: number): { x: number; y: number; z: number } {
+  const base = bone * RIGID_STRIDE
+  return { x: rig[base]!, y: rig[base + 1]!, z: rig[base + 2]! }
+}
+
+function writeBindRig(humanoid: Humanoid): Float32Array {
+  const skeleton = humanoid.skeleton
+  const pose = createPose(skeleton)
+  const rig = new Float32Array(skeleton.boneCount * RIGID_STRIDE)
+  const local = new Float32Array(RIGID_STRIDE)
+  const parent = new Float32Array(RIGID_STRIDE)
+  const combined = new Float32Array(RIGID_STRIDE)
   for (let bone = 0; bone < skeleton.boneCount; bone += 1) {
+    const joint = humanoid.joints[bone]!
+    setRigidParentFromBone(local, skeleton, pose, bone, joint.swingSign, joint.twistSign)
     const parentIndex = skeleton.parent[bone]!
-    const own = skeleton.bindLateral[bone]!
-    lateral[bone] = parentIndex < 0 ? own : lateral[parentIndex]! + own
+    const dst = bone * RIGID_STRIDE
+    if (parentIndex < 0) {
+      rig.set(local, dst)
+      continue
+    }
+    parent.set(rig.subarray(parentIndex * RIGID_STRIDE, (parentIndex + 1) * RIGID_STRIDE))
+    multiplyRigid(combined, parent, local)
+    rig.set(combined, dst)
   }
-  return lateral
+  return rig
 }
 
 function combine(

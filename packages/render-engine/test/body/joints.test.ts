@@ -6,11 +6,13 @@ import { createPose, poseRotation, poseSwing, poseTwist, setPoseRotation, setPos
 import { expectClose } from '../math/assert'
 
 describe('joints', () => {
-  it('17 根骨头的符号和肘膝范围与体型一致', () => {
+  it('核心 19 骨 + 28 指骨的符号与肘膝范围与体型一致', () => {
     const humanoid = createHumanoid(1.8)
-    const joints = createJointDofs(humanoid.boneIndex)
-    expect(joints).toHaveLength(17)
-    expect(humanoid.joints).toEqual(joints)
+    const core = createJointDofs(humanoid.boneIndex)
+    expect(core).toHaveLength(19)
+    expect(humanoid.joints.slice(0, 19)).toEqual(core)
+    const joints = humanoid.joints
+    expect(joints).toHaveLength(47)
     for (let i = 0; i < joints.length; i += 1) expect(joints[i]!.bone).toBe(i)
 
     const index = humanoid.boneIndex
@@ -41,6 +43,12 @@ describe('joints', () => {
     expect(joints[index.footL]!.twistSign).toBe(1)
     expect(joints[index.footR]!.twistSign).toBe(-1)
     expect(joints[index.footL]!.swingSign).toBe(0)
+    const finger = humanoid.fingerIndex.index1L
+    expect(joints[finger]!.rotation).toEqual({ min: 0, max: 1.5 })
+    expect(joints[finger]!.swingSign).toBe(0)
+    expect(joints[finger]!.twistSign).toBe(0)
+    const thumb = humanoid.fingerIndex.thumb1R
+    expect(joints[thumb]!.rotation).toEqual({ min: 0, max: 1.0 })
   })
 
   it('夹紧只改有区间的轴，锁死轴写成精确 0，骨盆保持原值', () => {

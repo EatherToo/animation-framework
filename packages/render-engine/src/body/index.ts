@@ -23,11 +23,17 @@ export {
 export type { TwoBoneChain, TwoBoneChainSpec } from './chains'
 
 export { createJointDofs, clampJointPose } from './joints'
+export {
+  CLAVICLE_FOLLOW_ROTATION,
+  CLAVICLE_FOLLOW_SWING,
+  applyClavicleFollow,
+} from './follow'
 export type { JointDof, JointLimit } from './joints'
 
 export {
   BONE_NAMES,
+  FINGER_BONE_NAMES,
   createHumanoid,
   createHumanoidFromProportions,
 } from './assemble'
-export type { BoneId, Humanoid } from './assemble'
+export type { BoneId, FingerBoneId, Humanoid } from './assemble'

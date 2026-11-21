@@ -46,6 +46,7 @@ export function setParentFromBone(
   pose: Pose,
   bone: number,
 ): Mat3 {
+  if (skeleton.bindSwing[bone] !== 0) throw new Error('bindSwing')
   const i2 = bone * 2
   const i3 = bone * POSE_STRIDE
   return writeParentFromBone(
@@ -71,6 +72,7 @@ export function setBindParentFromBone(
   skeleton: Skeleton,
   bone: number,
 ): Mat3 {
+  if (skeleton.bindSwing[bone] !== 0) throw new Error('bindSwing')
   const i2 = bone * 2
   return writeParentFromBone(
     out,

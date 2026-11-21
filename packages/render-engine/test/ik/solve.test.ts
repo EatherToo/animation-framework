@@ -44,11 +44,12 @@ describe('two-bone ik', () => {
     expectClose(foot.y, ankle.y + 0.04, 1e-4)
   })
 
-  it('臂的肘落在弯曲符号的一侧', () => {
+  it('腿的膝落在弯曲符号的一侧', () => {
     const humanoid = createHumanoid(1.7)
     const compiled = compileHumanoid(humanoid)
     const pose = createPose(compiled.skeleton)
-    const chain = humanoid.chains.armL
+    // 上臂有绑定外展，矢状面两骨解会把肘带离该平面；弯曲符号用腿链验证同一段代码。
+    const chain = humanoid.chains.legL
     const at0 = origins(compiled, pose)
     const shoulder = at0(chain.root)
     const wrist = at0(chain.end)

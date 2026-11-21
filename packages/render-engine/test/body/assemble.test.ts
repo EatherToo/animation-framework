@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals'
 import * as body from '@/body'
 import {
   BONE_NAMES,
+  FINGER_BONE_NAMES,
   createHumanoid,
   createHumanoidFromProportions,
   type BoneId,
@@ -33,12 +34,14 @@ const EXPECTED_PARENT: Record<BoneId, BoneId | null> = {
   pelvis: null,
   spine: 'pelvis',
   chest: 'spine',
+  clavicleL: 'chest',
+  clavicleR: 'chest',
   neck: 'chest',
   head: 'neck',
-  upperArmL: 'chest',
+  upperArmL: 'clavicleL',
   lowerArmL: 'upperArmL',
   handL: 'lowerArmL',
-  upperArmR: 'chest',
+  upperArmR: 'clavicleR',
   lowerArmR: 'upperArmR',
   handR: 'lowerArmR',
   thighL: 'pelvis',
@@ -56,15 +59,26 @@ describe('assemble', () => {
     expect(body.BONE_NAMES).toBe(BONE_NAMES)
   })
 
-  it('17 骨名字、下标与查找一致', () => {
+  it('19 核心骨 + 28 指骨的名字、下标与查找一致', () => {
     const human = createHumanoid(H)
-    expect(human.skeleton.boneCount).toBe(17)
-    expect(BONE_NAMES).toHaveLength(17)
+    expect(human.skeleton.boneCount).toBe(47)
+    expect(BONE_NAMES).toHaveLength(19)
+    expect(FINGER_BONE_NAMES).toHaveLength(28)
 
     for (let i = 0; i < BONE_NAMES.length; i += 1) {
       const name = BONE_NAMES[i]!
       expect(human.boneIndex[name]).toBe(i)
       expect(findBone(human.skeleton, name)).toBe(i)
+    }
+    for (const name of FINGER_BONE_NAMES) {
+      const bone = human.fingerIndex[name]
+      expect(bone).toBeGreaterThanOrEqual(19)
+      expect(findBone(human.skeleton, name)).toBe(bone)
+      const match = /^(thumb|index|middle|ring|pinky)([123])([LR])$/.exec(name)!
+      const parentName = match[2] === '1'
+        ? `hand${match[3]}`
+        : `${match[1]}${Number(match[2]) - 1}${match[3]}`
+      expect(parentOf(human.skeleton, bone)).toBe(findBone(human.skeleton, parentName))
     }
   })
 
@@ -168,18 +182,30 @@ describe('assemble', () => {
     expectClose(bindLateral(skeleton, boneIndex.thighL), p.hipOffsetZ)
     expectClose(bindLateral(skeleton, boneIndex.thighR), -p.hipOffsetZ)
 
-    for (const name of ['upperArmL', 'upperArmR'] as const) {
-      bindTranslation(out, skeleton, boneIndex[name])
+    // 锁骨是零长枢轴：接在胸段肩高处，横向只挪到胸骨端；上臂再从锁骨接出去。
+    for (const side of ['L', 'R'] as const) {
+      bindTranslation(out, skeleton, boneIndex[`clavicle${side}`])
       expectClose(out[0]!, p.chestLength - p.shoulderDropY)
       expect(out[1]).toBe(0)
+      expectClose(
+        Math.abs(bindLateral(skeleton, boneIndex[`clavicle${side}`])),
+        0.02 * p.height,
+      )
+      bindTranslation(out, skeleton, boneIndex[`upperArm${side}`])
+      expect(out[0]).toBe(0)
+      expect(out[1]).toBe(0)
+      expectClose(
+        Math.abs(bindLateral(skeleton, boneIndex[`upperArm${side}`])),
+        p.shoulderOffsetZ - 0.02 * p.height,
+      )
     }
-    expectClose(bindLateral(skeleton, boneIndex.upperArmL), p.shoulderOffsetZ)
-    expectClose(bindLateral(skeleton, boneIndex.upperArmR), -p.shoulderOffsetZ)
 
+    // 有横向分离的只有髋、锁骨与上臂；其余骨头的横向偏移都是 0。
+    const spaced = new Set([
+      'thighL', 'thighR', 'clavicleL', 'clavicleR', 'upperArmL', 'upperArmR',
+    ])
     for (const name of BONE_NAMES) {
-      if (name === 'thighL' || name === 'thighR' || name === 'upperArmL' || name === 'upperArmR') {
-        continue
-      }
+      if (spaced.has(name)) continue
       expect(bindLateral(skeleton, boneIndex[name])).toBe(0)
     }
   })

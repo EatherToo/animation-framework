@@ -29,13 +29,20 @@ export type JointDof = {
 const LOCKED: JointLimit = { min: 0, max: 0 }
 
 /**
- * 按骨头下标填 17 项转动自由度。角度不随身高变化。
+ * 按骨头下标填与骨数等长的转动自由度。角度不随身高变化。
  * @param boneIndex 装配得到的名字到下标
  */
 export function createJointDofs(
   boneIndex: Readonly<Record<BoneId, number>>,
+  fingerIndex?: Readonly<Record<string, number>>,
+  fingerNames?: readonly string[],
 ): readonly JointDof[] {
-  const joints = new Array<JointDof>(17)
+  const coreCount = Object.keys(boneIndex).length
+  let count = coreCount
+  if (fingerIndex !== undefined) {
+    for (const bone of Object.values(fingerIndex)) count = Math.max(count, bone + 1)
+  }
+  const joints = new Array<JointDof>(count)
   const put = (
     name: BoneId,
     rotation: JointLimit | null,
@@ -51,6 +58,10 @@ export function createJointDofs(
   put('pelvis', null, null, null, mid.swingSign, mid.twistSign)
   put('spine', range(-1.047, 0.524), span(0.349), span(0.175), mid.swingSign, mid.twistSign)
   put('chest', range(-0.524, 0.349), span(0.349), span(0.611), mid.swingSign, mid.twistSign)
+  // 锁骨：抬肩、前后摆、绕锁骨轴的小幅转动。
+  const clavicle = { rotation: span(0.436), swing: span(0.349), twist: span(0.262) }
+  put('clavicleL', clavicle.rotation, clavicle.swing, clavicle.twist, 1, 1)
+  put('clavicleR', clavicle.rotation, clavicle.swing, clavicle.twist, -1, -1)
   put('neck', range(-0.873, 1.047), span(0.785), span(1.396), mid.swingSign, mid.twistSign)
   put('head', range(-0.262, 0.349), span(0.175), span(0.785), mid.swingSign, mid.twistSign)
   const shoulder = {
@@ -82,6 +93,14 @@ export function createJointDofs(
   const inversion = range(-0.349, 0.524)
   put('footL', ankle, LOCKED, inversion, 0, 1)
   put('footR', ankle, LOCKED, inversion, 0, -1)
+  if (fingerIndex !== undefined && fingerNames !== undefined) {
+    for (const name of fingerNames) {
+      const bone = fingerIndex[name]
+      if (bone === undefined) continue
+      const flex = name.startsWith('thumb') ? range(0, 1.0) : range(0, 1.5)
+      joints[bone] = { bone, rotation: flex, swing: LOCKED, twist: LOCKED, swingSign: 0, twistSign: 0 }
+    }
+  }
   return joints
 }
 

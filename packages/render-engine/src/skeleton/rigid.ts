@@ -36,7 +36,7 @@ export function setRigidParentFromBone(
   const bindRotation = skeleton.bindRotation[bone]!
   const btx = skeleton.bindTranslation[translation]!
   const bty = skeleton.bindTranslation[translation + 1]!
-  const a = swingSign * swing
+  const a = swingSign * (skeleton.bindSwing[bone]! + swing)
   const b = twistSign * twist * twistScale
   const g = bindRotation + rotation
   const ca = Math.cos(a)
