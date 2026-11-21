@@ -12,16 +12,19 @@ export * from './animation/animation'
 export * from './constraint/constraint'
 export type {
   PacketKind, RenderPacket, RenderFrame, AtlasRect, AtlasPage, AtlasRegionRef,
-  BuildPacketArgs, BuildMeshPacketArgs,
+  BuildPacketArgs, BuildMeshPacketArgs, TextureData, MaterialDef, RenderAssets,
+  MaskPathNode, RenderMask, RenderMaskSet,
 } from './render/render'
 export {
   toPma, atlasRegionUv, buildRegionPacket, buildMeshPacket,
   sortPackets, batchKey, validateAtlasPages, validateMaskPath, outlineEdges,
+  sampleTexture, validateAssets, maskChain, validateMaskPaths, buildMaskSet,
 } from './render/render'
 export * from './backend/backend'
 export * from './render/camera'
 export * from './volume/volume'
 export * from './asset/importer'
+export * from './asset/atlas'
 export * from './runtime/runtime'
 export * from './app/app'
 export * from './tools/tools'

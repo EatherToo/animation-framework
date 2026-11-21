@@ -15,22 +15,31 @@ import { buildInverseBind, skinMesh2D, type MeshData, type WeightedMeshData } fr
 import { createPose, updateWorld, type Pose } from '../core/pose'
 import { WORLD_STRIDE } from '../core/math'
 import {
+  buildMaskSet,
   buildMeshPacket,
   buildRegionPacket,
   sortPackets,
+  type MaterialDef,
+  type MaskPathNode,
+  type RenderAssets,
   type RenderFrame,
+  type RenderMask,
   type RenderPacket,
+  type TextureData,
 } from '../render/render'
 import {
   createSlotSet,
   isRenderable,
   resolveAttachment,
+  setSlotAttachment,
   type Attachment,
   type SkinData,
   type SlotSet,
 } from '../slot/slot'
-import { DEFAULT_CAMERA, viewProjection2D } from '../render/camera'
-import type { SkeletonAsset } from '../asset/importer'
+import { DEFAULT_CAMERA, viewProjection2D, type Camera } from '../render/camera'
+import type { SkeletonAsset, MaskLibrary } from '../asset/importer'
+import type { AtlasData } from '../asset/atlas'
+import { resolveViewRule, type ViewRule } from '../volume/volume'
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -61,6 +70,7 @@ export type EnginePlugin = {
   beforeUpdate?(ctx: PluginContext, dt: number): void
   afterUpdate?(ctx: PluginContext, dt: number): void
   afterRender?(ctx: PluginContext, frame: RenderFrame): void
+  viewRules?(ctx: PluginContext, skeleton: import('../core/skeleton').CompiledSkeleton): readonly ViewRule[] | void
   dispose?(): void
 }
 
@@ -208,6 +218,20 @@ export class PluginHost {
     for (const plugin of this.active) this.guard(() => plugin.afterRender?.(this.ctx, frame))
   }
 
+  viewRules(): ViewRule[] {
+    if (this.disposedFlag) return []
+    const out: ViewRule[] = []
+    for (const plugin of this.active) {
+      try {
+        const rules = plugin.viewRules?.(this.ctx, this.ctx.engine.pose.skeleton)
+        if (rules) out.push(...rules)
+      } catch {
+        this.record()
+      }
+    }
+    return out
+  }
+
   dispose(): void {
     if (this.disposedFlag) return
     this.disposedFlag = true
@@ -215,6 +239,142 @@ export class PluginHost {
     for (const plugin of [...this.active].reverse()) this.guard(() => plugin.dispose?.())
     this.active.length = 0
   }
+}
+
+// ---------------------------------------------------------------------------
+// 资产 → 后端资源 / mask 路径
+// ---------------------------------------------------------------------------
+
+/** 图集页 → 后端纹理；缺图的页补 1x1 白纹理，材质 id = page + 1。 */
+export function buildRenderAssets(asset: SkeletonAsset): RenderAssets | undefined {
+  const atlas: AtlasData | undefined = asset.atlas
+  if (atlas === undefined) return undefined
+  const pages: TextureData[] = atlas.pages.map((page) => {
+    const image = page.image
+    const data = image?.data !== undefined && image.data.length === page.width * page.height * 4
+      ? image.data
+      : new Uint8Array([255, 255, 255, 255])
+    return {
+      width: image?.data !== undefined ? page.width : 1,
+      height: image?.data !== undefined ? page.height : 1,
+      data,
+      pma: true,
+    }
+  })
+  const materials: MaterialDef[] = [{ id: 0, kind: 'flat', page: -1, filter: 'linear' }]
+  for (let i = 0; i < pages.length; i += 1) {
+    materials.push({ id: i + 1, kind: 'sprite', page: i, filter: 'linear' })
+  }
+  return { pages, materials, maxTexturePages: 4 }
+}
+
+export type ResolvedMasks = {
+  readonly paths: readonly number[]
+  readonly maskPaths: readonly MaskPathNode[]
+  readonly masks: readonly (RenderMask | null)[]
+}
+
+/**
+ * 把 MaskLibrary 的 clip scope 展开成每个 slot 的 maskPath。
+ * 结束槽位本身不受该 mask 影响（半开区间）；clipping 槽不产生绘制。
+ */
+export function resolveMaskPaths(
+  slotSet: SlotSet,
+  library: MaskLibrary,
+  pose?: Pose,
+): ResolvedMasks {
+  const byId = new Map<string, number>()
+  library.masks.forEach((mask, index) => byId.set(mask.id, index))
+  const paths = new Array<number>(slotSet.slots.length).fill(-1)
+  const nodes: MaskPathNode[] = []
+  const masks: (RenderMask | null)[] = new Array(library.masks.length).fill(null)
+  const open: Array<{ maskId: number; path: number; endSlotId: string }> = []
+  for (const slotIndex of slotSet.drawOrder) {
+    const slot = slotSet.slots[slotIndex]
+    if (slot === undefined) continue
+    while (open.length > 0 && open[open.length - 1]!.endSlotId === slot.data.id) open.pop()
+    const attachment = resolveAttachment(slotSet, slotIndex)
+    if (attachment !== null && attachment.kind === 'clipping') {
+      const maskIndex = byId.get(attachment.id) ?? byId.get(slot.data.id)
+      if (maskIndex !== undefined) {
+        const def = library.masks[maskIndex]!
+        const parent = open.length > 0 ? open[open.length - 1]!.path : -1
+        nodes.push({ maskId: maskIndex, parent })
+        open.push({ maskId: maskIndex, path: nodes.length - 1, endSlotId: def.endSlotId })
+        if (masks[maskIndex] == null) masks[maskIndex] = buildRuntimeMask(def, slotSet, pose)
+      }
+      paths[slotIndex] = -1
+      continue
+    }
+    paths[slotIndex] = open.length > 0 ? open[open.length - 1]!.path : -1
+  }
+  return { paths, maskPaths: nodes, masks }
+}
+
+function buildRuntimeMask(
+  def: MaskLibrary['masks'][number],
+  slotSet: SlotSet,
+  pose?: Pose,
+): RenderMask {
+  const slot = slotSet.slots.find((entry) => entry.data.id === def.startSlotId)
+  const bone = slot?.data.bone ?? 0
+  const positions = new Float32Array(def.polygon.length)
+  if (pose !== undefined) {
+    const m = pose.world
+    const off = bone * WORLD_STRIDE
+    for (let i = 0; i + 1 < def.polygon.length; i += 2) {
+      const x = def.polygon[i]!
+      const y = def.polygon[i + 1]!
+      positions[i] = m[off]! * x + m[off + 2]! * y + m[off + 4]!
+      positions[i + 1] = m[off + 1]! * x + m[off + 3]! * y + m[off + 5]!
+    }
+  } else {
+    positions.set(def.polygon)
+  }
+  const count = Math.max(0, positions.length / 2)
+  const indices = new Uint32Array(Math.max(0, (count - 2) * 3))
+  for (let i = 1, c = 0; i + 1 < count; i += 1) {
+    indices[c++] = 0
+    indices[c++] = i
+    indices[c++] = i + 1
+  }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (let i = 0; i + 1 < positions.length; i += 2) {
+    minX = Math.min(minX, positions[i]!)
+    minY = Math.min(minY, positions[i + 1]!)
+    maxX = Math.max(maxX, positions[i]!)
+    maxY = Math.max(maxY, positions[i + 1]!)
+  }
+  const bounds = Number.isFinite(minX)
+    ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+    : { x: 0, y: 0, width: 0, height: 0 }
+  return {
+    id: 0, mode: def.mode === 'alpha' ? 'alpha' : 'stencil', invert: def.invert,
+    feather: def.feather, positions, indices, bounds,
+  }
+}
+
+/** 附件局部 UV → 图集页 UV；缺 region 时返回 null。 */
+function atlasUvOf(asset: SkeletonAsset, attachment: RenderableAttachment): {
+  uvs: Float32Array; page: number; materialId: number
+} | null {
+  const atlas = asset.atlas
+  if (atlas === undefined) return null
+  const key = attachment.region.atlasKey
+  const region = atlas.regions.get(key)
+  if (region === undefined) return null
+  const source = attachment.kind === 'region'
+    ? (attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]))
+    : attachment.mesh.uvs
+  const uv = region.uvMatrix
+  const uvs = new Float32Array(source.length)
+  for (let i = 0; i + 1 < source.length; i += 2) {
+    const u = source[i]!
+    const v = source[i + 1]!
+    uvs[i] = uv[0]! * u + uv[2]! * v + uv[4]!
+    uvs[i + 1] = uv[1]! * u + uv[3]! * v + uv[5]!
+  }
+  return { uvs, page: region.page, materialId: region.page + 1 }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,13 +397,17 @@ export class Engine {
   private readonly host: PluginHost
   private readonly ctx: PluginContext
   private readonly viewport: { width: number; height: number }
-  private readonly viewProjection: Float32Array
+  private viewProjection: Float32Array
   private asset: SkeletonAsset | null = null
   private ownedPose: Pose | null = null
   private ownedSlotSet: SlotSet | null = null
   private readonly ownedTracks: Track[] = []
   private inverseBind: Float32Array | null = null
   private solver: ConstraintSolver | null = null
+  private renderAssets: RenderAssets | undefined
+  private preparedAssets: RenderAssets | undefined
+  private maskLibrary: MaskLibrary | undefined
+  private camera: Camera = DEFAULT_CAMERA
 
   constructor(
     config: EngineConfig = {},
@@ -335,7 +499,12 @@ export class Engine {
       this.ownedPose = pose
       this.ownedSlotSet = slotSet
       this.inverseBind = buildInverseBind(pose)
-      this.solver = null
+      this.solver = asset.constraints !== undefined && asset.constraints.length > 0
+        ? createConstraintSolver(asset.constraints)
+        : null
+      this.maskLibrary = asset.maskLibrary
+      this.renderAssets = buildRenderAssets(asset)
+      this.preparedAssets = undefined
       this.ownedTracks.length = 0
       this.host.setup()
       this._phase = 'ready'
@@ -382,11 +551,7 @@ export class Engine {
     sampleAnimation(this.ownedTracks, pose, slotSet, dt)
 
     // SkeletonAsset 暂无 constraints 字段；按可选结构读取，有则解、无则跳过。
-    const constraints = (this.asset as unknown as { constraints?: unknown }).constraints
-    if (Array.isArray(constraints) && constraints.length > 0) {
-      if (this.solver === null) this.solver = createConstraintSolver(constraints as ConstraintData[])
-      this.solver.solve(pose, dt)
-    }
+    if (this.solver !== null) this.solver.solve(pose, dt)
 
     updateWorld(pose)
     this.host.afterUpdate(dt)
@@ -400,15 +565,27 @@ export class Engine {
       throw new Error('E_NO_ASSET')
     }
 
+    const resolved = this.maskLibrary !== undefined
+      ? resolveMaskPaths(slotSet, this.maskLibrary, pose)
+      : undefined
+    const rules = this.host.viewRules()
     const packets: RenderPacket[] = []
     const drawOrder = slotSet.drawOrder
     for (let seq = 0; seq < drawOrder.length; seq += 1) {
       const slotIndex = drawOrder[seq]!
       const slot = slotSet.slots[slotIndex]
       if (slot === undefined) continue
+      if (rules.length > 0) {
+        const current = slot.attachmentId
+        const picked = resolveViewRule(rules, this.camera, slotIndex, current, 0)
+        if (picked.attachment !== null && picked.attachment !== current) {
+          setSlotAttachment(slotSet, slotIndex, picked.attachment)
+        }
+      }
       const attachment = resolveAttachment(slotSet, slotIndex)
       if (!asRenderable(attachment)) continue
-      const packet = this.buildPacket(attachment, slotIndex, seq, pose)
+      const maskPath = resolved?.paths[slotIndex] ?? 0
+      const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath)
       if (packet !== null) packets.push(packet)
     }
 
@@ -417,6 +594,13 @@ export class Engine {
       width: this.viewport.width,
       height: this.viewport.height,
       viewProjection: this.viewProjection,
+      ...(this.renderAssets === undefined ? {} : { assets: this.renderAssets }),
+      ...(resolved === undefined ? {} : { maskPaths: resolved.maskPaths, masks: { version: this.maskLibrary!.version, masks: resolved.masks } }),
+      depthMode: 'none',
+    }
+    if (this.renderAssets !== undefined && this.preparedAssets !== this.renderAssets && this.backend.prepare !== undefined) {
+      this.backend.prepare(this.renderAssets)
+      this.preparedAssets = this.renderAssets
     }
     this.backend.draw(frame)
     this.host.afterRender(frame)
@@ -429,16 +613,20 @@ export class Engine {
     slotIndex: number,
     seq: number,
     pose: Pose,
+    maskPath: number,
   ): RenderPacket | null {
     const slot = this.ownedSlotSet!.slots[slotIndex]!
+    const atlas = atlasUvOf(this.asset!, attachment)
     const base = {
       id: slotIndex,
       color: [slot.color.r, slot.color.g, slot.color.b, slot.color.a] as [number, number, number, number],
-      materialId: 0,
+      materialId: atlas?.materialId ?? 0,
       order: seq,
       depthKey: slot.data.zOffset,
       subOrder: 0,
       seq,
+      maskPath,
+      ...(atlas === null ? {} : { page: atlas.page }),
       blend: slot.data.blend,
     }
 
@@ -453,7 +641,7 @@ export class Engine {
         positions[v * 2] = m[off]! * x + m[off + 2]! * y + m[off + 4]!
         positions[v * 2 + 1] = m[off + 1]! * x + m[off + 3]! * y + m[off + 5]!
       }
-      const uvs = attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
+      const uvs = atlas?.uvs ?? attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
       return buildRegionPacket({ ...base, positions, uvs, kind: 'region' })
     }
 
@@ -464,7 +652,7 @@ export class Engine {
       return buildMeshPacket({
         ...base,
         positions,
-        uvs: mesh.uvs,
+        uvs: atlas?.uvs ?? mesh.uvs,
         indices: mesh.indices,
         depth: null,
         kind: 'mesh',
@@ -479,6 +667,13 @@ export class Engine {
         kind: 'mesh',
       })
     }
+  }
+
+  /** 设置 2D/2.5D 相机；viewRules 与投影随之更新。 */
+  setCamera(camera: Camera): void {
+    this.assertLive()
+    this.camera = camera
+    this.viewProjection = viewProjection2D(camera)
   }
 
   readPixels(): Uint8ClampedArray {
