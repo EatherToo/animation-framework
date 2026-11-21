@@ -10,6 +10,7 @@ export * from './slot/slot'
 export * from './mesh/mesh'
 export * from './animation/animation'
 export * from './constraint/constraint'
+export * from './physics/physics'
 export type {
   PacketKind, RenderPacket, RenderFrame, AtlasRect, AtlasPage, AtlasRegionRef,
   BuildPacketArgs, BuildMeshPacketArgs, TextureData, MaterialDef, RenderAssets,
@@ -23,6 +24,7 @@ export {
 export * from './backend/backend'
 export * from './render/camera'
 export * from './volume/volume'
+export * from './volume/dqs'
 export * from './asset/importer'
 export * from './asset/atlas'
 export * from './runtime/runtime'
