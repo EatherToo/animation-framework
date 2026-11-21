@@ -308,7 +308,18 @@ export function resolveMaskPaths(
       paths[slotIndex] = -1
       continue
     }
-    paths[slotIndex] = open.length > 0 ? open[open.length - 1]!.path : -1
+    let path = open.length > 0 ? open[open.length - 1]!.path : -1
+    // 显式 slot mask：在 clip scope 之外再追加一个内层 mask，仅作用于该 slot。
+    if (slot.data.mask !== null) {
+      const explicit = byId.get(slot.data.mask)
+      if (explicit !== undefined) {
+        const def = library.masks[explicit]!
+        nodes.push({ maskId: explicit, parent: path })
+        path = nodes.length - 1
+        if (masks[explicit] == null) masks[explicit] = buildRuntimeMask(def, slotSet, pose)
+      }
+    }
+    paths[slotIndex] = path
   }
   return { paths, maskPaths: nodes, masks }
 }
@@ -407,6 +418,8 @@ export class Engine {
   private readonly maxBones: number
   private readonly maxTexturePages: number
   private readonly maxInfluences: number
+  private readonly fixedDt: number | undefined
+  private accumulator = 0
 
   constructor(
     config: EngineConfig = {},
@@ -423,6 +436,7 @@ export class Engine {
     this.maxBones = config.maxBones ?? 512
     this.maxTexturePages = config.maxTexturePages ?? 4
     this.maxInfluences = config.maxInfluences ?? 4
+    this.fixedDt = config.fixedDt
     if (!Number.isInteger(this.maxBones) || this.maxBones < 1 ||
         !Number.isInteger(this.maxTexturePages) || this.maxTexturePages < 1 || this.maxTexturePages > 4 ||
         !Number.isInteger(this.maxInfluences) || this.maxInfluences < 1 || this.maxInfluences > 4) {
@@ -573,12 +587,22 @@ export class Engine {
     if (!Number.isFinite(dt) || dt < 0) throw new Error('E_CONFIG')
 
     this.host.beforeUpdate(dt)
-    sampleAnimation(this.ownedTracks, pose, slotSet, dt)
-
-    // SkeletonAsset 暂无 constraints 字段；按可选结构读取，有则解、无则跳过。
-    if (this.solver !== null) this.solver.solve(pose, dt)
-
-    updateWorld(pose)
+    const step = (h: number): void => {
+      sampleAnimation(this.ownedTracks, pose, slotSet, h)
+      if (this.solver !== null) this.solver.solve(pose, h)
+      updateWorld(pose)
+    }
+    if (this.fixedDt === undefined) {
+      step(dt)
+    } else {
+      // 固定步长：最多 4 子步；多余时间丢弃（防螺旋），余数留到下一帧。
+      this.accumulator = Math.min(this.accumulator + dt, this.fixedDt * 4)
+      let steps = Math.floor(this.accumulator / this.fixedDt + 1e-9)
+      if (steps > 4) steps = 4
+      this.accumulator -= steps * this.fixedDt
+      if (this.accumulator < 0) this.accumulator = 0
+      for (let i = 0; i < steps; i += 1) step(this.fixedDt)
+    }
     this.host.afterUpdate(dt)
   }
 

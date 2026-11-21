@@ -123,3 +123,15 @@ describe('runtime view rules', () => {
     expect(frame.packets).toHaveLength(1)
   })
 })
+
+describe('explicit slot masks', () => {
+  it('appends an explicit slot mask without a clipping slot', () => {
+    const sk2 = compileSkeleton({ name: 'explicit', profile: 'simple2d', bones: [{ name: 'root', parent: -1, length: 1 }] })
+    const slot: SlotData = { id: 'body', bone: 0, order: 0, color: rgba, blend: 'normal', attachment: 'body', mask: 'clip', zOffset: 0 }
+    const set = createSlotSet([slot], asset.skins, 'default')
+    const resolved = resolveMaskPaths(set, masks, createPose(sk2))
+    expect(resolved.paths[0]).toBeGreaterThanOrEqual(0)
+    expect(resolved.maskPaths).toHaveLength(1)
+    expect(resolved.masks[0]).not.toBeNull()
+  })
+})
