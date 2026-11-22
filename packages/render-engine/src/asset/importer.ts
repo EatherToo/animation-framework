@@ -311,7 +311,6 @@ function flippedMatrix(b: RawBone, unitScale: number, sourceYDown: boolean): Flo
     c = -Math.sin(sx) * b.scaleY
     d = Math.cos(sx) * b.scaleY
   }
-  if (b.name === 'rear-thigh') console.log('flip-debug', b.name, b.kind, sourceYDown, b.rotationDeg, a, b1, c, d)
   const out = new Float64Array(WORLD_STRIDE)
   out[0] = a
   // 引擎向量是 (m0*x + m2*y, m1*x + m3*y)；Spine y-up 需要转置官方 row-major 矩阵。
@@ -917,6 +916,160 @@ function pathPolygons(skins: ReadonlyMap<string, SkinData>): Map<string, Float32
 
 /** Spine 顶层 ik/transform/path/physics → ConstraintData[]；不可恢复项记 W 跳过。 */
 function readSpineConstraints(
+  doc: Record<string, unknown>,
+  skeleton: CompiledSkeleton,
+  skins: ReadonlyMap<string, SkinData>,
+  ctx: Ctx,
+): ConstraintData[] {
+  // Spine 4.3 把约束放进 constraints[]；旧格式仍支持顶层 ik/transform/path/physics。
+  if (arr(doc.constraints).length > 0) {
+    return readSpineConstraintArray(arr(doc.constraints), skeleton, skins, ctx)
+  }
+  return readLegacySpineConstraints(doc, skeleton, skins, ctx)
+}
+
+function readSpineConstraintArray(
+  rawConstraints: readonly unknown[],
+  skeleton: CompiledSkeleton,
+  skins: ReadonlyMap<string, SkinData>,
+  ctx: Ctx,
+): ConstraintData[] {
+  const out: ConstraintData[] = []
+  const paths = pathPolygons(skins)
+  const slotToPath = new Map<string, Float32Array>()
+  for (const skin of skins.values()) {
+    for (const attachment of skin.attachments.values()) {
+      if (attachment.kind === 'path' && !slotToPath.has(attachment.id)) slotToPath.set(attachment.id, attachment.polygon)
+    }
+  }
+  const idOf = (v: unknown): number | undefined => {
+    if (typeof v !== 'string') return undefined
+    return skeleton.boneIdByName.get(v)
+  }
+  const idsOf = (v: unknown): number[] => arr(v).map(idOf).filter((id): id is number => id !== undefined)
+  for (const [index, raw] of rawConstraints.entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const type = typeof o.type === 'string' ? o.type : ''
+    const id = typeof o.name === 'string' && o.name.length > 0 ? o.name : `${type || 'constraint'}_${index}`
+    const order = Math.floor(num(o.order, index))
+    if (type === 'transform') {
+      const chain = idsOf(o.bones)
+      const source = idOf(o.source ?? o.target)
+      if (chain.length === 0 || source === undefined) {
+        add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, 'transform 缺 bones/source，已跳过', 'skip', raw)
+        continue
+      }
+      out.push({
+        kind: 'transform',
+        id,
+        bone: chain[0]!,
+        weight: clamp01(num(o.mix, 1)),
+        enabled: true,
+        order,
+        sourceBone: source,
+        mixRotation: clamp01(num(o.mixRotate, num(o.rotateMix, 1))),
+        mixTranslation: (clamp01(num(o.mixX, num(o.translateMix, 1))) + clamp01(num(o.mixY, num(o.translateMix, 1)))) / 2,
+        ...(o.mixRotate !== undefined ? { mixRotate: num(o.mixRotate) } : {}),
+        ...(o.mixX !== undefined ? { mixX: num(o.mixX) } : {}),
+        ...(o.mixY !== undefined ? { mixY: num(o.mixY) } : {}),
+        ...(o.mixScaleX !== undefined ? { mixScaleX: num(o.mixScaleX) } : {}),
+        ...(o.mixScaleY !== undefined ? { mixScaleY: num(o.mixScaleY) } : {}),
+        ...(o.mixShearY !== undefined ? { mixShearY: num(o.mixShearY) } : {}),
+        ...(o.rotation !== undefined ? { offsetRotation: num(o.rotation) } : {}),
+        ...(o.x !== undefined ? { offsetX: num(o.x) * ctx.unitScale } : {}),
+        ...(o.y !== undefined ? { offsetY: (ctx.sourceYDown ? -1 : 1) * num(o.y) * ctx.unitScale } : {}),
+        ...(o.scaleX !== undefined ? { offsetScaleX: num(o.scaleX) } : {}),
+        ...(o.scaleY !== undefined ? { offsetScaleY: num(o.scaleY) } : {}),
+        ...(o.shearY !== undefined ? { offsetShearY: num(o.shearY) } : {}),
+      })
+      continue
+    }
+    if (type === 'ik') {
+      const chain = idsOf(o.bones)
+      const target = idOf(o.target)
+      if (chain.length === 0 || target === undefined) {
+        add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, 'IK 缺 bones/target，已跳过', 'skip', raw)
+        continue
+      }
+      out.push({
+        kind: 'ik',
+        id,
+        bone: chain[chain.length - 1]!,
+        weight: clamp01(num(o.mix, 1)),
+        enabled: true,
+        order,
+        targetBone: target,
+        chainLength: chain.length,
+        method: 'analytic',
+        maxIterations: Math.max(1, Math.floor(num(o.iterations, 8))),
+        tolerance: 1e-3,
+        bendSign: o.bendPositive === false ? -1 : 1,
+        ...(o.softness !== undefined ? { softness: clamp01(num(o.softness, 0)) } : {}),
+        ...(o.compress !== undefined ? { compress: clamp01(num(o.compress, 0)) } : {}),
+        ...(o.stretch !== undefined ? { stretch: clamp01(num(o.stretch, 0)) } : {}),
+        ...(o.uniform !== undefined ? { uniform: o.uniform === true } : {}),
+      })
+      continue
+    }
+    if (type === 'path') {
+      const chain = idsOf(o.bones)
+      const points = paths.get(typeof o.slot === 'string' ? o.slot : typeof o.target === 'string' ? o.target : id)
+        ?? slotToPath.get(typeof o.slot === 'string' ? o.slot : typeof o.target === 'string' ? o.target : id)
+      const usablePath = points !== undefined && points.length >= 4 && points.length % 2 === 0
+        && Array.from(points).every((v) => Number.isFinite(v))
+      if (chain.length === 0 || !usablePath) {
+        add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, 'path 约束缺可用 path 几何，已跳过', 'skip', raw)
+        continue
+      }
+      out.push({
+        kind: 'path',
+        id,
+        bone: chain[chain.length - 1]!,
+        weight: clamp01(num(o.mix, 1)),
+        enabled: true,
+        order,
+        points,
+        mix: clamp01(num(o.mix, 1)),
+        bones: chain,
+        spacing: clamp01(num(o.spacing, 0)),
+        ...(o.position !== undefined ? { position: clamp01(num(o.position, 0)) } : {}),
+        ...(o.mixRotate !== undefined || o.rotateMix !== undefined ? { mixRotate: clamp01(num(o.mixRotate, num(o.rotateMix, 0))) } : {}),
+        ...(o.mixX !== undefined || o.translateMix !== undefined ? { mixX: clamp01(num(o.mixX, num(o.translateMix, 0))) } : {}),
+        ...(o.mixY !== undefined || o.translateMix !== undefined ? { mixY: clamp01(num(o.mixY, num(o.translateMix, 0))) } : {}),
+        ...(o.closed !== undefined ? { closed: o.closed === true } : {}),
+      })
+      continue
+    }
+    if (type === 'physics') {
+      const bone = idOf(o.bone)
+      if (bone === undefined) {
+        add(ctx, 'warning', 'W_PHYSICS_SKIPPED', `constraints[${index}]`, 'physics 缺 bone，已跳过', 'skip', raw)
+        continue
+      }
+      out.push({
+        kind: 'physics',
+        id,
+        bone,
+        weight: clamp01(num(o.mix, 1)),
+        enabled: true,
+        order,
+        ...(typeof o.target === 'string' && idOf(o.target) !== undefined ? { target: idOf(o.target)! } : {}),
+        ...(o.inertia !== undefined ? { inertia: num(o.inertia, 0) } : {}),
+        ...(o.strength !== undefined ? { strength: clamp01(num(o.strength, 0)) } : {}),
+        ...(o.damping !== undefined ? { damping: num(o.damping, 0) } : {}),
+        ...(o.mass !== undefined ? { mass: Math.max(0, num(o.mass, 1)) } : {}),
+        ...(o.wind !== undefined ? { wind: num(o.wind, 0) } : {}),
+        ...(o.gravity !== undefined ? { gravity: num(o.gravity, 0) } : {}),
+      })
+      continue
+    }
+    add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, '未知约束类型，已跳过', 'skip', type)
+  }
+  return out
+}
+
+function readLegacySpineConstraints(
   doc: Record<string, unknown>,
   skeleton: CompiledSkeleton,
   skins: ReadonlyMap<string, SkinData>,
