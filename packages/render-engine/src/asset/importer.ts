@@ -560,10 +560,8 @@ function buildAttachment(
   const type = kindHint === 'spine'
     ? (typeof rawObj.type === 'string' ? rawObj.type : 'region')
     : (typeof rawObj.type === 'string' && rawObj.type === 'mesh' ? 'mesh' : 'region')
-  // sequence 是 Spine 4.3 的帧序列附件；v1 不播放序列，降级为 region 并显式告警。
-  if (kindHint === 'spine' && (type === 'sequence' || rawObj.sequence !== undefined)) {
-    add(ctx, 'warning', 'W_SEQUENCE', path, 'sequence 附件不支持，按 region 降级', 'fallback', type)
-  }
+  // sequence 是 Spine 4.3 的帧序列附件；读入帧 region 列表，缺帧时仍按 region 降级。
+  const sequence = kindHint === 'spine' ? parseSequence(rawObj, name, ctx, path, atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)) : undefined
   const atlasKey = atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)
   const region = { atlasKey, uvs: null as Float32Array | null }
   if (type === 'mesh' || type === 'weightedmesh') {
@@ -620,7 +618,7 @@ function buildAttachment(
   return {
     kind: 'region',
     id: name,
-    region: regionRefOf(ctx, atlasKey, uvs),
+    region: { ...regionRefOf(ctx, atlasKey, uvs), ...(sequence === undefined ? {} : { sequence }) },
     color: kindHint === 'spine' ? parseHexColor(rawObj.color, ctx, `${path}.color`) : WHITE,
   }
 }
@@ -680,6 +678,33 @@ function buildLinkedMesh(
     vertexSpace: parentMesh.vertexSpace,
   }
   return { kind: 'mesh', id: name, mesh, region: regionRefOf(ctx, atlasKey, null), color }
+}
+
+function parseSequence(
+  raw: Record<string, unknown>,
+  name: string,
+  ctx: Ctx,
+  path: string,
+  baseKey: string,
+): { frames: readonly string[]; setupIndex: number } | undefined {
+  const seq = obj(raw.sequence)
+  if (seq === null) return undefined
+  const count = Math.max(0, Math.floor(num(seq.count, 0)))
+  if (count <= 0) return undefined
+  const start = Math.floor(num(seq.start, 0))
+  const digits = Math.max(0, Math.floor(num(seq.digits, 0)))
+  const setupIndex = Math.max(0, Math.min(count - 1, Math.floor(num(seq.setupIndex, 0))))
+  const frames: string[] = []
+  for (let i = 0; i < count; i += 1) {
+    const n = start + i
+    const suffix = digits > 0 ? String(n).padStart(digits, '0') : String(n)
+    frames.push(`${baseKey}_${suffix}`)
+  }
+  if (ctx.atlasData !== null && !frames.every((frame) => ctx.atlasData!.regions.has(frame))) {
+    add(ctx, 'warning', 'E_SEQUENCE_REGION', path, 'sequence 帧 region 不完整，保留 setup 帧', 'fallback', frames)
+    return undefined
+  }
+  return { frames, setupIndex }
 }
 
 /** 设置 slot.mask；SlotData 对外只读，导入阶段允许一次性写入。 */

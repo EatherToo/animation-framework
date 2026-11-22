@@ -374,12 +374,12 @@ function buildRuntimeMask(
 }
 
 /** 附件局部 UV → 图集页 UV；缺 region 时返回 null。 */
-function atlasUvOf(asset: SkeletonAsset, attachment: RenderableAttachment): {
+function atlasUvOf(asset: SkeletonAsset, attachment: RenderableAttachment, keyOverride?: string): {
   uvs: Float32Array; page: number; materialId: number
 } | null {
   const atlas = asset.atlas
   if (atlas === undefined) return null
-  const key = attachment.region.atlasKey
+  const key = keyOverride ?? attachment.region.atlasKey
   const region = atlas.regions.get(key)
   if (region === undefined) return null
   const source = attachment.kind === 'region'
@@ -759,7 +759,12 @@ export class Engine {
     resolved: { readonly maskPaths: readonly { readonly maskId: number; readonly parent: number }[]; readonly masks: readonly (RenderMask | null)[] } | undefined,
   ): RenderPacket | null {
     const slot = this.ownedSlotSet!.slots[slotIndex]!
-    const atlas = atlasUvOf(this.asset!, attachment)
+    const sequence = attachment.kind === 'region' ? attachment.region.sequence : undefined
+    const sequenceIndex = sequence !== undefined
+      ? Math.max(0, Math.min(sequence.frames.length - 1, this.lastAnimation?.sequence.get(slotIndex) ?? sequence.setupIndex))
+      : 0
+    const sequenceKey = sequence !== undefined ? sequence.frames[sequenceIndex] : undefined
+    const atlas = atlasUvOf(this.asset!, attachment, sequenceKey)
     const dark = slot.data.dark ?? attachment.dark
     const hasDark = dark !== undefined && (dark.r > 0 || dark.g > 0 || dark.b > 0 || dark.a > 0)
     const base = {

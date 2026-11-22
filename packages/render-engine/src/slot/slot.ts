@@ -18,6 +18,8 @@ export type RegionRef = {
   readonly rotation?: number
   readonly scaleX?: number
   readonly scaleY?: number
+  /** Spine 4.3 sequence：帧 region 列表与 setup 帧；缺省为普通 region。 */
+  readonly sequence?: { readonly frames: readonly string[]; readonly setupIndex: number }
 }
 
 export type Attachment =
