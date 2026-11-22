@@ -75,7 +75,7 @@ describe('core2d pose / FK', () => {
       const world = getWorld(pose, 2)
       const expectedLinear = (() => {
         if (mode === 'onlyTranslation') return [1, 0, 0, 1] as const
-        if (mode === 'noRotationOrReflection') return [2, 0, 0, 3] as const
+        if (mode === 'noRotationOrReflection') return [0, 2, -3, 0] as const
         if (mode === 'noScale') return [0, 1, -1, 0] as const
         return [0, 1, -1, 0] as const // reflected Y basis already has positive det
       })()

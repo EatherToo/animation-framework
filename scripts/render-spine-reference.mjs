@@ -40,7 +40,7 @@ for (const name of SAMPLES) {
   const reader = new SkeletonJson(loader)
   const data = reader.readSkeletonData(JSON.parse(jsonText))
   for (const frame of FRAMES) {
-    const canvas = createCanvas(SIZE, SIZE)
+    const canvas = createCanvas(SIZE.width, SIZE.height)
     const ctx = canvas.getContext('2d')
     ctx.fillStyle = '#000000'
     ctx.fillRect(0, 0, SIZE.width, SIZE.height)

@@ -85,9 +85,14 @@ describe('core2d inherit modes', () => {
     closeAffine(parentBasis('onlyTranslation', parent), affine([1, 0, 0, 1, 10, 20]))
   })
 
-  it('noRotationOrReflection keeps axis lengths only', () => {
-    const ly = Math.hypot(3, 0.75)
-    closeAffine(parentBasis('noRotationOrReflection', parent), affine([2, 0, 0, ly, 10, 20]))
+  it('noRotationOrReflection keeps the parent x-axis and derives y from det', () => {
+    const pa = parent[0]!
+    const pc = parent[1]!
+    const pb = parent[2]!
+    const pd = parent[3]!
+    const len2 = pa * pa + pc * pc
+    const s = Math.abs(pa * pd - pb * pc) / len2
+    closeAffine(parentBasis('noRotationOrReflection', parent), affine([pa, pc, -pc * s, pa * s, 10, 20]))
   })
 
   it('noScale keeps direction and shear but normalizes lengths', () => {
@@ -112,6 +117,6 @@ describe('core2d inherit modes', () => {
   it('degenerate axes use the documented fallbacks', () => {
     const zero = affine([0, 0, 0, 0, 7, 8])
     closeAffine(parentBasis('noScale', zero), affine([1, 0, 0, 1, 7, 8]))
-    closeAffine(parentBasis('noRotationOrReflection', zero), affine([0, 0, 0, 0, 7, 8]))
+    closeAffine(parentBasis('noRotationOrReflection', zero), affine([1, 0, 0, 1, 7, 8]))
   })
 })

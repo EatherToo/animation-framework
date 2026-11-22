@@ -154,10 +154,25 @@ export function parentBasis(mode: InheritMode, p: ArrayLike<number>, out: Affine
   if (mode === 'onlyTranslation') {
     out[0] = 1; out[1] = 0; out[2] = 0; out[3] = 1
   } else if (mode === 'noRotationOrReflection') {
-    out[0] = Math.hypot(p[0]!, p[1]!)
-    out[1] = 0
-    out[2] = 0
-    out[3] = Math.hypot(p[2]!, p[3]!)
+    // Spine 语义：保留父骨 x 轴方向与长度，用行列式符号推导 y 轴。
+    // 这里使用引擎列向量布局 [a,c,b,d,tx,ty]；对应官方 row-major B=[[pa,-pb],[pc,pd]]。
+    const pa = p[0]!
+    const pc = p[1]!
+    const pb = p[2]!
+    const pd = p[3]!
+    const len2 = pa * pa + pc * pc
+    if (len2 > EPS * EPS) {
+      const s = Math.abs(pa * pd - pb * pc) / len2
+      out[0] = pa
+      out[1] = pc
+      out[2] = -pc * s
+      out[3] = pa * s
+    } else {
+      out[0] = 1
+      out[1] = 0
+      out[2] = 0
+      out[3] = 1
+    }
   } else if (mode === 'noScale' || mode === 'noScaleOrReflection') {
     const lx = Math.hypot(p[0]!, p[1]!)
     const ly = Math.hypot(p[2]!, p[3]!)

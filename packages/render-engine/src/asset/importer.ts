@@ -15,7 +15,8 @@ import type { ConstraintData } from '../constraint/constraint'
 import type { AtlasData } from './atlas'
 
 const DEG = Math.PI / 180
-const DEFAULT_REGION_UVS = new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
+// Spine region：bl=(u,v2)、br=(u2,v2)、tr=(u2,v)、tl=(u,v)；v=0 是图集顶部。
+const DEFAULT_REGION_UVS = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0])
 
 /** 单条导入记录：带 code / path / 原值 / 处置。 */
 export type ImportIssue = {
@@ -310,6 +311,7 @@ function flippedMatrix(b: RawBone, unitScale: number, sourceYDown: boolean): Flo
     c = -Math.sin(sx) * b.scaleY
     d = Math.cos(sx) * b.scaleY
   }
+  if (b.name === 'rear-thigh') console.log('flip-debug', b.name, b.kind, sourceYDown, b.rotationDeg, a, b1, c, d)
   const out = new Float64Array(WORLD_STRIDE)
   out[0] = a
   // 引擎向量是 (m0*x + m2*y, m1*x + m3*y)；Spine y-up 需要转置官方 row-major 矩阵。
