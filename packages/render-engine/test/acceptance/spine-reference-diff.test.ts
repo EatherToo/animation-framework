@@ -75,7 +75,7 @@ suite('official Spine reference pixel diff', () => {
         orthoHeight: (192 / scale) * 0.01,
         viewport: { width: 256, height: 192, dpr: 1 },
       }
-      const engine = new Engine({ backend: 'cpu', pixelRatio: 256 / DEFAULT_CAMERA.viewport.width })
+      const engine = new Engine({ backend: 'cpu', pixelRatio: 256 / DEFAULT_CAMERA.viewport.width, supersample: 8 })
       engine.load(asset)
       engine.setCamera(camera)
 

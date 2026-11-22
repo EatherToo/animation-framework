@@ -163,7 +163,7 @@ export interface CpuBackendOptions {
   readonly width?: number
   readonly height?: number
   /** 超采样倍数：1=预算/CI，2=平滑边缘 */
-  readonly supersample?: 1 | 2
+  readonly supersample?: 1 | 2 | 4 | 8 | 16
   /** 背板背景色，RGBA 字节；默认不透明黑 */
   readonly background?: readonly [number, number, number, number]
 }
@@ -177,7 +177,7 @@ export class CpuBackend implements RenderBackend {
 
   private width: number
   private height: number
-  private readonly ss: 1 | 2
+  private readonly ss: 1 | 2 | 4 | 8 | 16
   private readonly background: readonly [number, number, number, number]
   private color: Uint8ClampedArray
   private disposed = false
@@ -191,8 +191,8 @@ export class CpuBackend implements RenderBackend {
   private readonly maskCache = new Map<RenderMask, MaskCtx>()
 
   constructor(options?: CpuBackendOptions)
-  constructor(width: number, height: number, supersample?: 1 | 2)
-  constructor(a: number | CpuBackendOptions = {}, b?: number, c?: 1 | 2) {
+  constructor(width: number, height: number, supersample?: 1 | 2 | 4 | 8 | 16)
+  constructor(a: number | CpuBackendOptions = {}, b?: number, c?: 1 | 2 | 4 | 8 | 16) {
     const opts: CpuBackendOptions = typeof a === 'number'
       ? { width: a, height: b ?? 1, supersample: c ?? 1 }
       : a

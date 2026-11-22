@@ -60,6 +60,8 @@ export type EngineConfig = {
   maxBones?: number
   maxInfluences?: number
   pixelRatio?: number
+  /** CPU 参考后端超采样倍数；用于边缘 AA 对齐。 */
+  supersample?: number
   fixedDt?: number
   /** 可选描边：world 宽度 + straight RGBA。 */
   outline?: { readonly width: number; readonly color: readonly [number, number, number, number] }
@@ -99,8 +101,15 @@ export const ERROR_CODES = [
 // ---------------------------------------------------------------------------
 
 /** 默认后端工厂：CPU 永远可用；WebGL2 需要真实 DOM 上下文。 */
-function defaultBackendFactory(kind: 'cpu' | 'webgl2'): RenderBackend {
-  if (kind === 'cpu') return new CpuBackend({ width: 1, height: 1 })
+function defaultBackendFactory(
+  kind: 'cpu' | 'webgl2',
+  options?: { supersample?: 1 | 2 | 4 | 8 | 16 },
+): RenderBackend {
+  if (kind === 'cpu') {
+    const ss = options?.supersample ?? 1
+    if (!Number.isInteger(ss) || ss < 1 || ss > 16) throw new Error('E_CONFIG')
+    return new CpuBackend({ width: 1, height: 1, supersample: ss })
+  }
   if (typeof document === 'undefined') throw new Error('E_BACKEND: WebGL2 上下文不可用')
   const canvas = document.createElement('canvas')
   const gl = canvas.getContext('webgl2')
@@ -464,7 +473,11 @@ export class Engine {
         !Number.isInteger(this.maxInfluences) || this.maxInfluences < 1 || this.maxInfluences > 4) {
       throw new Error('E_CONFIG')
     }
-    const factory = deps?.backendFactory ?? defaultBackendFactory
+    const rawSupersample = config.supersample ?? 1
+    const supersample: 1 | 2 | 4 | 8 | 16 = rawSupersample === 2 || rawSupersample === 4
+      || rawSupersample === 8 || rawSupersample === 16 ? rawSupersample : 1
+    if (rawSupersample !== supersample) throw new Error('E_CONFIG')
+    const factory = deps?.backendFactory ?? ((kind) => defaultBackendFactory(kind, { supersample }))
     this.backend = createBackend(kind, factory)
     this.viewport = viewportOf(pixelRatio)
     this.viewProjection = viewProjection2D({
