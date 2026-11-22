@@ -62,18 +62,14 @@ describe('M11 atlas: 正常文本解析', () => {
     expect(head.uvMatrix).toHaveLength(6)
   })
 
-  it('UV 矩阵带半 texel 内缩，四角落在 region 内', () => {
+  it('UV 矩阵按官方 trim/rotate 语义覆盖原尺寸图', () => {
     const head = atlas.regions.get('head')!
     const [u0, v0] = mapUv(head, 0, 0)
     const [u1, v1] = mapUv(head, 1, 1)
-    expect(u0).toBeCloseTo((10 + 0.5) / 256, 8)
-    expect(v0).toBeCloseTo((20 + 0.5) / 128, 8)
-    expect(u1).toBeCloseTo((10 + 40 - 0.5) / 256, 8)
-    expect(v1).toBeCloseTo((20 + 30 - 0.5) / 128, 8)
-    expect(u0).toBeGreaterThanOrEqual(0)
-    expect(v0).toBeGreaterThanOrEqual(0)
-    expect(u1).toBeLessThanOrEqual(1)
-    expect(v1).toBeLessThanOrEqual(1)
+    expect(u0).toBeCloseTo((10 - 2) / 256, 8)
+    expect(v0).toBeCloseTo((20 + 3) / 128, 8)
+    expect(u1).toBeCloseTo((10 - 2 + 40) / 256, 8)
+    expect(v1).toBeCloseTo((20 + 3 + 30) / 128, 8)
   })
 
   it('rotate 90 通过重排 UV 矩阵消除旋转', () => {
@@ -84,14 +80,14 @@ describe('M11 atlas: 正常文本解析', () => {
     expect(Math.abs(m[1]!)).toBeGreaterThan(0)
     expect(Math.abs(m[2]!)).toBeGreaterThan(0)
 
-    // 四个角仍然覆盖 packed 矩形（半 texel 内缩后的边界）。
+    // 四个角覆盖 packed 矩形；rotate 90 时原尺寸轴已交换。
     const corners = [mapUv(rot, 0, 0), mapUv(rot, 1, 0), mapUv(rot, 0, 1), mapUv(rot, 1, 1)]
     const us = corners.map((c) => c[0])
     const vs = corners.map((c) => c[1])
-    expect(Math.min(...us)).toBeCloseTo((100 + 0.5) / 256, 8)
-    expect(Math.max(...us)).toBeCloseTo((100 + 64 - 0.5) / 256, 8)
-    expect(Math.min(...vs)).toBeCloseTo((10 + 0.5) / 128, 8)
-    expect(Math.max(...vs)).toBeCloseTo((10 + 32 - 0.5) / 128, 8)
+    expect(Math.min(...us)).toBeCloseTo(100 / 256, 8)
+    expect(Math.max(...us)).toBeCloseTo((100 + 32) / 256, 8)
+    expect(Math.min(...vs)).toBeCloseTo(10 / 128, 8)
+    expect(Math.max(...vs)).toBeCloseTo((10 + 64) / 128, 8)
   })
 
   it('hash 稳定，内容变化则 hash 变化', () => {
@@ -130,9 +126,8 @@ r270
     expect(r180.uvMatrix[0]).toBeLessThan(0)
     expect(r180.uvMatrix[3]).toBeLessThan(0)
     const r270 = atlas.regions.get('r270')!
-    expect(r270.uvMatrix[0]).toBeCloseTo(0, 8)
     expect(r270.uvMatrix[3]).toBeCloseTo(0, 8)
-    expect(r270.uvMatrix[1]).toBeLessThan(0)
+    expect(r270.uvMatrix[1]).toBeGreaterThan(0)
     expect(r270.uvMatrix[2]).toBeLessThan(0)
   })
 

@@ -392,8 +392,10 @@ function atlasUvOf(asset: SkeletonAsset, attachment: RenderableAttachment, keyOv
   const key = keyOverride ?? attachment.region.atlasKey
   const region = atlas.regions.get(key)
   if (region === undefined) return null
+  // region 是附件局部 0..1 UV，需要 region.uvMatrix；
+  // mesh/weighted mesh 的 JSON uvs 已经是最终 page UV，不能再变换。
   const source = attachment.kind === 'region'
-    ? (attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]))
+    ? (attachment.region.uvs ?? new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]))
     : attachment.mesh.uvs
   const uv = region.uvMatrix
   const uvs = new Float32Array(source.length)

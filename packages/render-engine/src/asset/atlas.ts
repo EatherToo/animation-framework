@@ -6,7 +6,7 @@
  * - 页数上限 4；超过直接抛带 code 的错误，不静默截断。
  * - v1 不保留 rotate 字段；rotate 90/180/270 在导入期通过重排 UV 矩阵消除。
  * - UV 矩阵列主序 [a,b,c,d,tx,ty]：u_page = a·u + c·v + tx，v_page = b·u + d·v + ty。
- * - 半 texel 内缩只在 uvMatrix 里做一次，避免双线性采到相邻 region。
+ * - 当前 uvMatrix 对齐 Spine 官方 trim/rotate 语义；半 texel/padding/bleed 由上层策略控制。
  * - 输出对象冻结顶层；同一输入 hash 稳定。
  */
 
@@ -108,7 +108,7 @@ function parseRotate(value: string | undefined): 0 | 90 | 180 | 270 {
 }
 
 /**
- * 生成局部 0..1 → 页 UV 的矩阵。半 texel 内缩后按 rotate 重排轴：
+ * 生成局部 0..1 → 页 UV 的矩阵。对齐官方 trim/rotate 语义：
  * 90 交换轴，180 双轴反向，270 交换并双轴反向；数据模型不再保留 rotate。
  */
 function uvMatrixOf(
@@ -119,26 +119,38 @@ function uvMatrixOf(
   rotate: 0 | 90 | 180 | 270,
   pageWidth: number,
   pageHeight: number,
+  offsetX = 0,
+  offsetY = 0,
+  originalWidth = width,
+  originalHeight = height,
 ): Float32Array {
   const w = Math.max(1, pageWidth)
   const h = Math.max(1, pageHeight)
-  const spanU = Math.max(0, width - 1) / w
-  const spanV = Math.max(0, height - 1) / h
-  const tx = (x + HALF_TEXEL) / w
-  const ty = (y + HALF_TEXEL) / h
-  switch (rotate) {
-    case 90:
-      // u_page = tx + v·spanU，v_page = ty + u·spanV
-      return new Float32Array([0, spanV, spanU, 0, tx, ty])
-    case 180:
-      // u_page = tx + spanU - u·spanU，v_page = ty + spanV - v·spanV
-      return new Float32Array([-spanU, 0, 0, -spanV, tx + spanU, ty + spanV])
-    case 270:
-      // u_page = tx + spanU - v·spanU，v_page = ty + spanV - u·spanV
-      return new Float32Array([0, -spanV, -spanU, 0, tx + spanU, ty + spanV])
-    default:
-      return new Float32Array([spanU, 0, 0, spanV, tx, ty])
+  // 对齐官方 TextureAtlas/Attachment.computeUVs：trim 后的 0..1 覆盖原尺寸图。
+  const sx = offsetX / w
+  const sy = offsetY / h
+  if (rotate === 90 || rotate === 270) {
+    const su = Math.max(0, originalWidth) / h
+    const sv = Math.max(0, originalHeight) / w
+    const exW = (originalWidth - offsetX - width) / h
+    const exH = (originalHeight - offsetY - height) / w
+    if (rotate === 90) {
+      // pageU = u0 + y·sv；pageV = v0 + (1-x)·su
+      return new Float32Array([0, -su, sv, 0, x / w - exH, y / h - exW + su])
+    }
+    // pageU = u0 + (1-y)·sv；pageV = v0 + x·su
+    return new Float32Array([0, su, -sv, 0, x / w - sy + sv, y / h - sx])
   }
+  const su = Math.max(0, originalWidth) / w
+  const sv = Math.max(0, originalHeight) / h
+  const exW = (originalWidth - offsetX - width) / w
+  const exH = (originalHeight - offsetY - height) / h
+  if (rotate === 180) {
+    // pageU = u0 + (1-x)·su；pageV = v0 + (1-y)·sv
+    return new Float32Array([-su, 0, 0, -sv, x / w - exW + su, y / h - sy + sv])
+  }
+  // pageU = u0 + x·su；pageV = v0 + y·sv
+  return new Float32Array([su, 0, 0, sv, x / w - sx, y / h - exH])
 }
 
 /** mip 上限：region 与页尺寸共同约束，至少 0。 */
@@ -301,7 +313,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
         y,
         width: regionWidth,
         height: regionHeight,
-        uvMatrix: uvMatrixOf(x, y, regionWidth, regionHeight, rotate, page.width, page.height),
+        uvMatrix: uvMatrixOf(x, y, regionWidth, regionHeight, rotate, page.width, page.height, offsetX, offsetY, sourceWidth, sourceHeight),
         trim: Object.freeze({ offsetX, offsetY, sourceWidth, sourceHeight }),
         maxMip: maxMipOf(regionWidth, regionHeight, page.width, page.height),
       }

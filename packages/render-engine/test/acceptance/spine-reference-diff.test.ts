@@ -60,6 +60,7 @@ function diff(reference: PNG, actual: Uint8ClampedArray): { mean: number; max: n
 
 // 像素 diff 尚未达到 0.5/255 门限；先作为诊断入口，避免伪装通过。
 // 像素 diff 尚未达到 0.5/255 门限；先作为诊断入口，避免伪装通过。
+// 像素 diff 尚未达到 0.5/255 门限；先作为诊断入口，避免伪装通过。
 const suite = assetsPresent ? describe.skip : describe.skip
 
 suite('official Spine reference pixel diff', () => {
