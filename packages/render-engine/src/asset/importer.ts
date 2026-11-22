@@ -688,7 +688,10 @@ function parseSequence(
   baseKey: string,
 ): { frames: readonly string[]; setupIndex: number } | undefined {
   const seq = obj(raw.sequence)
-  if (seq === null) return undefined
+  if (seq === null) {
+    if (raw.type === 'sequence') add(ctx, 'warning', 'W_SEQUENCE', path, 'sequence 缺帧数据，按 region 降级', 'fallback', name)
+    return undefined
+  }
   const count = Math.max(0, Math.floor(num(seq.count, 0)))
   if (count <= 0) return undefined
   const start = Math.floor(num(seq.start, 0))
@@ -700,7 +703,11 @@ function parseSequence(
     const suffix = digits > 0 ? String(n).padStart(digits, '0') : String(n)
     frames.push(`${baseKey}_${suffix}`)
   }
-  if (ctx.atlasData !== null && !frames.every((frame) => ctx.atlasData!.regions.has(frame))) {
+  if (ctx.atlasData === null) {
+    add(ctx, 'warning', 'W_SEQUENCE', path, '未提供 atlas，sequence 按 setup region 降级', 'fallback', frames)
+    return undefined
+  }
+  if (!frames.every((frame) => ctx.atlasData!.regions.has(frame))) {
     add(ctx, 'warning', 'E_SEQUENCE_REGION', path, 'sequence 帧 region 不完整，保留 setup 帧', 'fallback', frames)
     return undefined
   }
