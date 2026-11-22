@@ -7,12 +7,23 @@ import type { MeshData, WeightedMeshData } from '../mesh/mesh'
 
 export type RGBA = { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
 export type BlendMode = 'normal' | 'add' | 'multiply' | 'screen'
-export type RegionRef = { readonly atlasKey: string; readonly uvs: Float32Array | null }
+export type RegionRef = {
+  readonly atlasKey: string
+  readonly uvs: Float32Array | null
+  /** 附件局部尺寸/中心偏移/旋转/缩放；缺省回退 1×1 单位方块以兼容旧资产。 */
+  readonly width?: number
+  readonly height?: number
+  readonly x?: number
+  readonly y?: number
+  readonly rotation?: number
+  readonly scaleX?: number
+  readonly scaleY?: number
+}
 
 export type Attachment =
-  | { kind: 'region'; id: string; region: RegionRef; color: RGBA }
-  | { kind: 'mesh'; id: string; mesh: MeshData; region: RegionRef; color: RGBA }
-  | { kind: 'weightedMesh'; id: string; mesh: WeightedMeshData; region: RegionRef; color: RGBA }
+  | { kind: 'region'; id: string; region: RegionRef; color: RGBA; dark?: RGBA }
+  | { kind: 'mesh'; id: string; mesh: MeshData; region: RegionRef; color: RGBA; dark?: RGBA }
+  | { kind: 'weightedMesh'; id: string; mesh: WeightedMeshData; region: RegionRef; color: RGBA; dark?: RGBA }
   | { kind: 'boundingBox' | 'path' | 'clipping'; id: string; polygon: Float32Array }
   | { kind: 'point'; id: string; point: readonly [number, number] }
 
@@ -21,6 +32,8 @@ export type SlotData = {
   readonly bone: BoneId
   readonly order: number
   readonly color: RGBA
+  /** two-color tint 的暗部颜色；缺省透明。 */
+  readonly dark?: RGBA
   readonly blend: BlendMode
   readonly attachment: string | null
   readonly mask: string | null

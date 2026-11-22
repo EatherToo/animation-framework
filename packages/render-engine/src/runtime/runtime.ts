@@ -16,6 +16,7 @@ import { createPose, updateWorld, type Pose } from '../core/pose'
 import { WORLD_STRIDE } from '../core/math'
 import {
   buildMaskSet,
+  maskChain,
   buildMeshPacket,
   batchPackets,
   buildOutlinePacket,
@@ -43,6 +44,7 @@ import { DEFAULT_CAMERA, viewProjection2D, type Camera } from '../render/camera'
 import type { SkeletonAsset, MaskLibrary } from '../asset/importer'
 import type { AtlasData } from '../asset/atlas'
 import { resolveViewRule, type ViewRule } from '../volume/volume'
+import { clipTriangles } from '../render/clipping'
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -664,7 +666,7 @@ export class Engine {
       const attachment = resolveAttachment(slotSet, slotIndex)
       if (!asRenderable(attachment)) continue
       const maskPath = resolved?.paths[slotIndex] ?? 0
-      const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath)
+      const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath, resolved)
       if (packet !== null) packets.push(packet)
     }
 
@@ -692,6 +694,22 @@ export class Engine {
     return frame
   }
 
+  /** 收集当前 packet 的 stencil/clipping 多边形（世界空间）；alpha/scissor 不参与几何裁剪。 */
+  private clipPolygonsFor(
+    resolved: { readonly maskPaths: readonly { readonly maskId: number; readonly parent: number }[]; readonly masks: readonly (RenderMask | null)[] } | undefined,
+    maskPath: number,
+  ): Float32Array[] {
+    if (resolved === undefined || maskPath < 0) return []
+    const chain = maskChain(maskPath, resolved.maskPaths)
+    if (chain.error) return []
+    const out: Float32Array[] = []
+    for (const id of chain.ids) {
+      const mask = resolved.masks[id]
+      if (mask !== null && mask !== undefined && mask.mode === 'stencil') out.push(mask.positions)
+    }
+    return out
+  }
+
   /** 附件 → packet：region 用骨世界矩阵变换默认四边形；mesh/weightedMesh 走蒙皮。 */
   private buildPacket(
     attachment: RenderableAttachment,
@@ -699,12 +717,18 @@ export class Engine {
     seq: number,
     pose: Pose,
     maskPath: number,
+    resolved: { readonly maskPaths: readonly { readonly maskId: number; readonly parent: number }[]; readonly masks: readonly (RenderMask | null)[] } | undefined,
   ): RenderPacket | null {
     const slot = this.ownedSlotSet!.slots[slotIndex]!
     const atlas = atlasUvOf(this.asset!, attachment)
+    const dark = slot.data.dark ?? attachment.dark
+    const hasDark = dark !== undefined && (dark.r > 0 || dark.g > 0 || dark.b > 0 || dark.a > 0)
     const base = {
       id: slotIndex,
       color: [slot.color.r, slot.color.g, slot.color.b, slot.color.a] as [number, number, number, number],
+      ...(hasDark && dark !== undefined
+        ? { dark: [dark.r, dark.g, dark.b, dark.a] as [number, number, number, number], twoColor: true }
+        : {}),
       materialId: atlas?.materialId ?? 0,
       order: seq,
       depthKey: slot.data.zOffset,
@@ -718,15 +742,48 @@ export class Engine {
     if (attachment.kind === 'region') {
       const off = slot.data.bone * WORLD_STRIDE
       const m = pose.world
+      const region = attachment.region
+      const atlasRegion = this.asset!.atlas?.regions.get(region.atlasKey)
+      const sourceW = atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
+        ? atlasRegion.trim.sourceWidth
+        : (region.width ?? 1)
+      const sourceH = atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
+        ? atlasRegion.trim.sourceHeight
+        : (region.height ?? 1)
+      const w = atlasRegion !== undefined ? atlasRegion.width : sourceW
+      const h = atlasRegion !== undefined ? atlasRegion.height : sourceH
+      const ox = atlasRegion !== undefined ? atlasRegion.trim.offsetX : 0
+      const oy = atlasRegion !== undefined ? atlasRegion.trim.offsetY : 0
+      const x0 = -sourceW / 2 + ox
+      const y0 = -sourceH / 2 + oy
+      const x1 = x0 + w
+      const y1 = y0 + h
+      const sx = region.scaleX ?? 1
+      const sy = region.scaleY ?? 1
+      const rot = region.rotation ?? 0
+      const cos = Math.cos(rot)
+      const sin = Math.sin(rot)
+      const px = region.x ?? 0
+      const py = region.y ?? 0
+      const corners = [x0, y0, x1, y0, x1, y1, x0, y1]
       const positions = new Float32Array(8)
-      const corners = [-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5]
       for (let v = 0; v < 4; v += 1) {
-        const x = corners[v * 2]!
-        const y = corners[v * 2 + 1]!
+        const lx = corners[v * 2]! * sx
+        const ly = corners[v * 2 + 1]! * sy
+        const x = lx * cos - ly * sin + px
+        const y = lx * sin + ly * cos + py
         positions[v * 2] = m[off]! * x + m[off + 2]! * y + m[off + 4]!
         positions[v * 2 + 1] = m[off + 1]! * x + m[off + 3]! * y + m[off + 5]!
       }
       const uvs = atlas?.uvs ?? attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
+      const polygons = this.clipPolygonsFor(resolved, maskPath)
+      if (polygons.length > 0) {
+        const clipped = clipTriangles(positions, uvs, new Uint16Array([0, 1, 2, 0, 2, 3]), polygons)
+        return buildMeshPacket({
+          ...base, kind: 'region', positions: clipped.positions, uvs: clipped.uvs,
+          indices: clipped.indices, depth: null,
+        })
+      }
       return buildRegionPacket({ ...base, positions, uvs, kind: 'region' })
     }
 
@@ -734,10 +791,19 @@ export class Engine {
     try {
       const inverseBind = this.inverseBind!
       const positions = skinMesh2D(mesh, pose, inverseBind)
+      const uvs = atlas?.uvs ?? mesh.uvs
+      const polygons = this.clipPolygonsFor(resolved, maskPath)
+      if (polygons.length > 0) {
+        const clipped = clipTriangles(positions, uvs, mesh.indices, polygons)
+        return buildMeshPacket({
+          ...base, positions: clipped.positions, uvs: clipped.uvs,
+          indices: clipped.indices, depth: null, kind: 'mesh',
+        })
+      }
       return buildMeshPacket({
         ...base,
         positions,
-        uvs: atlas?.uvs ?? mesh.uvs,
+        uvs,
         indices: mesh.indices,
         depth: null,
         kind: 'mesh',

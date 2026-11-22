@@ -11,6 +11,9 @@ export interface RenderPacket {
   readonly positions: Float32Array
   readonly uvs: Float32Array
   readonly colors: Uint8Array
+  /** two-color tint 的暗部颜色；无 two-color 时缺省。 */
+  readonly dark?: Uint8Array
+  readonly twoColor?: boolean
   readonly depth: Float32Array | null
   readonly indices: Uint16Array | Uint32Array
   readonly materialId: number
@@ -105,6 +108,8 @@ export interface BuildPacketArgs {
   readonly uvs?: Float32Array
   /** 直通 RGBA，0..1；pma=true 时视为已预乘 */
   readonly color: readonly [number, number, number, number]
+  readonly dark?: readonly [number, number, number, number]
+  readonly twoColor?: boolean
   readonly materialId: number
   /** 可选图集页索引；缺省时后端按材质查页。 */
   readonly page?: number
@@ -158,6 +163,7 @@ function fillColors(vertexCount: number, bytes: Uint8Array): Uint8Array {
   }
   return out
 }
+
 
 /** 图集 UV：四角内缩半 texel，避免双线性采到相邻 region。 */
 export function atlasRegionUv(
@@ -223,6 +229,8 @@ export function buildRegionPacket(args: BuildPacketArgs): RenderPacket {
     positions: args.positions,
     uvs,
     colors: fillColors(vertexCount, colorBytes(args.color, args.pma === true)),
+    ...(args.dark === undefined ? {} : { dark: fillColors(vertexCount, colorBytes(args.dark, false)) }),
+    ...(args.dark === undefined ? {} : { twoColor: args.twoColor ?? true }),
     depth: null,
     indices: fanIndices(vertexCount),
     materialId: args.materialId,
@@ -248,6 +256,8 @@ export function buildMeshPacket(args: BuildMeshPacketArgs): RenderPacket {
     positions: args.positions,
     uvs,
     colors: fillColors(vertexCount, colorBytes(args.color, args.pma === true)),
+    ...(args.dark === undefined ? {} : { dark: fillColors(vertexCount, colorBytes(args.dark, false)) }),
+    ...(args.dark === undefined ? {} : { twoColor: args.twoColor ?? true }),
     depth: args.depth ?? null,
     indices: args.indices,
     materialId: args.materialId,

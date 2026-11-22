@@ -178,6 +178,10 @@ export class FakeWebGL implements WebGL2Like {
     this.push('scissor', x, y, width, height)
   }
 
+  blendFunc(sfactor: number, dfactor: number): void {
+    this.push('blendFunc', sfactor, dfactor)
+  }
+
   enable(cap: number): void {
     this.push('enable', cap)
   }

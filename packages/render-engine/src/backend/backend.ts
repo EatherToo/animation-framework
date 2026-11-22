@@ -129,6 +129,10 @@ interface ScreenVertex {
   g: number
   b: number
   a: number
+  dr?: number
+  dg?: number
+  db?: number
+  da?: number
 }
 
 /** 预转换到屏幕空间的 mask 上下文，避免逐像素做坐标变换。 */
@@ -273,14 +277,17 @@ export class CpuBackend implements RenderBackend {
         const b0 = w0 / area
         const b1 = w1 / area
         const b2 = w2 / area
-        const r = Math.round(b0 * p0.r + b1 * p1.r + b2 * p2.r)
-        const g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g)
-        const b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b)
+        let r = Math.round(b0 * p0.r + b1 * p1.r + b2 * p2.r)
+        let g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g)
+        let b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b)
         const a = Math.round(b0 * p0.a + b1 * p1.a + b2 * p2.a)
+        const dr = Math.round(b0 * (p0.dr ?? 0) + b1 * (p1.dr ?? 0) + b2 * (p2.dr ?? 0))
+        const dg = Math.round(b0 * (p0.dg ?? 0) + b1 * (p1.dg ?? 0) + b2 * (p2.dg ?? 0))
+        const db = Math.round(b0 * (p0.db ?? 0) + b1 * (p1.db ?? 0) + b2 * (p2.db ?? 0))
         const u = b0 * p0.u + b1 * p1.u + b2 * p2.u
         const v = b0 * p0.v + b1 * p1.v + b2 * p2.v
         const z = b0 * p0.z + b1 * p1.z + b2 * p2.z
-        this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z)
+        this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, dr, dg, db, z)
       }
     }
   }
@@ -290,6 +297,7 @@ export class CpuBackend implements RenderBackend {
     sx: number, sy: number, px: number, py: number,
     u: number, v: number,
     r: number, g: number, b: number, a: number,
+    dr: number, dg: number, db: number,
     z: number,
   ): void {
     if (a <= 0) return
@@ -324,6 +332,12 @@ export class CpuBackend implements RenderBackend {
       a = mulU8(texel[3], a)
     }
     if (a <= 0) return
+    if (this.currentTwoColor) {
+      const inv = 255 - a
+      r += Math.round(dr * inv / 255)
+      g += Math.round(dg * inv / 255)
+      b += Math.round(db * inv / 255)
+    }
     blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend)
   }
 
@@ -400,6 +414,7 @@ export class CpuBackend implements RenderBackend {
   }
 
   private currentBlend: BlendMode = 'normal'
+  private currentTwoColor = false
 
   draw(frame: RenderFrame): void {
     if (this.disposed) throw new Error('CpuBackend: 已 dispose，不能继续 draw')
@@ -432,6 +447,7 @@ export class CpuBackend implements RenderBackend {
       this.stats.packets += 1
       this.stats.drawCalls += 1
       this.currentBlend = packet.blend
+      this.currentTwoColor = packet.twoColor === true && packet.dark !== undefined
       this.material = assets?.materials.find((m) => m.id === packet.materialId) ?? null
       this.page = this.material !== null && this.material.kind === 'sprite' && assets !== null
         ? assets.pages[this.material.page] ?? null
@@ -458,6 +474,7 @@ export class CpuBackend implements RenderBackend {
         const [x, y] = this.toScreen(frame, packet.positions[i * stride]!, packet.positions[i * stride + 1]!)
         const o = i * 4
         const uv = i * 2
+        const dark = packet.dark
         const z = packet.depth !== null
           ? clampUnit(packet.depth[i] ?? 1)
           : clampUnit(0.5 - packet.depthKey * 0.01)
@@ -467,6 +484,8 @@ export class CpuBackend implements RenderBackend {
           z,
           r: packet.colors[o]!, g: packet.colors[o + 1]!,
           b: packet.colors[o + 2]!, a: packet.colors[o + 3]!,
+          dr: dark?.[o] ?? 0, dg: dark?.[o + 1] ?? 0,
+          db: dark?.[o + 2] ?? 0, da: dark?.[o + 3] ?? 0,
         })
       }
       for (let t = 0; t + 2 < packet.indices.length; t += 3) {
@@ -536,6 +555,11 @@ const GL_LINEAR = 0x2601
 const GL_NEAREST = 0x2600
 const GL_CLAMP_TO_EDGE = 0x812f
 const GL_SCISSOR_TEST = 0x0c11
+const GL_BLEND = 0x0be2
+const GL_ONE = 1
+const GL_ONE_MINUS_SRC_ALPHA = 0x0303
+const GL_DST_COLOR = 0x0306
+const GL_ONE_MINUS_SRC_COLOR = 0x0301
 const GL_STENCIL_TEST = 0x0b90
 const GL_DEPTH_TEST = 0x0b71
 const GL_ALWAYS = 0x0207
@@ -586,6 +610,7 @@ export interface WebGL2Like {
   ): void
   texParameteri?(target: number, pname: number, param: number): void
   scissor?(x: number, y: number, width: number, height: number): void
+  blendFunc?(sfactor: number, dfactor: number): void
   enable?(cap: number): void
   disable?(cap: number): void
   stencilFunc?(func: number, ref: number, mask: number): void
@@ -601,6 +626,7 @@ interface GLBuffers {
   positions: unknown
   uvs: unknown
   colors: unknown
+  darks: unknown
   indices: unknown
 }
 
@@ -613,28 +639,35 @@ const DEFAULT_VERTEX_SHADER = `#version 300 es
 in vec2 aPosition;
 in vec2 aUv;
 in vec4 aColor;
+in vec4 aDark;
 uniform mat3 viewProjection;
 uniform vec2 uResolution;
 out vec2 vUv;
 out vec4 vColor;
+out vec4 vDark;
 void main() {
   vec3 p = viewProjection * vec3(aPosition, 1.0);
   vec2 ndc = vec2(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0);
   gl_Position = vec4(ndc, 0.0, 1.0);
   vUv = aUv;
   vColor = aColor;
+  vDark = aDark;
 }`
 
 const DEFAULT_FRAGMENT_SHADER = `#version 300 es
 precision mediump float;
 in vec2 vUv;
 in vec4 vColor;
+in vec4 vDark;
 uniform sampler2D uTexture;
 uniform float uUseTexture;
+uniform float uTwoColor;
 out vec4 outColor;
 void main() {
   vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
-  outColor = vColor * texel;
+  vec4 c = vColor * texel;
+  if (uTwoColor > 0.5) c.rgb += vDark.rgb * (1.0 - texel.a);
+  outColor = c;
 }`
 
 /** 真实 GL 下默认编译内置 shader；mock 缺少 shader 方法时退回空 program。 */
@@ -682,6 +715,7 @@ export class WebGL2Backend implements RenderBackend {
   private pixels: Uint8ClampedArray = new Uint8ClampedArray(4)
   private disposed = false
   private assets: RenderAssets | null = null
+  private currentBlend: BlendMode | null = null
   private textures: unknown[] = []
   private whiteTexture: unknown = null
 
@@ -695,6 +729,7 @@ export class WebGL2Backend implements RenderBackend {
         positions: gl.createBuffer(),
         uvs: gl.createBuffer(),
         colors: gl.createBuffer(),
+        darks: gl.createBuffer(),
         indices: gl.createBuffer(),
       }
     }
@@ -755,6 +790,7 @@ export class WebGL2Backend implements RenderBackend {
         positions: gl.createBuffer(),
         uvs: gl.createBuffer(),
         colors: gl.createBuffer(),
+        darks: gl.createBuffer(),
         indices: gl.createBuffer(),
       }
     } else {
@@ -793,6 +829,13 @@ export class WebGL2Backend implements RenderBackend {
         gl.vertexAttribPointer === undefined) return
     gl.enableVertexAttribArray(loc)
     gl.vertexAttribPointer(loc, size, type, normalized, 0, 0)
+  }
+
+  private setUniform1f(name: string, value: number): void {
+    const gl = this.gl
+    if (gl.getUniformLocation === undefined || gl.uniform1f === undefined) return
+    const loc = gl.getUniformLocation(this.program, name)
+    if (loc !== null && loc !== undefined) gl.uniform1f(loc, value)
   }
 
   private setResolution(width: number, height: number): void {
@@ -939,6 +982,19 @@ export class WebGL2Backend implements RenderBackend {
     this.gl.activeTexture?.(GL_TEXTURE0)
   }
 
+  /** H1：每个 packet 的混合状态显式设置；连续同模式不重复切换。 */
+  private applyBlend(mode: BlendMode): void {
+    if (this.currentBlend === mode) return
+    this.gl.enable?.(GL_BLEND)
+    switch (mode) {
+      case 'normal': this.gl.blendFunc?.(GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break
+      case 'add': this.gl.blendFunc?.(GL_ONE, GL_ONE); break
+      case 'multiply': this.gl.blendFunc?.(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA); break
+      case 'screen': this.gl.blendFunc?.(GL_ONE, GL_ONE_MINUS_SRC_COLOR); break
+    }
+    this.currentBlend = mode
+  }
+
   draw(frame: RenderFrame): void {
     if (this.disposed) throw new Error('WebGL2Backend: 已 dispose，不能继续 draw')
     if (frame.width !== this.width || frame.height !== this.height) {
@@ -987,6 +1043,7 @@ export class WebGL2Backend implements RenderBackend {
       }
 
       const maskState = this.applyMasks(frame, packet.maskPath, assets)
+      this.applyBlend(packet.blend)
 
       this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, packet.positions)
       this.setAttrib('aPosition', Number.isFinite(stride) ? stride : 2, GL_FLOAT, false)
@@ -994,6 +1051,11 @@ export class WebGL2Backend implements RenderBackend {
       this.setAttrib('aUv', 2, GL_FLOAT, false)
       this.upload(GL_ARRAY_BUFFER, this.buffers?.colors, packet.colors)
       this.setAttrib('aColor', 4, GL_UNSIGNED_BYTE, true)
+      if (packet.dark !== undefined) {
+        this.upload(GL_ARRAY_BUFFER, this.buffers?.darks, packet.dark)
+        this.setAttrib('aDark', 4, GL_UNSIGNED_BYTE, true)
+      }
+      this.setUniform1f('uTwoColor', packet.twoColor === true ? 1 : 0)
       this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, packet.indices)
       gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0)
       this.resetMaskState(maskState)
