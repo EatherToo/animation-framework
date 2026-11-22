@@ -12,3 +12,4 @@ preview/.generate-textures.build.mjs
 test/fixtures/spine/spineboy/
 test/fixtures/spine/raptor/
 test/fixtures/spine/stretchyman/
+preview/golden/spine-reference/
