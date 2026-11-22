@@ -54,6 +54,23 @@ suite('official Spine sample assets', () => {
         if (px[i]! !== 0 || px[i + 1]! !== 0 || px[i + 2]! !== 0 || px[i + 3]! !== 0) nonBackground += 1
       }
       expect(nonBackground).toBeGreaterThan(100)
+
+      // 关键动画帧：播放首条动画两帧，断言姿态/图集/裁剪链路不崩溃且画面非空。
+      const animation = [...asset.animations.keys()][0]
+      expect(typeof animation).toBe('string')
+      engine.play(animation)
+      engine.update(1 / 60)
+      engine.update(1 / 60)
+      const animated = engine.render()
+      expect(animated.packets.length).toBeGreaterThan(0)
+      const animatedPx = engine.readPixels()
+      let animatedPixels = 0
+      for (let i = 0; i < animatedPx.length; i += 4) {
+        if (animatedPx[i]! !== 0 || animatedPx[i + 1]! !== 0 || animatedPx[i + 2]! !== 0 || animatedPx[i + 3]! !== 0) {
+          animatedPixels += 1
+        }
+      }
+      expect(animatedPixels).toBeGreaterThan(100)
       engine.dispose()
     })
   }
