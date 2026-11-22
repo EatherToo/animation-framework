@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
+// @ts-expect-error test tsconfig 不引入 node 类型；运行时由 Jest 提供
 import { existsSync, statSync } from 'node:fs'
+// @ts-expect-error 同上
 import { join } from 'node:path'
 
 const ROOT = 'test/fixtures/spine'
