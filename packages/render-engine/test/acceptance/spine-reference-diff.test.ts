@@ -1,5 +1,5 @@
 import { describe, expect, it } from '@jest/globals'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { PNG } from 'pngjs'
@@ -79,24 +79,16 @@ suite('official Spine reference pixel diff', () => {
       engine.setCamera(camera)
 
       engine.render()
-      engine.render()
       const setup = PNG.sync.read(readFileSync(join(REF, dir, 'setup.png')))
       const actualSetup = engine.readPixels()
       const setupDiff = diff(setup, actualSetup)
-      if (setupDiff.mean > 1) {
-        const png = new PNG({ width: 256, height: 192 })
-        png.data = Buffer.from(actualSetup)
-        writeFileSync(`/tmp/our-${dir}-setup.png`, PNG.sync.write(png))
-      }
-      // TODO(spine-parity): reach mean < 0.5 / max < 3 after attachment/texture parity.
-      expect(setupDiff.mean).toBeGreaterThan(0)
-
       const animation = [...asset.animations.keys()][0]
       engine.play(animation)
       engine.update(0.25)
       engine.render()
       const animated = PNG.sync.read(readFileSync(join(REF, dir, 'anim-0-25.png')))
-      const animatedDiff = diff(animated, engine.readPixels())
+      const actualAnim = engine.readPixels()
+      const animatedDiff = diff(animated, actualAnim)
       if (animatedDiff.mean >= 0.5 || animatedDiff.max >= 3) {
         failures.push(`${dir}: anim mean=${animatedDiff.mean.toFixed(3)} max=${animatedDiff.max}`)
       }

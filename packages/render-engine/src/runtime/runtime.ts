@@ -707,7 +707,7 @@ export class Engine {
       }
       const attachment = resolveAttachment(slotSet, slotIndex)
       if (!asRenderable(attachment)) continue
-      const maskPath = resolved?.paths[slotIndex] ?? 0
+      const maskPath = resolved?.paths[slotIndex] ?? -1
       const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath, resolved)
       if (packet !== null) packets.push(packet)
     }
@@ -793,14 +793,14 @@ export class Engine {
       const region = attachment.region
       const atlasRegion = this.asset!.atlas?.regions.get(region.atlasKey)
       const unitScale = this.asset!.unitScale
-      const sourceW = (atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
-        ? atlasRegion.trim.sourceWidth
-        : (region.width ?? 1)) * unitScale
-      const sourceH = (atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
-        ? atlasRegion.trim.sourceHeight
-        : (region.height ?? 1)) * unitScale
-      const w = (region.width ?? (atlasRegion !== undefined ? atlasRegion.width : sourceW / unitScale)) * unitScale
-      const h = (region.height ?? (atlasRegion !== undefined ? atlasRegion.height : sourceH / unitScale)) * unitScale
+      const sourceW = region.width ?? (atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
+        ? atlasRegion.trim.sourceWidth * unitScale
+        : 1)
+      const sourceH = region.height ?? (atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
+        ? atlasRegion.trim.sourceHeight * unitScale
+        : 1)
+      const w = region.width ?? (atlasRegion !== undefined ? atlasRegion.width * unitScale : sourceW)
+      const h = region.height ?? (atlasRegion !== undefined ? atlasRegion.height * unitScale : sourceH)
       const ox = (atlasRegion !== undefined ? atlasRegion.trim.offsetX : 0) * unitScale
       const oy = (atlasRegion !== undefined ? atlasRegion.trim.offsetY : 0) * unitScale
       const x0 = -sourceW / 2 + ox
@@ -948,7 +948,7 @@ export class Engine {
       const index = set.drawOrder[seq]!
       const attachment = resolveAttachment(set, index)
       if (!asRenderable(attachment)) continue
-      const packet = this.buildPacket(attachment, index, seq, pose, 0, undefined)
+      const packet = this.buildPacket(attachment, index, seq, pose, -1, undefined)
       if (packet === null) continue
       for (let i = 0; i + 1 < packet.positions.length; i += 2) {
         minX = Math.min(minX, packet.positions[i]!)

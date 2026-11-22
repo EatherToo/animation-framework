@@ -38,6 +38,6 @@ describe('sequence runtime', () => {
     engine.update(0)
     const packet = engine.render().packets[0]!
     expect(packet.uvs[0]).toBeCloseTo(0.75, 5) // s1 的 u0
-    expect(packet.positions[0]).toBeCloseTo(-0.5, 5)
+    expect(packet.positions[0]).toBeCloseTo(-1, 5)
   })
 })

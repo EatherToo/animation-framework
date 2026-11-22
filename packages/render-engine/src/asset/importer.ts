@@ -625,7 +625,7 @@ function buildAttachment(
     ...(Number.isFinite(height) ? { height: height * ctx.unitScale } : {}),
     ...(rawObj.x !== undefined ? { x: num(rawObj.x) * ctx.unitScale } : {}),
     ...(rawObj.y !== undefined ? { y: -num(rawObj.y) * ctx.unitScale } : {}),
-    ...(rawObj.rotation !== undefined ? { rotation: -num(rawObj.rotation) * DEG } : {}),
+    ...(rawObj.rotation !== undefined ? { rotation: num(rawObj.rotation) * DEG } : {}),
     ...(rawObj.scaleX !== undefined ? { scaleX: num(rawObj.scaleX) } : {}),
     ...(rawObj.scaleY !== undefined ? { scaleY: num(rawObj.scaleY) } : {}),
     ...(sequence === undefined ? {} : { sequence }),
@@ -1185,8 +1185,11 @@ function readSpineAnimations(
           const k = obj(raw) ?? {}
           const time = num(k.time)
           duration = Math.max(duration, time)
-          // 目标相对 setup；720° 不 wrap，保留连续角。
-          const value = num(k.angle) * DEG - sk.setupLocal[base + 2]!
+          // 4.3 的 rotate.value 是相对 setup 的角度；旧 angle 是绝对角。均保留连续角。
+          const absolute = k.angle !== undefined
+            ? num(k.angle) * DEG
+            : sk.setupLocal[base + 2]! + num(k.value) * DEG
+          const value = absolute - sk.setupLocal[base + 2]!
           return { time, value }
         })
         timelines.push({ kind: 'rotate', path: boneName, keys })
@@ -1224,12 +1227,12 @@ function readSpineAnimations(
       const ch = obj(rawChannels)
       if (ch === null) continue
       if (arr(ch.attachment).length > 0) {
-        const keys: ScalarKey[] = arr(ch.attachment).map((raw) => {
+        const keys = arr(ch.attachment).map((raw) => {
           const k = obj(raw) ?? {}
           const time = num(k.time)
           duration = Math.max(duration, time)
-          const label = typeof k.name === 'string' ? k.name : ''
-          return { time, value: attIndex.get(label) ?? 0 }
+          const label = typeof k.name === 'string' ? k.name : null
+          return { time, name: label }
         })
         timelines.push({ kind: 'attachment', path: String(slotIndex), keys })
       }
