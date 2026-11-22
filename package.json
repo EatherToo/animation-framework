@@ -13,7 +13,12 @@
     "test:golden": "pnpm -r --filter=./packages/* run test:golden",
     "test:parity": "pnpm -r --filter=./packages/* run test:parity",
     "test:import": "pnpm -r --filter=./packages/* run test:import",
-    "bench": "pnpm -r --filter=./packages/* run bench"
+    "bench": "pnpm -r --filter=./packages/* run bench",
+    "test:spine:import": "pnpm -r --filter=./packages/* run test:spine:import",
+    "test:spine:golden": "pnpm -r --filter=./packages/* run test:spine:golden",
+    "test:spine:parity": "pnpm -r --filter=./packages/* run test:spine:parity",
+    "test:spine:perf": "pnpm -r --filter=./packages/* run test:spine:perf",
+    "test:spine": "pnpm -r --filter=./packages/* run test:spine"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
