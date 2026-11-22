@@ -453,6 +453,7 @@ function validateIndices(raw: unknown, vertexCount: number, ctx: Ctx, path: stri
 /** 权重：读 count → (boneIndex,x,y,w)；映射稳定 BoneId，超 4 裁剪并归一化。 */
 function readWeightedMesh(
   raw: Record<string, unknown>,
+  name: string,
   slotBone: number,
   srcToId: Int32Array,
   ctx: Ctx,
@@ -512,7 +513,7 @@ function readWeightedMesh(
     v += 1
   }
   const mesh = {
-    id: typeof raw.name === 'string' ? raw.name : 'mesh',
+    id: name,
     positions,
     uvs: uvOf(uvs, vertexCount),
     indices: validateIndices(raw.triangles, vertexCount, ctx, path),
@@ -575,7 +576,7 @@ function buildAttachment(
         && Number.isInteger(first)
         && (first as number) >= 1
         && 1 + (first as number) * 4 <= vertices.length)
-    if (weighted) return readWeightedMesh(rawObj, slotBone, srcToId, ctx, path)
+    if (weighted) return readWeightedMesh(rawObj, name, slotBone, srcToId, ctx, path)
     const positions = flatPositions(vertices.map((x) => num(x)), ctx, ctx.unitScale)
     const vertexCount = positions.length / 2
     const mesh = {
@@ -615,10 +616,24 @@ function buildAttachment(
   }
   const customUvs = arr(rawObj.uvs)
   const uvs = customUvs.length === 8 ? Float32Array.from(customUvs.map((x) => num(x))) : null
+  // H2：region 的完整局部几何；引擎骨 local 是 Spine y/rotation 的 F·M·F 共轭。
+  const width = num(rawObj.width, NaN)
+  const height = num(rawObj.height, NaN)
+  const regionData: RegionRef = {
+    ...regionRefOf(ctx, atlasKey, uvs),
+    ...(Number.isFinite(width) ? { width: width * ctx.unitScale } : {}),
+    ...(Number.isFinite(height) ? { height: height * ctx.unitScale } : {}),
+    ...(rawObj.x !== undefined ? { x: num(rawObj.x) * ctx.unitScale } : {}),
+    ...(rawObj.y !== undefined ? { y: -num(rawObj.y) * ctx.unitScale } : {}),
+    ...(rawObj.rotation !== undefined ? { rotation: -num(rawObj.rotation) * DEG } : {}),
+    ...(rawObj.scaleX !== undefined ? { scaleX: num(rawObj.scaleX) } : {}),
+    ...(rawObj.scaleY !== undefined ? { scaleY: num(rawObj.scaleY) } : {}),
+    ...(sequence === undefined ? {} : { sequence }),
+  }
   return {
     kind: 'region',
     id: name,
-    region: { ...regionRefOf(ctx, atlasKey, uvs), ...(sequence === undefined ? {} : { sequence }) },
+    region: regionData,
     color: kindHint === 'spine' ? parseHexColor(rawObj.color, ctx, `${path}.color`) : WHITE,
   }
 }

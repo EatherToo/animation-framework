@@ -50,7 +50,7 @@ export type AtlasData = {
   readonly hash: string
   readonly pages: readonly AtlasPageDef[]
   readonly regions: ReadonlyMap<string, AtlasRegion>
-  readonly pma: true
+  readonly pma: boolean
   readonly colorSpace: 'srgb'
   readonly padding: number
   readonly bleed: number
@@ -170,6 +170,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
   const pages: AtlasPageDef[] = []
   const regions = new Map<string, AtlasRegion>()
   let cursor = 0
+  let pagePma = false
 
   const skipBlank = (): void => {
     while (cursor < lines.length && lines[cursor]!.trim() === '') cursor += 1
@@ -201,6 +202,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
       }
       // 官方 atlas 用 tab 缩进 size/filter 等页头字段；不能把缩进当区域行跳过。
       if (!HEADER_KEYS.has(field.key)) break
+      if (field.key === 'pma') pagePma = field.value.trim().toLowerCase() === 'true'
       if (field.key === 'size') {
         const values = numberList(field.value, 'E_ATLAS_SIZE', 'size')
         if (values.length < 2) fail('E_ATLAS_SIZE', 'size 需要 width,height')
@@ -323,7 +325,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
     hash: fnv1a(signature),
     pages: Object.freeze(pages),
     regions,
-    pma: true,
+    pma: pagePma,
     colorSpace: 'srgb',
     padding,
     bleed,

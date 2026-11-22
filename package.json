@@ -23,6 +23,8 @@
     "test:spine:samples": "pnpm -C packages/render-engine test:spine:samples"
   },
   "devDependencies": {
+    "@esotericsoftware/spine-canvas": "4.3.13",
+    "@napi-rs/canvas": "1.2.0",
     "@types/pngjs": "^6.0.5",
     "pngjs": "^7.0.0",
     "typescript": "^7.0.2"

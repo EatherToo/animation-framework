@@ -792,16 +792,17 @@ export class Engine {
       const m = pose.world
       const region = attachment.region
       const atlasRegion = this.asset!.atlas?.regions.get(region.atlasKey)
-      const sourceW = atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
+      const unitScale = this.asset!.unitScale
+      const sourceW = (atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
         ? atlasRegion.trim.sourceWidth
-        : (region.width ?? 1)
-      const sourceH = atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
+        : (region.width ?? 1)) * unitScale
+      const sourceH = (atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
         ? atlasRegion.trim.sourceHeight
-        : (region.height ?? 1)
-      const w = atlasRegion !== undefined ? atlasRegion.width : sourceW
-      const h = atlasRegion !== undefined ? atlasRegion.height : sourceH
-      const ox = atlasRegion !== undefined ? atlasRegion.trim.offsetX : 0
-      const oy = atlasRegion !== undefined ? atlasRegion.trim.offsetY : 0
+        : (region.height ?? 1)) * unitScale
+      const w = (region.width ?? (atlasRegion !== undefined ? atlasRegion.width : sourceW / unitScale)) * unitScale
+      const h = (region.height ?? (atlasRegion !== undefined ? atlasRegion.height : sourceH / unitScale)) * unitScale
+      const ox = (atlasRegion !== undefined ? atlasRegion.trim.offsetX : 0) * unitScale
+      const oy = (atlasRegion !== undefined ? atlasRegion.trim.offsetY : 0) * unitScale
       const x0 = -sourceW / 2 + ox
       const y0 = -sourceH / 2 + oy
       const x1 = x0 + w
