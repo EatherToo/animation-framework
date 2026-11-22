@@ -5,15 +5,20 @@
 import { describe, expect, it } from '@jest/globals'
 import { importSpine, type SkeletonAsset } from '@/asset/importer'
 import { importSpineAtlas } from '@/asset/atlas'
-import type { AnimationClip, Timeline } from '@/animation/animation'
+import type { AnimationClip } from '@/animation/animation'
 
 const SCALE = 0.01
 
-type KeyTimeline = Extract<Timeline, { keys: unknown }>
+/** Timeline 按 key 类型分组；本测试只断言标量通道的 time/value。 */
+type KeyTimeline = {
+  readonly kind: string
+  readonly path: string
+  readonly keys: readonly { readonly time: number; readonly value: number }[]
+}
 function keyTimeline(clip: AnimationClip, predicate: (t: KeyTimeline) => boolean): KeyTimeline {
   return clip.timelines.find(
-    (t): t is KeyTimeline => 'keys' in t && predicate(t as KeyTimeline),
-  )!
+    (t) => 'keys' in t && t.keys !== undefined && predicate(t as unknown as KeyTimeline),
+  ) as unknown as KeyTimeline
 }
 
 function clone<T>(v: T): T {

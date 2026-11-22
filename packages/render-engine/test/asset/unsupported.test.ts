@@ -22,8 +22,9 @@ describe('unsupported Spine features are downgraded with explicit codes', () => 
     const asset = importSpine(fixture)
     const codes = asset.report.issues.map((i) => i.code)
     expect(codes).toContain('W_SEQUENCE')
-    expect(codes).toContain('W_TINT_DOWNGRADE')
     expect(codes).toContain('W_PHYSICS_SKIPPED')
+    // two-color 已实现：dark 被读入，不再降级告警
+    expect(asset.slots[0]!.dark?.r).toBe(1)
     // sequence 降级为 region，资产仍可加载
     expect(asset.skins.get('default')!.attachments.get('seq')?.kind).toBe('region')
   })

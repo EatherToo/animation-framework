@@ -12,17 +12,21 @@ import {
   type ImportIssue,
   type SkeletonAsset,
 } from '@/asset/importer'
-import type { AnimationClip, Timeline } from '@/animation/animation'
+import type { AnimationClip } from '@/animation/animation'
 
 const HALF_PI = Math.PI / 2
 const SCALE = 0.01
 
-/** Timeline 是含 EventTimeline 的联合类型，取 keys 需先收窄。 */
-type KeyTimeline = Extract<Timeline, { keys: unknown }>
+/** Timeline 按 key 类型分组；本测试只断言标量通道的 time/value。 */
+type KeyTimeline = {
+  readonly kind: string
+  readonly path: string
+  readonly keys: readonly { readonly time: number; readonly value: number }[]
+}
 function keyTimeline(clip: AnimationClip, predicate: (t: KeyTimeline) => boolean): KeyTimeline {
   return clip.timelines.find(
-    (t): t is KeyTimeline => 'keys' in t && predicate(t as KeyTimeline),
-  )!
+    (t) => 'keys' in t && t.keys !== undefined && predicate(t as unknown as KeyTimeline),
+  ) as unknown as KeyTimeline
 }
 
 /** 深拷贝 fixture，避免各用例之间互相污染。 */

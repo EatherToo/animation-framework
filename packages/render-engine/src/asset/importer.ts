@@ -1578,14 +1578,15 @@ export function importSpine(
       bone = skeleton.roots[0] ?? 0
     }
     const defaultAttachment = typeof o.attachment === 'string' && o.attachment.length > 0 ? o.attachment : null
-    if (o.dark !== undefined && o.dark !== null) {
-      add(ctx, 'warning', 'W_TINT_DOWNGRADE', `slots[${i}].dark`, 'two-color tint 不支持，降级为 light tint', 'fallback', o.dark)
-    }
+    const dark = o.dark !== undefined && o.dark !== null
+      ? parseHexColor(o.dark, ctx, `slots[${i}].dark`)
+      : undefined
     return {
       id: slotNames[i]!,
       bone,
       order: i,
       color: parseHexColor(o.color, ctx, `slots[${i}].color`),
+      ...(dark === undefined ? {} : { dark }),
       blend: parseBlend(o.blend, ctx, `slots[${i}].blend`),
       attachment: defaultAttachment,
       mask: null,
@@ -1792,6 +1793,11 @@ export function importDragonBones(
     ctx.atlasData ?? undefined, constraints, undefined,
   )
 }
+
+// S3 导入兼容入口：binary 4.2 与 3.8 均在转换后复用本模块的 importSpine。
+// 从 importer 再导出，避免调用方为了新格式额外记住两个模块路径。
+export { importSpineBinary, type SpineBinaryAssetContext } from './spine-binary'
+export { importSpine38, type Spine38Options } from './spine38'
 
 /**
  * 编译 setup 姿态后逐骨比较原点；偏差 > 1e-3 米记 error。
