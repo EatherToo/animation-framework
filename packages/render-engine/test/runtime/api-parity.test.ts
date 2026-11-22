@@ -62,3 +62,14 @@ describe('runtime instance transform', () => {
     expect(maxX).toBeLessThanOrEqual(0)
   })
 })
+
+describe('runtime debug overlay', () => {
+  it('exposes debug lines only after a rendered frame and only when flags are on', () => {
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load(asset)
+    expect(engine.debugLines({ bones: true })).toEqual([])
+    engine.render()
+    expect(engine.debugLines({ bones: true }).length).toBeGreaterThan(0)
+    expect(engine.debugLines({})).toEqual([])
+  })
+})

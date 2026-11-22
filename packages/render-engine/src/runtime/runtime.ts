@@ -46,6 +46,7 @@ import type { SkeletonAsset, MaskLibrary } from '../asset/importer'
 import type { AtlasData } from '../asset/atlas'
 import { resolveViewRule, type ViewRule } from '../volume/volume'
 import { clipTriangles } from '../render/clipping'
+import { buildDebugLines, type DebugFlags, type DebugLine } from '../debug/overlay'
 
 // ---------------------------------------------------------------------------
 // 公开类型
@@ -425,6 +426,7 @@ export class Engine {
   private solver: ConstraintSolver | null = null
   private animationState: AnimationState | null = null
   private lastAnimation: SampleResult | null = null
+  private lastFrame: RenderFrame | null = null
   private flipX = false
   private flipY = false
   private instanceScaleX = 1
@@ -559,6 +561,7 @@ export class Engine {
       this.animationState?.dispose()
       this.animationState = new AnimationState(asset.animations, pose, slotSet)
       this.lastAnimation = null
+    this.lastFrame = null
       this.inverseBind = buildInverseBind(pose)
       this.solver = asset.constraints !== undefined && asset.constraints.length > 0
         ? createConstraintSolver(asset.constraints)
@@ -728,6 +731,7 @@ export class Engine {
       this.backend.prepare(this.renderAssets)
       this.preparedAssets = this.renderAssets
     }
+    this.lastFrame = frame
     this.backend.draw(frame)
     this.host.afterRender(frame)
     return frame
@@ -954,6 +958,18 @@ export class Engine {
     }
     if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 0, height: 0 }
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
+  }
+
+  /** 调试叠加线：需先 render 一帧；不修改生产 packet/pose。 */
+  debugLines(flags: Partial<DebugFlags>): DebugLine[] {
+    this.assertLive()
+    if (this.lastFrame === null || this.ownedPose === null || this.ownedSlotSet === null) return []
+    return buildDebugLines({
+      pose: this.ownedPose, slotSet: this.ownedSlotSet,
+      packets: this.lastFrame.packets,
+      ...(this.lastFrame.masks === undefined ? {} : { masks: this.lastFrame.masks.masks }),
+      bounds: this.getBounds(), flags,
+    })
   }
 
   readPixels(): Uint8ClampedArray {
