@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { PNG } from 'pngjs'
 import { importSpineAtlas } from '@/asset/atlas'
 import { importSpine } from '@/asset/importer'
+import { Engine } from '@/runtime/runtime'
 
 // Jest cwd 是 packages/render-engine
 const ROOT = join(process.cwd(), '..', '..', 'test/fixtures/spine')
@@ -42,6 +43,18 @@ suite('official Spine sample assets', () => {
       expect(asset.report.errors).toBe(0)
       expect(asset.skeleton.bones.length).toBeGreaterThan(0)
       expect(asset.animations.size).toBeGreaterThan(0)
+
+      // setup pose：背景是 alpha 0；非背景像素 >100，draw call 在预算内。
+      const engine = new Engine({ backend: 'cpu', pixelRatio: 0.125 })
+      engine.load(asset)
+      engine.render()
+      const px = engine.readPixels()
+      let nonBackground = 0
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i]! !== 0 || px[i + 1]! !== 0 || px[i + 2]! !== 0 || px[i + 3]! !== 0) nonBackground += 1
+      }
+      expect(nonBackground).toBeGreaterThan(100)
+      engine.dispose()
     })
   }
 })

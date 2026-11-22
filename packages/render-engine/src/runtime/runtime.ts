@@ -267,7 +267,7 @@ export function buildRenderAssets(asset: SkeletonAsset): RenderAssets | undefine
       width: image?.data !== undefined ? page.width : 1,
       height: image?.data !== undefined ? page.height : 1,
       data,
-      pma: true,
+      pma: atlas.pma,
     }
   })
   const materials: MaterialDef[] = [{ id: 0, kind: 'flat', page: -1, filter: 'linear' }]
