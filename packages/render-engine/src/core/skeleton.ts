@@ -16,8 +16,9 @@ export type RigProfile = 'simple2d' | 'full2d' | 'volume3d'
 
 export const PROFILE_BONE_LIMITS: Record<RigProfile, number> = {
   simple2d: 19,
-  full2d: 64,
-  volume3d: 64,
+  // 官方 Spine 样例可到 76 骨；导入资产需要高于人形模板的 64 骨预算。
+  full2d: 128,
+  volume3d: 128,
 }
 
 export type JointSpec = {

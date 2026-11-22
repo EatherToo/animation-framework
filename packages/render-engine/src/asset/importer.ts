@@ -1675,7 +1675,9 @@ export function importSpine(
           const attObj = obj(rawAtt)
           const isLinked = attObj?.type === 'linkedmesh'
           if (isLinked !== linkedPass) continue
-          if (attachments.has(attName)) {
+          // Spine 允许同名附件存在于不同 slot；真正的 key 是 slot 限定的。
+          const attachmentKey = `${slot.name}\u0000${attName}`
+          if (attachments.has(attachmentKey)) {
             add(ctx, 'error', 'E_DUPLICATE_NAME', `skins[${i}].attachments.${slot.name}.${attName}`, '附件重名，已跳过', 'skip', attName)
             continue
           }
@@ -1697,7 +1699,8 @@ export function importSpine(
             built = buildAttachment(rawAtt, attName, 'spine', bone, srcToId, ctx, path)
           }
           if (built === null) continue
-          attachments.set(attName, built)
+          attachments.set(attachmentKey, built)
+          if (!attachments.has(attName)) attachments.set(attName, built)
           if (built.kind === 'clipping' && attObj !== null) {
             addClippingMask(ctx, slots, slot.name, attName, attObj, built.polygon)
           }

@@ -190,7 +190,6 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
     while (cursor < lines.length) {
       const raw = lines[cursor]!
       if (raw.trim() === '') break
-      if (isIndented(raw)) { cursor += 1; continue }
       const field = splitField(raw.trim())
       if (field === null) {
         if (imageName === null) {
@@ -200,6 +199,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
         }
         break
       }
+      // 官方 atlas 用 tab 缩进 size/filter 等页头字段；不能把缩进当区域行跳过。
       if (!HEADER_KEYS.has(field.key)) break
       if (field.key === 'size') {
         const values = numberList(field.value, 'E_ATLAS_SIZE', 'size')
