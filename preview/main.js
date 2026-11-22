@@ -383,16 +383,27 @@
   // packages/render-engine/src/animation/animation.ts
   var TAU2 = Math.PI * 2;
   var IDENTITY_BEZIER = [1 / 3, 1 / 3, 2 / 3, 2 / 3];
+  var ZERO_DARK = { r: 0, g: 0, b: 0, a: 0 };
+  var curveDiagnosticSink = null;
+  function warnCurve(message) {
+    if (curveDiagnosticSink !== null) curveDiagnosticSink({ code: "W_CURVE", message });
+  }
   function createTrack(clip, options) {
+    const alpha = options?.alpha ?? 1;
     return {
       clip,
       time: options?.time ?? 0,
-      alpha: options?.alpha ?? 1,
+      alpha,
       speed: options?.speed ?? 1,
       loop: options?.loop ?? true,
       blendMode: options?.blendMode ?? "replace",
       lastTime: options?.time ?? 0,
-      loopCount: 0
+      loopCount: 0,
+      mixDuration: options?.mixDuration ?? 0,
+      mixTime: 0,
+      delay: options?.delay ?? 0,
+      targetAlpha: options?.targetAlpha ?? alpha,
+      queue: []
     };
   }
   function clamp01(v) {
@@ -409,6 +420,8 @@
     return 3 * m * m * c1 + 6 * m * u * (c2 - c1) + 3 * u * u * (1 - c2);
   }
   function solveBezierU(t, c1x, c2x) {
+    if (t <= 0) return 0;
+    if (t >= 1) return 1;
     let u = t;
     for (let i = 0; i < 8; i += 1) {
       const err = bezierAxis(u, c1x, c2x) - t;
@@ -428,21 +441,64 @@
     }
     return (lo + hi) / 2;
   }
-  function bezierFraction(t, bezier) {
-    const b = bezier ?? IDENTITY_BEZIER;
-    const c1x = b[0];
-    const c1y = b[1];
-    const c2x = b[2];
-    const c2y = b[3];
-    if (![c1x, c1y, c2x, c2y].every(Number.isFinite)) return t;
-    let ax = clamp01(c1x);
-    let bx = clamp01(c2x);
-    if (ax > bx) {
-      const tmp = ax;
-      ax = bx;
-      bx = tmp;
+  function validSegment(segment) {
+    if (segment.length !== 4) return false;
+    for (let i = 0; i < 4; i += 1) {
+      if (!Number.isFinite(segment[i])) return false;
     }
-    return bezierAxis(solveBezierU(t, ax, bx), c1y, c2y);
+    const c1x = segment[0];
+    const c2x = segment[2];
+    return c1x >= 0 && c1x <= 1 && c2x >= 0 && c2x <= 1 && c1x <= c2x;
+  }
+  var segmentCache = /* @__PURE__ */ new WeakMap();
+  function curveSegments(curve, bezier) {
+    if (curve === "bezier") {
+      const b = bezier ?? IDENTITY_BEZIER;
+      const cached = segmentCache.get(b);
+      if (cached !== void 0) return cached;
+      const result = validSegment(b) ? b : null;
+      segmentCache.set(b, result);
+      return result;
+    }
+    if (Array.isArray(curve)) {
+      const cached = segmentCache.get(curve);
+      if (cached !== void 0) return cached;
+      let result = curve.length >= 4 && curve.length % 4 === 0 ? curve : null;
+      if (result !== null) {
+        for (let i = 0; i < curve.length; i += 4) {
+          if (!validSegment(curve.slice(i, i + 4))) {
+            result = null;
+            break;
+          }
+        }
+      }
+      segmentCache.set(curve, result);
+      return result;
+    }
+    if (typeof curve === "object" && curve !== null && "bezier" in curve) {
+      const cached = segmentCache.get(curve);
+      if (cached !== void 0) return cached;
+      const result = validSegment(curve.bezier) ? curve.bezier : null;
+      segmentCache.set(curve, result);
+      return result;
+    }
+    return null;
+  }
+  function wantsBezier(curve) {
+    return curve === "bezier" || Array.isArray(curve) || typeof curve === "object" && curve !== null && "bezier" in curve;
+  }
+  function bezierFraction(t, segments) {
+    const count = segments.length / 4;
+    const scaled = clamp01(t) * count;
+    const index = Math.min(count - 1, Math.floor(scaled));
+    const local = scaled - index;
+    const base = index * 4;
+    const localY = bezierAxis(
+      solveBezierU(local, segments[base], segments[base + 2]),
+      segments[base + 1],
+      segments[base + 3]
+    );
+    return count === 1 ? localY : (index + localY) / count;
   }
   function easeSineFraction(t) {
     if (t <= 0) return 0;
@@ -466,24 +522,26 @@
   function curveFraction(curve, u, bezier) {
     const t = clamp01(u);
     switch (curve) {
-      case "stepped":
-        return t >= 1 ? 1 : 0;
-      case "bezier":
-        return bezierFraction(t, bezier);
-      case "easeSine":
-        return easeSineFraction(t);
+      case void 0:
       case "linear":
         return t;
+      case "stepped":
+        return t >= 1 ? 1 : 0;
+      case "easeSine":
+        return easeSineFraction(t);
       default:
-        return t;
+        break;
     }
+    const segments = curveSegments(curve, bezier);
+    if (segments === null) {
+      if (wantsBezier(curve)) warnCurve(`\u975E\u6CD5 Bezier \u66F2\u7EBF\uFF0C\u5DF2\u964D\u7EA7\u4E3A linear\uFF1A${String(curve)}`);
+      return t;
+    }
+    return bezierFraction(t, segments);
   }
-  function sampleScalar(keys2, time) {
-    if (keys2.length === 0) return 0;
-    const first = keys2[0];
-    if (keys2.length === 1 || time <= first.time) return first.value;
-    const last = keys2[keys2.length - 1];
-    if (time >= last.time) return last.value;
+  function lastKeyIndex(keys2, time) {
+    if (keys2.length === 0) return -1;
+    if (time <= keys2[0].time) return 0;
     let lo = 0;
     let hi = keys2.length - 1;
     while (lo + 1 < hi) {
@@ -491,12 +549,49 @@
       if (keys2[mid].time <= time) lo = mid;
       else hi = mid;
     }
-    const k0 = keys2[lo];
-    const k1 = keys2[lo + 1];
+    return keys2[hi].time <= time ? hi : lo;
+  }
+  function sampleScalar(keys2, time) {
+    if (keys2.length === 0) return 0;
+    const first = keys2[0];
+    if (keys2.length === 1 || time <= first.time) return first.value;
+    const last = keys2[keys2.length - 1];
+    if (time >= last.time) return last.value;
+    const index = lastKeyIndex(keys2, time);
+    const k0 = keys2[index];
+    const k1 = keys2[index + 1];
     const span = k1.time - k0.time;
     const u = span <= 0 ? 1 : (time - k0.time) / span;
     const f = curveFraction(k0.curve, u, k0.bezier);
     return k0.value + (k1.value - k0.value) * f;
+  }
+  function sampleStepped(keys2, time) {
+    if (keys2.length === 0) return 0;
+    return keys2[lastKeyIndex(keys2, time)].value;
+  }
+  function unwrapRotateKeys(keys2) {
+    if (keys2.length === 0) return [];
+    const out = [{ ...keys2[0] }];
+    let acc = keys2[0].value;
+    for (let i = 1; i < keys2.length; i += 1) {
+      const raw = keys2[i].value - acc;
+      const next = Math.abs(raw) >= TAU2 - 1e-9 ? acc + raw : acc + normalizeAngle(raw);
+      out.push({ ...keys2[i], value: next });
+      acc = next;
+    }
+    return out;
+  }
+  var unwrapCache = /* @__PURE__ */ new WeakMap();
+  function unwrappedAngles(keys2) {
+    const cached = unwrapCache.get(keys2);
+    if (cached !== void 0) return cached;
+    const unwrapped = unwrapRotateKeys(keys2);
+    unwrapCache.set(keys2, unwrapped);
+    return unwrapped;
+  }
+  function sampleAngle(keys2, time) {
+    if (keys2.length === 0) return 0;
+    return sampleScalar(unwrappedAngles(keys2), time);
   }
   var SUFFIXES = {
     x: "x",
@@ -522,11 +617,162 @@
     }
     return { target: path, component: "all" };
   }
+  function axisComponent(kind, axis) {
+    if (kind === "translate") return axis;
+    if (kind === "scale") return axis === "x" ? "sx" : "sy";
+    return axis === "x" ? "shx" : "shy";
+  }
   function componentsOf(kind, component) {
     if (component !== "all") return [component];
     if (kind === "translate") return ["x", "y"];
     if (kind === "scale") return ["sx", "sy"];
     return ["shx", "shy"];
+  }
+  function boneOf(timeline, skeleton) {
+    if (timeline.bone !== void 0) return timeline.bone;
+    if (timeline.path === void 0) return void 0;
+    return skeleton.boneIdByName.get(targetOf(timeline.path).target);
+  }
+  function slotOf(timeline) {
+    if (timeline.slot !== void 0) return timeline.slot;
+    const parsed = Number.parseInt(timeline.path ?? "", 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  function deformMeshKey(timeline, slot) {
+    return `${timeline.skin ?? "default"}:${slot}:${timeline.attachment ?? ""}`;
+  }
+  function isScalarKey(key) {
+    return "value" in key;
+  }
+  function isDeformKey(key) {
+    return "vertices" in key;
+  }
+  function isDrawOrderKey(key) {
+    return "offsets" in key;
+  }
+  function isAttachmentKey(key) {
+    return "name" in key && !("value" in key);
+  }
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+  function mixRGBA(from, to, alpha) {
+    return {
+      r: lerp(from.r, to.r, alpha),
+      g: lerp(from.g, to.g, alpha),
+      b: lerp(from.b, to.b, alpha),
+      a: lerp(from.a, to.a, alpha)
+    };
+  }
+  var PACKED_MASK = 255;
+  function unpackColor(packed) {
+    return {
+      a: (packed >>> 24 & PACKED_MASK) / 255,
+      r: (packed >>> 16 & PACKED_MASK) / 255,
+      g: (packed >>> 8 & PACKED_MASK) / 255,
+      b: (packed & PACKED_MASK) / 255
+    };
+  }
+  function sampleColorKeys(keys2, time) {
+    if (keys2.length === 0) return { light: ZERO_DARK, dark: ZERO_DARK, legacy: null };
+    const first = keys2[0];
+    if (isScalarKey(first)) {
+      const packed = sampleScalar(keys2, time);
+      return { light: unpackColor(packed), dark: ZERO_DARK, legacy: packed };
+    }
+    const colorKeys = keys2;
+    if (colorKeys.length === 1 || time <= colorKeys[0].time) {
+      const key = colorKeys[0];
+      return { light: key.light, dark: key.dark ?? ZERO_DARK, legacy: null };
+    }
+    const last = colorKeys[colorKeys.length - 1];
+    if (time >= last.time) {
+      return { light: last.light, dark: last.dark ?? ZERO_DARK, legacy: null };
+    }
+    const index = lastKeyIndex(colorKeys, time);
+    const k0 = colorKeys[index];
+    const k1 = colorKeys[index + 1];
+    const span = k1.time - k0.time;
+    const f = curveFraction(k0.curve, span <= 0 ? 1 : (time - k0.time) / span, void 0);
+    const d0 = k0.dark ?? ZERO_DARK;
+    const d1 = k1.dark ?? ZERO_DARK;
+    return {
+      light: mixRGBA(k0.light, k1.light, f),
+      dark: mixRGBA(d0, d1, f),
+      legacy: null
+    };
+  }
+  function applyColorChannels(pending, sampled, channel, alpha) {
+    const mode2 = channel ?? "rgba";
+    let light = pending.light;
+    let dark = pending.dark;
+    if (mode2 === "rgb" || mode2 === "rgba") {
+      light = mixRGBA(light, { ...light, r: sampled.light.r, g: sampled.light.g, b: sampled.light.b }, alpha);
+    }
+    if (mode2 === "alpha" || mode2 === "rgba") {
+      light = mixRGBA(light, { ...light, a: sampled.light.a }, alpha);
+    }
+    if (mode2 === "rgb2" || mode2 === "rgba2") {
+      dark = mixRGBA(dark, { ...dark, r: sampled.dark.r, g: sampled.dark.g, b: sampled.dark.b }, alpha);
+    }
+    if (mode2 === "alpha2" || mode2 === "rgba2") {
+      dark = mixRGBA(dark, { ...dark, a: sampled.dark.a }, alpha);
+    }
+    return { light, dark };
+  }
+  function accumulateDeform(target, key, alpha, meshKey) {
+    if (alpha <= 0) return;
+    const offset = Math.max(0, Math.floor(key.offset));
+    const start = offset * 2;
+    const needed = start + key.vertices.length;
+    let acc = target.get(meshKey);
+    if (acc === void 0 || acc.length < needed) {
+      const grown = new Float32Array(needed);
+      if (acc !== void 0) grown.set(acc);
+      acc = grown;
+      target.set(meshKey, acc);
+    }
+    for (let i = 0; i < key.vertices.length; i += 1) {
+      acc[start + i] = acc[start + i] + key.vertices[i] * alpha;
+    }
+  }
+  function setupDrawOrder(slotSet) {
+    return slotSet.slots.map((_, index) => index).sort((a, b) => slotSet.slots[a].data.order - slotSet.slots[b].data.order || a - b);
+  }
+  function applyDrawOffsets(base, offsets) {
+    const order = base.slice();
+    for (const { slot, offset } of offsets) {
+      const from = order.indexOf(slot);
+      if (from < 0) continue;
+      order.splice(from, 1);
+      let to = from + offset;
+      if (to < 0) to = 0;
+      if (to > order.length) to = order.length;
+      order.splice(to, 0, slot);
+    }
+    return order;
+  }
+  function eventKeysOf(timeline) {
+    if (timeline.keys !== void 0) return timeline.keys;
+    return timeline.events ?? [];
+  }
+  function fireEvents(events, from, to, includeFrom, loopTag, track, out, seen) {
+    if (to < from) return;
+    for (const e of events) {
+      if (e.time < from || e.time > to) continue;
+      if (!includeFrom && e.time === from) continue;
+      const id = `${loopTag}:${e.time}:${e.name}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push({
+        name: e.name,
+        time: e.time,
+        track,
+        ...e.int === void 0 ? {} : { int: e.int },
+        ...e.float === void 0 ? {} : { float: e.float },
+        ...e.string === void 0 ? {} : { string: e.string }
+      });
+    }
   }
   function blend(cur, setup, sample, alpha, additive, multiplier) {
     const base = cur ?? setup;
@@ -534,29 +780,51 @@
     const target = multiplier ? setup * sample : setup + sample;
     return base + (target - base) * alpha;
   }
-  function fireEvents(events, from, to, includeFrom, loopTag, out, seen) {
-    if (to < from) return;
-    for (const e of events) {
-      if (e.time < from || e.time > to) continue;
-      if (!includeFrom && e.time === from) continue;
-      const id = `${loopTag}:${e.name}`;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      out.push(e.name);
-    }
-  }
   function sampleAnimation(tracks, pose, slotSet, dt) {
-    const events = [];
+    const eventData = [];
     const seen = /* @__PURE__ */ new Set();
     const accs = /* @__PURE__ */ new Map();
     let dominant = null;
     const pendingAttachment = /* @__PURE__ */ new Map();
     const pendingColor = /* @__PURE__ */ new Map();
-    const pendingDrawOrder = /* @__PURE__ */ new Map();
+    const pendingLegacyColor = /* @__PURE__ */ new Map();
     const pendingDeform = /* @__PURE__ */ new Map();
+    const deformOffsets = /* @__PURE__ */ new Map();
     const pendingIk = /* @__PURE__ */ new Map();
+    const pendingSequence = /* @__PURE__ */ new Map();
+    const constraintMix = /* @__PURE__ */ new Map();
+    const constraintMixByName = /* @__PURE__ */ new Map();
+    const constraintIds = /* @__PURE__ */ new Map();
+    const constraintNames = [];
+    let drawOrderSpec = null;
     const skeleton = pose.skeleton;
-    for (const track of tracks) {
+    const addConstraint = (name, mix) => {
+      const value = clamp01(mix);
+      constraintMixByName.set(name, value);
+      let id;
+      if (/^-?\d+$/.test(name)) {
+        id = Number(name);
+      } else {
+        let assigned = constraintIds.get(name);
+        if (assigned === void 0) {
+          assigned = -(constraintIds.size + 1);
+          constraintIds.set(name, assigned);
+          constraintNames[-assigned - 1] = name;
+        }
+        id = assigned;
+      }
+      constraintMix.set(id, value);
+    };
+    for (let trackIndex = 0; trackIndex < tracks.length; trackIndex += 1) {
+      const track = tracks[trackIndex];
+      if (track.delay > 0) {
+        track.delay = Math.max(0, track.delay - dt);
+        continue;
+      }
+      if (track.mixDuration > 0 && track.mixTime < track.mixDuration && dt > 0) {
+        track.mixTime = Math.min(track.mixDuration, track.mixTime + dt);
+        track.alpha = track.targetAlpha * (track.mixTime / track.mixDuration);
+      }
       if (track.alpha <= 0) continue;
       const clip = track.clip;
       const duration = clip.duration;
@@ -581,18 +849,18 @@
       if (dt !== 0 && track.alpha >= 0.5) {
         const evs = [];
         for (const tl of clip.timelines) {
-          if (tl.kind === "event") evs.push(...tl.events);
+          if (tl.kind === "event") evs.push(...eventKeysOf(tl));
         }
         if (evs.length > 0) {
           if (isFirst) {
-            for (let k = 0; k < loops; k += 1) fireEvents(evs, 0, duration, true, k, events, seen);
-            fireEvents(evs, 0, curr, true, loops, events, seen);
+            for (let k = 0; k < loops; k += 1) fireEvents(evs, 0, duration, true, k, trackIndex, eventData, seen);
+            fireEvents(evs, 0, curr, true, loops, trackIndex, eventData, seen);
           } else if (loops > 0) {
-            fireEvents(evs, prev, duration, false, 0, events, seen);
-            for (let k = 1; k < loops; k += 1) fireEvents(evs, 0, duration, true, k, events, seen);
-            fireEvents(evs, 0, curr, true, loops, events, seen);
+            fireEvents(evs, prev, duration, false, 0, trackIndex, eventData, seen);
+            for (let k = 1; k < loops; k += 1) fireEvents(evs, 0, duration, true, k, trackIndex, eventData, seen);
+            fireEvents(evs, 0, curr, true, loops, trackIndex, eventData, seen);
           } else {
-            fireEvents(evs, prev, curr, false, 0, events, seen);
+            fireEvents(evs, prev, curr, false, 0, trackIndex, eventData, seen);
           }
         }
       }
@@ -601,23 +869,22 @@
       let wrote = false;
       for (const tl of clip.timelines) {
         if (tl.kind === "event") continue;
-        const value = sampleScalar(tl.keys, curr);
         if (tl.kind === "rotate") {
-          const { target } = targetOf(tl.path);
-          const id = skeleton.boneIdByName.get(target);
+          const id = boneOf(tl, skeleton);
           if (id === void 0) continue;
           const acc = accs.get(id) ?? {};
           const setup = skeleton.setupLocal[id * POSE_STRIDE + CH_ROT];
-          acc.rot = blend(acc.rot, setup, value, track.alpha, additive, false);
+          acc.rot = blend(acc.rot, setup, sampleAngle(tl.keys, curr), track.alpha, additive, false);
           accs.set(id, acc);
           wrote = true;
           continue;
         }
         if (tl.kind === "translate" || tl.kind === "scale" || tl.kind === "shear") {
-          const { target, component } = targetOf(tl.path);
-          const id = skeleton.boneIdByName.get(target);
+          const id = boneOf(tl, skeleton);
           if (id === void 0) continue;
           if (tl.kind === "scale" && additive) continue;
+          const value = sampleScalar(tl.keys, curr);
+          const component = tl.axis !== void 0 ? axisComponent(tl.kind, tl.axis) : targetOf(tl.path ?? "").component;
           const acc = accs.get(id) ?? {};
           const base = id * POSE_STRIDE;
           for (const c of componentsOf(tl.kind, component)) {
@@ -629,24 +896,79 @@
           wrote = true;
           continue;
         }
-        if (additive) continue;
-        const slot = Number.parseInt(tl.path, 10);
-        const index = Number.isFinite(slot) ? slot : 0;
+        if (tl.kind === "sequence") {
+          const index = slotOf(tl);
+          pendingSequence.set(index, Math.round(sampleStepped(tl.keys, curr)));
+          wrote = true;
+          continue;
+        }
+        if (tl.kind === "ik" || tl.kind === "transform" || tl.kind === "path" || tl.kind === "physics") {
+          const mix = sampleScalar(tl.keys, curr);
+          addConstraint(tl.constraint ?? tl.path ?? String(slotOf(tl)), mix);
+          if (tl.kind === "ik") pendingIk.set(slotOf(tl), clamp01(mix));
+          wrote = true;
+          continue;
+        }
         if (tl.kind === "attachment") {
-          pendingAttachment.set(index, value);
+          if (additive) continue;
+          const keys2 = tl.keys;
+          if (keys2 === void 0 || keys2.length === 0) continue;
+          const index = slotOf(tl);
+          const first = keys2[0];
+          if (first !== void 0 && isAttachmentKey(first)) {
+            const key = keys2[lastKeyIndex(keys2, curr)];
+            pendingAttachment.set(index, isAttachmentKey(key) ? key.name : String("value" in key ? key.value : ""));
+          } else {
+            pendingAttachment.set(index, String(sampleScalar(keys2, curr)));
+          }
           wrote = true;
-        } else if (tl.kind === "color") {
-          pendingColor.set(index, value);
+          continue;
+        }
+        if (tl.kind === "color") {
+          if (additive) continue;
+          const keys2 = tl.keys;
+          if (keys2 === void 0 || keys2.length === 0) continue;
+          const index = slotOf(tl);
+          const sampled = sampleColorKeys(keys2, curr);
+          if (sampled.legacy !== null) {
+            pendingLegacyColor.set(index, sampled.legacy);
+          }
+          const base = pendingColor.get(index) ?? {
+            light: slotSet.slots[index]?.data.color ?? { r: 1, g: 1, b: 1, a: 1 },
+            dark: ZERO_DARK
+          };
+          pendingColor.set(index, applyColorChannels(base, sampled, tl.channel, track.alpha));
           wrote = true;
-        } else if (tl.kind === "drawOrder") {
-          pendingDrawOrder.set(index, value);
+          continue;
+        }
+        if (tl.kind === "deform") {
+          const keys2 = tl.keys;
+          if (keys2 === void 0 || keys2.length === 0) continue;
+          const index = slotOf(tl);
+          const first = keys2[0];
+          if (first !== void 0 && isDeformKey(first)) {
+            const key = keys2[lastKeyIndex(keys2, curr)];
+            accumulateDeform(deformOffsets, key, track.alpha, deformMeshKey(tl, index));
+          } else {
+            pendingDeform.set(index, sampleScalar(keys2, curr));
+          }
           wrote = true;
-        } else if (tl.kind === "deform") {
-          pendingDeform.set(index, value);
+          continue;
+        }
+        if (tl.kind === "drawOrder") {
+          if (additive) continue;
+          const keys2 = tl.keys;
+          if (keys2 === void 0 || keys2.length === 0) continue;
+          const first = keys2[0];
+          if (first !== void 0 && isDrawOrderKey(first)) {
+            const key = keys2[lastKeyIndex(keys2, curr)];
+            drawOrderSpec = { kind: "order", order: applyDrawOffsets(setupDrawOrder(slotSet), key.offsets) };
+          } else {
+            const shift = sampleScalar(keys2, curr);
+            drawOrderSpec = { kind: "shift", shift };
+          }
           wrote = true;
-        } else if (tl.kind === "ik") {
-          pendingIk.set(index, value);
-          wrote = true;
+          continue;
         }
       }
       if (!additive && wrote) dominant = clip.name;
@@ -660,14 +982,44 @@
       if (acc.shx !== void 0) setLocal(pose, id, CH_SHX, acc.shx);
       if (acc.shy !== void 0) setLocal(pose, id, CH_SHY, acc.shy);
     }
-    for (const [slot, value] of pendingAttachment) setSlotAttachment(slotSet, slot, String(value));
-    for (const [slot, value] of pendingColor) setSlotColor(slotSet, slot, value >>> 0);
-    for (const [, value] of pendingDrawOrder) {
-      const n = slotSet.slots.length;
-      const shift = (value % n + n) % n;
-      setDrawOrder(slotSet, slotSet.slots.map((_, i) => (i + shift) % n));
+    for (const [slot, attachment] of pendingAttachment) {
+      if (slot >= 0 && slot < slotSet.slots.length) setSlotAttachment(slotSet, slot, attachment);
     }
-    return { events, dominant, deform: pendingDeform, ik: pendingIk };
+    for (const [slot, packed] of pendingLegacyColor) {
+      if (slot >= 0 && slot < slotSet.slots.length) setSlotColor(slotSet, slot, packed >>> 0);
+    }
+    for (const [slot, color] of pendingColor) {
+      const state = slotSet.slots[slot];
+      if (state !== void 0) state.color = color.light;
+    }
+    const baseOrder = setupDrawOrder(slotSet);
+    if (drawOrderSpec === null) {
+      setDrawOrder(slotSet, baseOrder);
+    } else if (drawOrderSpec.kind === "order") {
+      setDrawOrder(slotSet, drawOrderSpec.order);
+    } else {
+      const n = slotSet.slots.length;
+      if (n > 0) {
+        const shift = (drawOrderSpec.shift % n + n) % n;
+        setDrawOrder(slotSet, baseOrder.map((i) => (i + shift) % n));
+      }
+    }
+    const colorDark = /* @__PURE__ */ new Map();
+    for (const [slot, color] of pendingColor) colorDark.set(slot, color.dark);
+    return {
+      events: eventData.map((event) => event.name),
+      eventData,
+      dominant,
+      deform: pendingDeform,
+      ik: pendingIk,
+      deformOffsets,
+      drawOrder: slotSet.drawOrder.slice(),
+      constraintMix,
+      constraintMixByName,
+      constraintNames,
+      sequence: pendingSequence,
+      colorDark
+    };
   }
 
   // packages/render-engine/src/constraint/constraint.ts
@@ -752,6 +1104,8 @@
       positions: args.positions,
       uvs,
       colors: fillColors(vertexCount, colorBytes(args.color, args.pma === true)),
+      ...args.dark === void 0 ? {} : { dark: fillColors(vertexCount, colorBytes(args.dark, false)) },
+      ...args.dark === void 0 ? {} : { twoColor: args.twoColor ?? true },
       depth: null,
       indices: fanIndices(vertexCount),
       materialId: args.materialId,
@@ -780,7 +1134,7 @@
     const w = Math.max(1, Math.floor(page.width));
     const h = Math.max(1, Math.floor(page.height));
     const data = page.data;
-    const premultiply = page.pma === false;
+    const premultiply2 = page.pma === false;
     const read = (x, y) => {
       const cx = x < 0 ? 0 : x >= w ? w - 1 : x;
       const cy = y < 0 ? 0 : y >= h ? h - 1 : y;
@@ -789,7 +1143,7 @@
       const g = data[o + 1] ?? 0;
       const b = data[o + 2] ?? 0;
       const a = data[o + 3] ?? 0;
-      if (!premultiply) return [r, g, b, a];
+      if (!premultiply2) return [r, g, b, a];
       return [mulU8(r, a), mulU8(g, a), mulU8(b, a), a];
     };
     const cu = clamp012(u);
@@ -842,9 +1196,35 @@
     return { version: 1, masks: masks.slice() };
   }
 
+  // packages/render-engine/src/render/shader-variants.ts
+  function variantOf(material, maskMode) {
+    return {
+      pma: material.pma ?? true,
+      twoColor: material.twoColor ?? false,
+      tintBlack: material.tintBlack ?? false,
+      alphaMask: maskMode === "alpha",
+      stencil: maskMode === "stencil"
+    };
+  }
+
+  // packages/render-engine/src/asset/image.ts
+  var CHANNELS = 4;
+  var mulU82 = (a, b) => (a * b + 127) / 255 | 0;
+  function premultiply(data) {
+    const out = new Uint8Array(data.length);
+    for (let i = 0; i + 3 < data.length; i += CHANNELS) {
+      const a = data[i + 3];
+      out[i] = Math.min(255, mulU82(data[i], a));
+      out[i + 1] = Math.min(255, mulU82(data[i + 1], a));
+      out[i + 2] = Math.min(255, mulU82(data[i + 2], a));
+      out[i + 3] = a;
+    }
+    return out;
+  }
+
   // packages/render-engine/src/backend/backend.ts
   var EPS2 = 1e-12;
-  var mulU82 = (a, b) => (a * b + 127) / 255 | 0;
+  var mulU83 = (a, b) => (a * b + 127) / 255 | 0;
   var clampUnit = (v) => Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
   function distanceToSegment(px, py, ax, ay, bx, by) {
     const dx = bx - ax;
@@ -886,10 +1266,10 @@
     const inv = 255 - sa;
     switch (mode2) {
       case "normal":
-        dst[di] = sr + mulU82(dr, inv);
-        dst[di + 1] = sg + mulU82(dg, inv);
-        dst[di + 2] = sb + mulU82(db, inv);
-        dst[di + 3] = sa + mulU82(da, inv);
+        dst[di] = sr + mulU83(dr, inv);
+        dst[di + 1] = sg + mulU83(dg, inv);
+        dst[di + 2] = sb + mulU83(db, inv);
+        dst[di + 3] = sa + mulU83(da, inv);
         break;
       case "add":
         dst[di] = sr + dr;
@@ -898,16 +1278,16 @@
         dst[di + 3] = sa + da;
         break;
       case "multiply":
-        dst[di] = mulU82(sr, dr) + mulU82(dr, inv);
-        dst[di + 1] = mulU82(sg, dg) + mulU82(dg, inv);
-        dst[di + 2] = mulU82(sb, db) + mulU82(db, inv);
-        dst[di + 3] = sa + mulU82(da, inv);
+        dst[di] = mulU83(sr, dr) + mulU83(dr, inv);
+        dst[di + 1] = mulU83(sg, dg) + mulU83(dg, inv);
+        dst[di + 2] = mulU83(sb, db) + mulU83(db, inv);
+        dst[di + 3] = sa + mulU83(da, inv);
         break;
       case "screen":
-        dst[di] = sr + mulU82(dr, 255 - sr);
-        dst[di + 1] = sg + mulU82(dg, 255 - sg);
-        dst[di + 2] = sb + mulU82(db, 255 - sb);
-        dst[di + 3] = sa + mulU82(da, inv);
+        dst[di] = sr + mulU83(dr, 255 - sr);
+        dst[di + 1] = sg + mulU83(dg, 255 - sg);
+        dst[di + 2] = sb + mulU83(db, 255 - sb);
+        dst[di + 3] = sa + mulU83(da, inv);
         break;
     }
   }
@@ -1021,19 +1401,22 @@
           const b0 = w0 / area;
           const b1 = w1 / area;
           const b2 = w2 / area;
-          const r = Math.round(b0 * p0.r + b1 * p1.r + b2 * p2.r);
-          const g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g);
-          const b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b);
+          let r = Math.round(b0 * p0.r + b1 * p1.r + b2 * p2.r);
+          let g = Math.round(b0 * p0.g + b1 * p1.g + b2 * p2.g);
+          let b = Math.round(b0 * p0.b + b1 * p1.b + b2 * p2.b);
           const a = Math.round(b0 * p0.a + b1 * p1.a + b2 * p2.a);
+          const dr = Math.round(b0 * (p0.dr ?? 0) + b1 * (p1.dr ?? 0) + b2 * (p2.dr ?? 0));
+          const dg = Math.round(b0 * (p0.dg ?? 0) + b1 * (p1.dg ?? 0) + b2 * (p2.dg ?? 0));
+          const db = Math.round(b0 * (p0.db ?? 0) + b1 * (p1.db ?? 0) + b2 * (p2.db ?? 0));
           const u = b0 * p0.u + b1 * p1.u + b2 * p2.u;
           const v = b0 * p0.v + b1 * p1.v + b2 * p2.v;
           const z = b0 * p0.z + b1 * p1.z + b2 * p2.z;
-          this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z);
+          this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, dr, dg, db, z);
         }
       }
     }
     /** 片元着色：mask → 深度 → 纹理调制 → 混合；纹理/顶点色都在 PMA 域只乘一次。 */
-    shadeFragment(sx, sy, px, py, u, v, r, g, b, a, z) {
+    shadeFragment(sx, sy, px, py, u, v, r, g, b, a, dr, dg, db, z) {
       if (a <= 0) return;
       const ssW = this.width * this.ss;
       if (this.masks.length > 0) {
@@ -1045,10 +1428,10 @@
         }
         if (coverage < 1) {
           const c = Math.round(coverage * 255);
-          r = mulU82(r, c);
-          g = mulU82(g, c);
-          b = mulU82(b, c);
-          a = mulU82(a, c);
+          r = mulU83(r, c);
+          g = mulU83(g, c);
+          b = mulU83(b, c);
+          a = mulU83(a, c);
         }
       }
       if (this.depthMode !== "none" && this.depthBuffer !== null) {
@@ -1060,12 +1443,18 @@
       if (this.material !== null && this.material.kind === "sprite" && this.page !== null) {
         const texel = sampleTexture(this.page, u, v, this.material.filter);
         this.stats.textureSamples += 1;
-        r = mulU82(texel[0], r);
-        g = mulU82(texel[1], g);
-        b = mulU82(texel[2], b);
-        a = mulU82(texel[3], a);
+        r = mulU83(texel[0], r);
+        g = mulU83(texel[1], g);
+        b = mulU83(texel[2], b);
+        a = mulU83(texel[3], a);
       }
       if (a <= 0) return;
+      if (this.currentTwoColor) {
+        const inv = 255 - a;
+        r += Math.round(dr * inv / 255);
+        g += Math.round(dg * inv / 255);
+        b += Math.round(db * inv / 255);
+      }
       blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend);
     }
     /** 把 mask 的 world 几何预转换到屏幕空间；同一帧内按对象缓存。 */
@@ -1139,6 +1528,7 @@
       return mask.invert ? 1 - coverage : coverage;
     }
     currentBlend = "normal";
+    currentTwoColor = false;
     draw(frame) {
       if (this.disposed) throw new Error("CpuBackend: \u5DF2 dispose\uFF0C\u4E0D\u80FD\u7EE7\u7EED draw");
       if (frame.width !== this.width || frame.height !== this.height) {
@@ -1169,6 +1559,7 @@
         this.stats.packets += 1;
         this.stats.drawCalls += 1;
         this.currentBlend = packet.blend;
+        this.currentTwoColor = packet.twoColor === true && packet.dark !== void 0;
         this.material = assets?.materials.find((m) => m.id === packet.materialId) ?? null;
         this.page = this.material !== null && this.material.kind === "sprite" && assets !== null ? assets.pages[this.material.page] ?? null : null;
         this.masks = [];
@@ -1191,6 +1582,7 @@
           const [x, y] = this.toScreen(frame, packet.positions[i * stride], packet.positions[i * stride + 1]);
           const o = i * 4;
           const uv = i * 2;
+          const dark = packet.dark;
           const z = packet.depth !== null ? clampUnit(packet.depth[i] ?? 1) : clampUnit(0.5 - packet.depthKey * 0.01);
           verts.push({
             x: x * ss,
@@ -1201,7 +1593,11 @@
             r: packet.colors[o],
             g: packet.colors[o + 1],
             b: packet.colors[o + 2],
-            a: packet.colors[o + 3]
+            a: packet.colors[o + 3],
+            dr: dark?.[o] ?? 0,
+            dg: dark?.[o + 1] ?? 0,
+            db: dark?.[o + 2] ?? 0,
+            da: dark?.[o + 3] ?? 0
           });
         }
         for (let t = 0; t + 2 < packet.indices.length; t += 3) {
@@ -1265,8 +1661,17 @@
   var GL_TEXTURE_WRAP_T = 10243;
   var GL_LINEAR = 9729;
   var GL_NEAREST = 9728;
+  var GL_LINEAR_MIPMAP_LINEAR = 9987;
+  var GL_NEAREST_MIPMAP_NEAREST = 9984;
   var GL_CLAMP_TO_EDGE = 33071;
+  var GL_REPEAT = 10497;
+  var GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL = 37440;
   var GL_SCISSOR_TEST = 3089;
+  var GL_BLEND = 3042;
+  var GL_ONE = 1;
+  var GL_ONE_MINUS_SRC_ALPHA = 771;
+  var GL_DST_COLOR = 774;
+  var GL_ONE_MINUS_SRC_COLOR = 769;
   var GL_STENCIL_TEST = 2960;
   var GL_DEPTH_TEST = 2929;
   var GL_ALWAYS = 519;
@@ -1285,27 +1690,34 @@
 in vec2 aPosition;
 in vec2 aUv;
 in vec4 aColor;
+in vec4 aDark;
 uniform mat3 viewProjection;
 uniform vec2 uResolution;
 out vec2 vUv;
 out vec4 vColor;
+out vec4 vDark;
 void main() {
   vec3 p = viewProjection * vec3(aPosition, 1.0);
   vec2 ndc = vec2(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0);
   gl_Position = vec4(ndc, 0.0, 1.0);
   vUv = aUv;
   vColor = aColor;
+  vDark = aDark;
 }`;
   var DEFAULT_FRAGMENT_SHADER = `#version 300 es
 precision mediump float;
 in vec2 vUv;
 in vec4 vColor;
+in vec4 vDark;
 uniform sampler2D uTexture;
 uniform float uUseTexture;
+uniform float uTwoColor;
 out vec4 outColor;
 void main() {
   vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
-  outColor = vColor * texel;
+  vec4 c = vColor * texel;
+  if (uTwoColor > 0.5) c.rgb += vDark.rgb * (1.0 - texel.a);
+  outColor = c;
 }`;
   function compileDefaultProgram(gl) {
     if (gl.createShader === void 0 || gl.createProgram === void 0 || gl.shaderSource === void 0 || gl.compileShader === void 0 || gl.attachShader === void 0 || gl.linkProgram === void 0) return null;
@@ -1344,23 +1756,27 @@ void main() {
     buffers = null;
     capacities = /* @__PURE__ */ new Map();
     program;
+    programCache;
     width = 1;
     height = 1;
     pixels = new Uint8ClampedArray(4);
     disposed = false;
     assets = null;
+    currentBlend = null;
     textures = [];
     whiteTexture = null;
-    constructor(gl, program) {
+    constructor(gl, program, programCache) {
       if (gl === null || typeof gl !== "object") throw new Error("WebGL2Backend: \u7F3A\u5C11 gl \u4E0A\u4E0B\u6587");
       if (typeof gl.drawElements !== "function") throw new Error("WebGL2Backend: gl.drawElements \u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u63D0\u4EA4\u7ED8\u5236");
       this.gl = gl;
       this.program = program ?? compileDefaultProgram(gl) ?? {};
+      this.programCache = programCache ?? null;
       if (typeof gl.createBuffer === "function") {
         this.buffers = {
           positions: gl.createBuffer(),
           uvs: gl.createBuffer(),
           colors: gl.createBuffer(),
+          darks: gl.createBuffer(),
           indices: gl.createBuffer()
         };
       }
@@ -1384,6 +1800,8 @@ void main() {
         const texture = gl.createTexture();
         gl.activeTexture?.(GL_TEXTURE0 + i);
         gl.bindTexture?.(GL_TEXTURE_2D, texture);
+        const pixels = page.pma === false ? premultiply(page.data) : page.data;
+        gl.pixelStorei?.(GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
         gl.texImage2D?.(
           GL_TEXTURE_2D,
           0,
@@ -1393,13 +1811,17 @@ void main() {
           0,
           GL_RGBA,
           GL_UNSIGNED_BYTE,
-          page.data
+          pixels
         );
-        const nearest = filterOf(i) === "nearest";
-        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
+        const nearest = (page.filter ?? filterOf(i)) === "nearest";
+        const mipmap = page.mipmap === true;
+        const minFilter = mipmap ? nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR : nearest ? GL_NEAREST : GL_LINEAR;
+        const wrap = page.wrap === "repeat" ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter);
         gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR);
-        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+        gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+        if (mipmap) gl.generateMipmap?.(GL_TEXTURE_2D);
         this.textures.push(texture);
       }
       const white = gl.createTexture();
@@ -1421,6 +1843,7 @@ void main() {
       gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
       gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
       this.whiteTexture = white;
+      gl.pixelStorei?.(GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0);
     }
     /** 上下文恢复：重建 buffer/texture/Program 状态，并记录次数。 */
     restore() {
@@ -1431,6 +1854,7 @@ void main() {
           positions: gl.createBuffer(),
           uvs: gl.createBuffer(),
           colors: gl.createBuffer(),
+          darks: gl.createBuffer(),
           indices: gl.createBuffer()
         };
       } else {
@@ -1464,6 +1888,12 @@ void main() {
       if (loc === void 0 || loc < 0 || gl.enableVertexAttribArray === void 0 || gl.vertexAttribPointer === void 0) return;
       gl.enableVertexAttribArray(loc);
       gl.vertexAttribPointer(loc, size, type, normalized, 0, 0);
+    }
+    setUniform1f(name, value) {
+      const gl = this.gl;
+      if (gl.getUniformLocation === void 0 || gl.uniform1f === void 0) return;
+      const loc = gl.getUniformLocation(this.program, name);
+      if (loc !== null && loc !== void 0) gl.uniform1f(loc, value);
     }
     setResolution(width, height) {
       const gl = this.gl;
@@ -1594,6 +2024,26 @@ void main() {
       this.gl.colorMask?.(true, true, true, true);
       this.gl.activeTexture?.(GL_TEXTURE0);
     }
+    /** H1：每个 packet 的混合状态显式设置；连续同模式不重复切换。 */
+    applyBlend(mode2) {
+      if (this.currentBlend === mode2) return;
+      this.gl.enable?.(GL_BLEND);
+      switch (mode2) {
+        case "normal":
+          this.gl.blendFunc?.(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+          break;
+        case "add":
+          this.gl.blendFunc?.(GL_ONE, GL_ONE);
+          break;
+        case "multiply":
+          this.gl.blendFunc?.(GL_DST_COLOR, GL_ONE_MINUS_SRC_ALPHA);
+          break;
+        case "screen":
+          this.gl.blendFunc?.(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
+          break;
+      }
+      this.currentBlend = mode2;
+    }
     draw(frame) {
       if (this.disposed) throw new Error("WebGL2Backend: \u5DF2 dispose\uFF0C\u4E0D\u80FD\u7EE7\u7EED draw");
       if (frame.width !== this.width || frame.height !== this.height) {
@@ -1635,13 +2085,32 @@ void main() {
           }
           this.setUniform1i("uUseTexture", 0);
         }
+        if (this.programCache !== null && assets !== null) {
+          const material2 = assets.materials.find((m) => m.id === packet.materialId);
+          if (material2 !== void 0) {
+            const maskMode = packet.maskPath >= 0 ? "stencil" : "none";
+            this.program = this.programCache.get(variantOf({
+              pma: material2.pma === true || material2.pma === void 0,
+              twoColor: material2.twoColor === true || packet.twoColor === true,
+              tintBlack: false,
+              kind: material2.kind
+            }, maskMode));
+            gl.useProgram?.(this.program);
+          }
+        }
         const maskState = this.applyMasks(frame, packet.maskPath, assets);
+        this.applyBlend(packet.blend);
         this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, packet.positions);
         this.setAttrib("aPosition", Number.isFinite(stride) ? stride : 2, GL_FLOAT, false);
         this.upload(GL_ARRAY_BUFFER, this.buffers?.uvs, packet.uvs);
         this.setAttrib("aUv", 2, GL_FLOAT, false);
         this.upload(GL_ARRAY_BUFFER, this.buffers?.colors, packet.colors);
         this.setAttrib("aColor", 4, GL_UNSIGNED_BYTE, true);
+        if (packet.dark !== void 0) {
+          this.upload(GL_ARRAY_BUFFER, this.buffers?.darks, packet.dark);
+          this.setAttrib("aDark", 4, GL_UNSIGNED_BYTE, true);
+        }
+        this.setUniform1f("uTwoColor", packet.twoColor === true ? 1 : 0);
         this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, packet.indices);
         gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0);
         this.resetMaskState(maskState);
@@ -2061,6 +2530,18 @@ void main() {
 
   // packages/render-engine/src/tools/tools.ts
   var DEFAULT_FIXED_DT2 = 1 / 60;
+
+  // packages/render-engine/src/debug/overlay.ts
+  var DEFAULT_DEBUG_FLAGS = Object.freeze({
+    bones: false,
+    slots: false,
+    attachments: false,
+    meshes: false,
+    clipping: false,
+    bounds: false,
+    drawOrder: false,
+    stats: false
+  });
 
   // preview/procedural-atlas.ts
   var PAGE_SIZE = 512;
