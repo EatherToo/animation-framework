@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals'
 import { compileSkeleton, type BoneSpec, type CompiledSkeleton, type JointSpec } from '@/core/skeleton'
-import { createPose, getRotation, setLocal, updateWorld, type Pose } from '@/core/pose'
+import { createPose, getLocal, getRotation, setLocal, updateWorld, type Pose } from '@/core/pose'
 import {
   CH_ROT, CH_SHY, CH_SX, CH_SY, CH_X, CH_Y, POSE_STRIDE, WORLD_STRIDE,
   angleDelta,
@@ -614,5 +614,27 @@ describe('constraint stack: 只写允许通道并刷新世界', () => {
     createConstraintSolver(constraints).solve(pose, 1 / 60)
     expect(local(pose, b, CH_X)).toBeCloseTo(3, 6)
     for (const v of pose.local) expect(Number.isFinite(v)).toBe(true)
+  })
+})
+
+describe('constraint timeline mix override', () => {
+  it('uses the timeline mix instead of the setup weight', () => {
+    const sk = compileSkeleton({
+      name: 'mix', profile: 'simple2d',
+      bones: [
+        { name: 'root', parent: -1, length: 1 },
+        { name: 'arm', parent: 0, length: 1 },
+      ],
+    })
+    const pose = createPose(sk)
+    setLocal(pose, 1, CH_ROT, 1)
+    const solver = createConstraintSolver([{
+      kind: 'transform', id: 'c', bone: 0, weight: 1, enabled: true, order: 0,
+      sourceBone: 1, mixRotation: 1, mixTranslation: 0,
+    }])
+    solver.solve(pose, 1 / 60, new Map([['c', 0]]))
+    expect(getLocal(pose, 0, CH_ROT)).toBeCloseTo(0, 6)
+    solver.solve(pose, 1 / 60, new Map([['c', 1]]))
+    expect(getLocal(pose, 0, CH_ROT)).toBeCloseTo(1, 6)
   })
 })

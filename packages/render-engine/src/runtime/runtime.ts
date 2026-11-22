@@ -641,7 +641,7 @@ export class Engine {
         setLocal(pose, root, CH_SX, sx * (this.flipX ? -1 : 1) * this.instanceScaleX)
         setLocal(pose, root, CH_SY, sy * (this.flipY ? -1 : 1) * this.instanceScaleY)
       }
-      if (this.solver !== null) this.solver.solve(pose, h)
+      if (this.solver !== null) this.solver.solve(pose, h, this.lastAnimation?.constraintMixByName)
       updateWorld(pose)
     }
     if (this.fixedDt === undefined) {

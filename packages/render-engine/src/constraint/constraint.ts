@@ -167,7 +167,7 @@ export type IkResult = {
 }
 
 export type ConstraintSolver = {
-  solve(pose: Pose, dt: number): void
+  solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>): void
   results: ReadonlyMap<string, IkResult>
   /** 清空 IK 结果与所有 physics 累积状态（下一帧重新初始化）。 */
   reset(): void
@@ -1208,11 +1208,13 @@ export function createConstraintSolver(constraints: readonly ConstraintData[]): 
         state.initialized = false
       }
     },
-    solve(pose: Pose, dt: number): void {
+    solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>): void {
       checkSolveCycles(ordered, pose.skeleton)
       results.clear()
       updateWorld(pose)
-      for (const c of ordered) {
+      for (const base of ordered) {
+        const override = weights?.get(base.id)
+        const c = override === undefined ? base : { ...base, weight: clamp01(override) }
         if (!c.enabled || c.weight === 0) continue
         if (c.kind === 'transform') {
           applyTransform(pose, c)
