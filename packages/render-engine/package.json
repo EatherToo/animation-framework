@@ -31,7 +31,8 @@
     "test:spine:golden": "jest --testPathPatterns='acceptance/golden|acceptance/parity'",
     "test:spine:parity": "jest --testPathPatterns='acceptance/parity|render/webgl-blend'",
     "test:spine:perf": "jest --testPathPatterns='acceptance/(bench|perf-budget)'",
-    "test:spine": "jest --testPathPatterns='asset|acceptance|render/(region-geometry|webgl-blend|clipping|two-color|shader-variants)|runtime/(sequence|api-parity|animation-integration|clipping-integration)'"
+    "test:spine": "jest --testPathPatterns='asset|acceptance|render/(region-geometry|webgl-blend|clipping|two-color|shader-variants)|runtime/(sequence|api-parity|animation-integration|clipping-integration)'",
+    "test:spine:samples": "jest --testPathPatterns='acceptance/spine-samples'"
   },
   "dependencies": {
     "gl-matrix": "3.4.4"

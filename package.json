@@ -18,7 +18,9 @@
     "test:spine:golden": "pnpm -r --filter=./packages/* run test:spine:golden",
     "test:spine:parity": "pnpm -r --filter=./packages/* run test:spine:parity",
     "test:spine:perf": "pnpm -r --filter=./packages/* run test:spine:perf",
-    "test:spine": "pnpm -r --filter=./packages/* run test:spine"
+    "test:spine": "pnpm -r --filter=./packages/* run test:spine",
+    "fetch:spine-samples": "node scripts/fetch-spine-samples.mjs",
+    "test:spine:samples": "pnpm -C packages/render-engine test:spine:samples"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
