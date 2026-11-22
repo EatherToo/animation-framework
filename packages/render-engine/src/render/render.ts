@@ -42,12 +42,22 @@ export type RenderFrame = {
   readonly depthMode?: 'none' | 'test' | 'write'
 }
 
+/** 图集页采样策略；缺省 clamp + linear + 不生成 mipmap。 */
+export type TextureWrap = 'clamp' | 'repeat'
+export type TextureFilter = 'linear' | 'nearest'
+
 /** CPU/GPU 共用的图集页：RGBA8 字节，pma 缺省视为 true。 */
 export type TextureData = {
   readonly width: number
   readonly height: number
   readonly data: Uint8Array
   readonly pma?: boolean
+  /** 需要缩小采样时生成 mipmap；缺省 false。 */
+  readonly mipmap?: boolean
+  /** 寻址模式；缺省 'clamp'，图集页不应使用 repeat。 */
+  readonly wrap?: TextureWrap
+  /** 页级过滤；缺省回落到引用该页的材质 filter。 */
+  readonly filter?: TextureFilter
 }
 
 /** 材质是资产的不可变描述；id 在材质库内唯一。 */

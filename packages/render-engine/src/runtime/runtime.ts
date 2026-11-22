@@ -12,7 +12,7 @@ import {
 import { createConstraintSolver, type ConstraintData, type ConstraintSolver } from '../constraint/constraint'
 import { AnimationState, createTrack, sampleAnimation, type SampleResult, type Track } from '../animation/animation'
 import { buildInverseBind, skinMesh2D, type MeshData, type WeightedMeshData } from '../mesh/mesh'
-import { createPose, updateWorld, type Pose } from '../core/pose'
+import { createPose, markAllDirty, updateWorld, type Pose } from '../core/pose'
 import { WORLD_STRIDE } from '../core/math'
 import {
   buildMaskSet,
@@ -35,6 +35,7 @@ import {
   createSlotSet,
   isRenderable,
   resolveAttachment,
+  setSkin,
   setSlotAttachment,
   type Attachment,
   type SkinData,
@@ -861,6 +862,64 @@ export class Engine {
     this.assertLive()
     this.camera = camera
     this.viewProjection = viewProjection2D(camera)
+  }
+
+  /** 换肤：只换附件集合，不改 pose/drawOrder。 */
+  setSkinByName(name: string): void {
+    this.assertLive()
+    if (this.ownedSlotSet === null) throw new Error('E_NO_ASSET')
+    setSkin(this.ownedSlotSet, name)
+  }
+
+  /** 单槽附件覆盖；名字不存在时清空该槽。 */
+  setAttachment(slotName: string, attachmentName: string | null): void {
+    this.assertLive()
+    const set = this.ownedSlotSet
+    if (set === null) throw new Error('E_NO_ASSET')
+    const index = set.slots.findIndex((slot) => slot.data.id === slotName)
+    if (index < 0) throw new Error('E_ATTACHMENT')
+    setSlotAttachment(set, index, attachmentName)
+  }
+
+  /** 恢复 setup pose / slot 颜色 / 附件 / draw order；停止播放。 */
+  setToSetupPose(): void {
+    this.assertLive()
+    const pose = this.ownedPose
+    const set = this.ownedSlotSet
+    if (pose === null || set === null) throw new Error('E_NO_ASSET')
+    pose.local.set(pose.skeleton.setupLocal)
+    markAllDirty(pose)
+    for (const slot of set.slots) {
+      slot.attachmentId = slot.data.attachment
+      slot.color = slot.data.color
+    }
+    set.drawOrder.length = 0
+    set.drawOrder.push(...set.slots.map((_, i) => i).sort((a, b) => set.slots[a]!.data.order - set.slots[b]!.data.order))
+    this.animationState?.stop()
+  }
+
+  /** 当前渲染包围盒（裁剪前、不含描边）；用于取景/调试。 */
+  getBounds(): { x: number; y: number; width: number; height: number } {
+    this.assertLive()
+    const pose = this.ownedPose
+    const set = this.ownedSlotSet
+    if (pose === null || set === null) throw new Error('E_NO_ASSET')
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (let seq = 0; seq < set.drawOrder.length; seq += 1) {
+      const index = set.drawOrder[seq]!
+      const attachment = resolveAttachment(set, index)
+      if (!asRenderable(attachment)) continue
+      const packet = this.buildPacket(attachment, index, seq, pose, 0, undefined)
+      if (packet === null) continue
+      for (let i = 0; i + 1 < packet.positions.length; i += 2) {
+        minX = Math.min(minX, packet.positions[i]!)
+        maxX = Math.max(maxX, packet.positions[i]!)
+        minY = Math.min(minY, packet.positions[i + 1]!)
+        maxY = Math.max(maxY, packet.positions[i + 1]!)
+      }
+    }
+    if (!Number.isFinite(minX)) return { x: 0, y: 0, width: 0, height: 0 }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
   }
 
   readPixels(): Uint8ClampedArray {

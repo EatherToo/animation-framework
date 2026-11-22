@@ -9,6 +9,7 @@ import type {
   TextureData,
 } from '../render/render'
 import { maskChain, sampleTexture } from '../render/render'
+import { premultiply } from '../asset/image'
 
 export interface Viewport {
   width: number
@@ -553,7 +554,12 @@ const GL_TEXTURE_WRAP_S = 0x2802
 const GL_TEXTURE_WRAP_T = 0x2803
 const GL_LINEAR = 0x2601
 const GL_NEAREST = 0x2600
+const GL_LINEAR_MIPMAP_LINEAR = 0x2703
+const GL_NEAREST_MIPMAP_NEAREST = 0x2700
 const GL_CLAMP_TO_EDGE = 0x812f
+const GL_REPEAT = 0x2901
+/** 全局 UNPACK 状态：上传后必须恢复 0，否则会重复预乘。 */
+const GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL = 0x9240
 const GL_SCISSOR_TEST = 0x0c11
 const GL_BLEND = 0x0be2
 const GL_ONE = 1
@@ -609,6 +615,8 @@ export interface WebGL2Like {
     format: number, type: number, pixels: ArrayBufferView | null,
   ): void
   texParameteri?(target: number, pname: number, param: number): void
+  generateMipmap?(target: number): void
+  pixelStorei?(pname: number, param: number): void
   scissor?(x: number, y: number, width: number, height: number): void
   blendFunc?(sfactor: number, dfactor: number): void
   enable?(cap: number): void
@@ -755,15 +763,24 @@ export class WebGL2Backend implements RenderBackend {
       const texture = gl.createTexture()
       gl.activeTexture?.(GL_TEXTURE0 + i)
       gl.bindTexture?.(GL_TEXTURE_2D, texture)
+      // straight 页在 CPU 做唯一一次预乘；同时把 GL 全局预乘状态压回 0，避免重复乘。
+      const pixels = page.pma === false ? premultiply(page.data) : page.data
+      gl.pixelStorei?.(GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0)
       gl.texImage2D?.(
         GL_TEXTURE_2D, 0, GL_RGBA8, page.width, page.height, 0,
-        GL_RGBA, GL_UNSIGNED_BYTE, page.data,
+        GL_RGBA, GL_UNSIGNED_BYTE, pixels,
       )
-      const nearest = filterOf(i) === 'nearest'
-      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, nearest ? GL_NEAREST : GL_LINEAR)
+      const nearest = (page.filter ?? filterOf(i)) === 'nearest'
+      const mipmap = page.mipmap === true
+      const minFilter = mipmap
+        ? (nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR)
+        : (nearest ? GL_NEAREST : GL_LINEAR)
+      const wrap = page.wrap === 'repeat' ? GL_REPEAT : GL_CLAMP_TO_EDGE
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter)
       gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR)
-      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap)
+      if (mipmap) gl.generateMipmap?.(GL_TEXTURE_2D)
       this.textures.push(texture)
     }
     // flat 材质绑定 1x1 白纹理，配合 uUseTexture=0 走纯顶点色。
@@ -779,6 +796,8 @@ export class WebGL2Backend implements RenderBackend {
     gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
     gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
     this.whiteTexture = white
+    // 上传结束：UNPACK 预乘是全局状态，恢复默认值，避免污染后续上传。
+    gl.pixelStorei?.(GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0)
   }
 
   /** 上下文恢复：重建 buffer/texture/Program 状态，并记录次数。 */
