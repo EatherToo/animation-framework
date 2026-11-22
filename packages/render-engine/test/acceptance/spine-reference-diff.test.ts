@@ -59,6 +59,7 @@ function diff(reference: PNG, actual: Uint8ClampedArray): { mean: number; max: n
 }
 
 // 像素 diff 尚未达到 0.5/255 门限；先作为诊断入口，避免伪装通过。
+// 像素 diff 尚未达到 0.5/255 门限；先作为诊断入口，避免伪装通过。
 const suite = assetsPresent ? describe.skip : describe.skip
 
 suite('official Spine reference pixel diff', () => {
@@ -80,8 +81,7 @@ suite('official Spine reference pixel diff', () => {
 
       engine.render()
       const setup = PNG.sync.read(readFileSync(join(REF, dir, 'setup.png')))
-      const actualSetup = engine.readPixels()
-      const setupDiff = diff(setup, actualSetup)
+      const setupDiff = diff(setup, engine.readPixels())
       const animation = [...asset.animations.keys()][0]
       engine.play(animation)
       engine.update(0.25)
