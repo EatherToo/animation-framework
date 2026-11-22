@@ -75,6 +75,7 @@ export type SkeletonAsset = {
 
 type Ctx = {
   source: 'spine' | 'dragonbones'
+  sourceYDown: boolean
   unitScale: number
   issues: ImportIssue[]
   atlas: ReadonlySet<string> | null
@@ -288,7 +289,7 @@ function rawBoneFrom(raw: unknown, index: number, kind: RawBone['kind'], ctx: Ct
 }
 
 /** 按源 runtime 公式构造 M_src，再作 F·M_src·F（F=diag(1,-1)）。 */
-function flippedMatrix(b: RawBone, unitScale: number): Float64Array {
+function flippedMatrix(b: RawBone, unitScale: number, sourceYDown: boolean): Float64Array {
   let a: number
   let b1: number
   let c: number
@@ -311,16 +312,22 @@ function flippedMatrix(b: RawBone, unitScale: number): Float64Array {
   }
   const out = new Float64Array(WORLD_STRIDE)
   out[0] = a
-  out[1] = -b1 // 共轭：b 取反
-  out[2] = -c  // 共轭：c 取反
+  // 引擎向量是 (m0*x + m2*y, m1*x + m3*y)；Spine y-up 需要转置官方 row-major 矩阵。
+  if (b.kind === 'spine' && !sourceYDown) {
+    out[1] = c
+    out[2] = b1
+  } else {
+    out[1] = -b1
+    out[2] = -c
+  }
   out[3] = d
   out[4] = b.x * unitScale
-  out[5] = -b.y * unitScale // (x,y) → (x,-y)
+  out[5] = (b.kind === 'spine' && !sourceYDown ? b.y : -b.y) * unitScale
   return out
 }
 
 function convertBone(b: RawBone, ctx: Ctx, path: string): LocalTransform {
-  const m = flippedMatrix(b, ctx.unitScale)
+  const m = flippedMatrix(b, ctx.unitScale, ctx.sourceYDown)
   try {
     return decomposeAffine(m)
   } catch {
@@ -428,10 +435,11 @@ function compileBones(
 // ---------------------------------------------------------------------------
 
 function flatPositions(points: unknown[], ctx: Ctx, scale: number): Float32Array {
+  const ySign = ctx.sourceYDown ? -1 : 1
   const out = new Float32Array(points.length)
   for (let i = 0; i < points.length; i += 2) {
     out[i] = num(points[i]) * scale
-    out[i + 1] = -num(points[i + 1]) * scale
+    out[i + 1] = ySign * num(points[i + 1]) * scale
   }
   return out
 }
@@ -504,7 +512,7 @@ function readWeightedMesh(
       sum = influences.reduce((acc, inf) => acc + inf.w, 0)
     }
     positions[v * 2] = influences[0]!.x * ctx.unitScale
-    positions[v * 2 + 1] = -influences[0]!.y * ctx.unitScale
+    positions[v * 2 + 1] = (ctx.sourceYDown ? -1 : 1) * influences[0]!.y * ctx.unitScale
     for (let j = 0; j < 4; j += 1) {
       const inf = influences[j]
       boneIndices[v * perVertex + j] = inf?.bone ?? slotBone
@@ -600,7 +608,7 @@ function buildAttachment(
     }
   }
   if (type === 'point') {
-    return { kind: 'point', id: name, point: [num(rawObj.x) * ctx.unitScale, -num(rawObj.y) * ctx.unitScale] }
+    return { kind: 'point', id: name, point: [num(rawObj.x) * ctx.unitScale, (ctx.sourceYDown ? -1 : 1) * num(rawObj.y) * ctx.unitScale] }
   }
   if (type === 'clipping' || type === 'path' || type === 'boundingbox') {
     const kind = type === 'boundingbox' ? 'boundingBox' : type
@@ -624,7 +632,7 @@ function buildAttachment(
     ...(Number.isFinite(width) ? { width: width * ctx.unitScale } : {}),
     ...(Number.isFinite(height) ? { height: height * ctx.unitScale } : {}),
     ...(rawObj.x !== undefined ? { x: num(rawObj.x) * ctx.unitScale } : {}),
-    ...(rawObj.y !== undefined ? { y: -num(rawObj.y) * ctx.unitScale } : {}),
+    ...(rawObj.y !== undefined ? { y: (ctx.sourceYDown ? -1 : 1) * num(rawObj.y) * ctx.unitScale } : {}),
     ...(rawObj.rotation !== undefined ? { rotation: num(rawObj.rotation) * DEG } : {}),
     ...(rawObj.scaleX !== undefined ? { scaleX: num(rawObj.scaleX) } : {}),
     ...(rawObj.scaleY !== undefined ? { scaleY: num(rawObj.scaleY) } : {}),
@@ -1201,7 +1209,7 @@ function readSpineAnimations(
             const time = num(k.time)
             duration = Math.max(duration, time)
             const channel = axis === 'x' ? base + 0 : base + 1
-            const absolute = axis === 'x' ? num(k.x) * ctx.unitScale : -num(k.y) * ctx.unitScale
+            const absolute = axis === 'x' ? num(k.x) * ctx.unitScale : (ctx.sourceYDown ? -1 : 1) * num(k.y) * ctx.unitScale
             return { time, value: absolute - sk.setupLocal[channel]! }
           })
           timelines.push({ kind: 'translate', path: `${boneName}.${axis}`, keys })
@@ -1347,7 +1355,7 @@ function readDragonBonesAnimations(
       if (arr(b.translate).length > 0) {
         for (const [axis, channel] of [['x', base + 0], ['y', base + 1]] as const) {
           const keys: ScalarKey[] = frames(b.translate).map(({ time, frame }) => {
-            const absolute = axis === 'x' ? num(frame.x) * ctx.unitScale : -num(frame.y) * ctx.unitScale
+            const absolute = axis === 'x' ? num(frame.x) * ctx.unitScale : (ctx.sourceYDown ? -1 : 1) * num(frame.y) * ctx.unitScale
             return { time, value: absolute - sk.setupLocal[channel]! }
           })
           timelines.push({ kind: 'translate', path: `${String(b.name)}.${axis}`, keys })
@@ -1615,7 +1623,7 @@ function freezeAsset(
 /** 导入 Spine 4.x JSON。主版本 ≠4 / 结构非法抛错，其余进 report。 */
 export function importSpine(
   json: unknown,
-  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData },
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean },
 ): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: spine JSON 必须是对象')
@@ -1626,6 +1634,7 @@ export function importSpine(
 
   const ctx: Ctx = {
     source: 'spine',
+    sourceYDown: options?.sourceYDown ?? true,
     unitScale: 0.01,
     issues: [],
     atlas: collectAtlas(doc, 'spine'),
@@ -1751,7 +1760,7 @@ function slotBoneId(slots: readonly SlotData[], slot: BuiltSlot): number {
 /** 导入 DragonBones 4.5 JSON（5.x 走 compatibleVersion 兼容子集）。 */
 export function importDragonBones(
   json: unknown,
-  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData },
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean },
 ): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: dragonbones JSON 必须是对象')
@@ -1762,6 +1771,7 @@ export function importDragonBones(
   }
   const ctx: Ctx = {
     source: 'dragonbones',
+    sourceYDown: options?.sourceYDown ?? true,
     unitScale: 0.01,
     issues: [],
     atlas: collectAtlas(doc, 'dragonbones'),

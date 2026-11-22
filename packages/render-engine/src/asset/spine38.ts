@@ -254,6 +254,7 @@ export type Spine38Options = {
   unitScale?: number
   defaultSkin?: string
   atlas?: AtlasData
+  sourceYDown?: boolean
 }
 
 /**
@@ -276,10 +277,11 @@ export function importSpine38(json: unknown, options: Spine38Options = {}): Skel
   const convertedSkeleton = obj(converted.skeleton)!
   convertedSkeleton.spine = '4.2.0'
 
-  const importOptions: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData } = {}
+  const importOptions: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean } = {}
   if (options.unitScale !== undefined) importOptions.unitScale = options.unitScale
   if (options.defaultSkin !== undefined) importOptions.defaultSkin = options.defaultSkin
   if (options.atlas !== undefined) importOptions.atlas = options.atlas
+  if (options.sourceYDown !== undefined) importOptions.sourceYDown = options.sourceYDown
 
   let imported: SkeletonAsset
   try {

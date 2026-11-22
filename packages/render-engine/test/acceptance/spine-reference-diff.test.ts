@@ -41,7 +41,7 @@ function loadAsset(dir: string, files: readonly [string, string, string]) {
     })),
   }
   const meta = JSON.parse(readFileSync(jsonPath, 'utf8')).skeleton
-  const asset = importSpine(JSON.parse(readFileSync(jsonPath, 'utf8')), { atlas, unitScale: 0.01 })
+  const asset = importSpine(JSON.parse(readFileSync(jsonPath, 'utf8')), { atlas, unitScale: 0.01, sourceYDown: false })
   return { asset, meta }
 }
 
@@ -71,7 +71,7 @@ suite('official Spine reference pixel diff', () => {
       const scale = Math.min(256 / Math.max(1, meta.width), 192 / Math.max(1, meta.height)) * 0.8
       const camera = {
         ...DEFAULT_CAMERA,
-        target: [(meta.x + meta.width / 2) * 0.01, -(meta.y + meta.height / 2) * 0.01, 0] as [number, number, number],
+        target: [(meta.x + meta.width / 2) * 0.01, (meta.y + meta.height / 2) * 0.01, 0] as [number, number, number],
         orthoHeight: (192 / scale) * 0.01,
         viewport: { width: 256, height: 192, dpr: 1 },
       }

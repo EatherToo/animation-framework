@@ -38,7 +38,7 @@ suite('official Spine sample assets', () => {
           image: { width: png.width, height: png.height, data: new Uint8Array(png.data) },
         })),
       }
-      const asset = importSpine(JSON.parse(readFileSync(jsonPath, 'utf8')), { atlas, unitScale: 0.01 })
+      const asset = importSpine(JSON.parse(readFileSync(jsonPath, 'utf8')), { atlas, unitScale: 0.01, sourceYDown: false })
       if (asset.report.errors > 0) console.log(dir, asset.report.issues.filter((i) => i.severity === 'error').slice(0, 10))
       expect(asset.report.errors).toBe(0)
       expect(asset.skeleton.bones.length).toBeGreaterThan(0)
