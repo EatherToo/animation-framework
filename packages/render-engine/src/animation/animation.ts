@@ -414,7 +414,7 @@ export class AnimationState {
     }
   }
 
-  update(dt: number): void {
+  update(dt: number): SampleResult {
     this.assertLive()
     if (!Number.isFinite(dt) || dt < 0) throw new Error('E_TRACK')
     const scaled = dt * this.timeScale
@@ -449,6 +449,7 @@ export class AnimationState {
       applyQueueEntry(track, next)
       this.dispatch({ type: 'start', name: next.clip.name, time: 0, track: index })
     })
+    return result
   }
 
   dispose(): void {

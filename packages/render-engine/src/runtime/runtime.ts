@@ -10,7 +10,7 @@ import {
   type WebGL2Like,
 } from '../backend/backend'
 import { createConstraintSolver, type ConstraintData, type ConstraintSolver } from '../constraint/constraint'
-import { createTrack, sampleAnimation, type Track } from '../animation/animation'
+import { AnimationState, createTrack, sampleAnimation, type SampleResult, type Track } from '../animation/animation'
 import { buildInverseBind, skinMesh2D, type MeshData, type WeightedMeshData } from '../mesh/mesh'
 import { createPose, updateWorld, type Pose } from '../core/pose'
 import { WORLD_STRIDE } from '../core/math'
@@ -422,6 +422,8 @@ export class Engine {
   private readonly ownedTracks: Track[] = []
   private inverseBind: Float32Array | null = null
   private solver: ConstraintSolver | null = null
+  private animationState: AnimationState | null = null
+  private lastAnimation: SampleResult | null = null
   private renderAssets: RenderAssets | undefined
   private preparedAssets: RenderAssets | undefined
   private maskLibrary: MaskLibrary | undefined
@@ -497,7 +499,7 @@ export class Engine {
   get tracks(): Track[] {
     this.assertLive()
     if (this.asset === null) throw new Error('E_NO_ASSET')
-    return this.ownedTracks
+    return this.animationState?.tracks ?? this.ownedTracks
   }
 
   private assertLive(): void {
@@ -549,6 +551,9 @@ export class Engine {
       this.asset = asset
       this.ownedPose = pose
       this.ownedSlotSet = slotSet
+      this.animationState?.dispose()
+      this.animationState = new AnimationState(asset.animations, pose, slotSet)
+      this.lastAnimation = null
       this.inverseBind = buildInverseBind(pose)
       this.solver = asset.constraints !== undefined && asset.constraints.length > 0
         ? createConstraintSolver(asset.constraints)
@@ -579,14 +584,27 @@ export class Engine {
       if (clip === undefined) throw new Error('E_STATE: 动画不存在')
     }
     this.ownedTracks.length = 0
-    if (clip !== undefined) this.ownedTracks.push(createTrack(clip))
+    if (this.animationState !== null) {
+      const target = name ?? this.asset.animations.keys().next().value
+      if (target !== undefined) this.animationState.play(target)
+    } else if (clip !== undefined) {
+      this.ownedTracks.push(createTrack(clip))
+    }
     this._phase = 'running'
   }
 
   pause(): void {
     this.assertLive()
     if (this._phase !== 'running' && this._phase !== 'paused') throw new Error('E_STATE')
+    this.animationState?.pause()
     this._phase = 'paused'
+  }
+
+  resume(): void {
+    this.assertLive()
+    if (this._phase !== 'paused') throw new Error('E_STATE')
+    this.animationState?.resume()
+    this._phase = 'running'
   }
 
   update(dt: number): void {
@@ -601,7 +619,15 @@ export class Engine {
 
     this.host.beforeUpdate(dt)
     const step = (h: number): void => {
-      sampleAnimation(this.ownedTracks, pose, slotSet, h)
+      if (this.animationState !== null) {
+        this.lastAnimation = this.animationState.update(h)
+        if (this.lastAnimation.drawOrder !== undefined && this.lastAnimation.drawOrder.length === slotSet.slots.length) {
+          slotSet.drawOrder.length = 0
+          slotSet.drawOrder.push(...this.lastAnimation.drawOrder)
+        }
+      } else {
+        this.lastAnimation = sampleAnimation(this.ownedTracks, pose, slotSet, h)
+      }
       if (this.solver !== null) this.solver.solve(pose, h)
       updateWorld(pose)
     }
@@ -787,7 +813,17 @@ export class Engine {
       return buildRegionPacket({ ...base, positions, uvs, kind: 'region' })
     }
 
-    const mesh: MeshData | WeightedMeshData = attachment.mesh
+    const baseMesh: MeshData | WeightedMeshData = attachment.mesh
+    const meshKey = `${slot.skinId}:${slotIndex}:${attachment.id}`
+    const offsets = this.lastAnimation?.deformOffsets.get(meshKey)
+    let mesh: MeshData | WeightedMeshData = baseMesh
+    if (offsets !== undefined && offsets.length > 0) {
+      const deformed = new Float32Array(baseMesh.positions.length)
+      deformed.set(baseMesh.positions)
+      const n = Math.min(deformed.length, offsets.length)
+      for (let i = 0; i < n; i += 1) deformed[i] = deformed[i]! + offsets[i]!
+      mesh = { ...baseMesh, positions: deformed }
+    }
     try {
       const inverseBind = this.inverseBind!
       const positions = skinMesh2D(mesh, pose, inverseBind)
@@ -837,6 +873,8 @@ export class Engine {
     if (this._phase === 'disposed') return
     this.host.dispose()
     this.backend.dispose()
+    this.animationState?.dispose()
+    this.animationState = null
     this._phase = 'disposed'
     this.asset = null
     this.ownedPose = null
