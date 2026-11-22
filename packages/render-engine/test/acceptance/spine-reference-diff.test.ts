@@ -88,8 +88,7 @@ suite('official Spine reference pixel diff', () => {
       engine.update(0.25)
       engine.render()
       const animated = PNG.sync.read(readFileSync(join(REF, dir, 'anim-0-25.png')))
-      const actualAnim = engine.readPixels()
-      const animatedDiff = diff(animated, actualAnim)
+      const animatedDiff = diff(animated, engine.readPixels())
       if (animatedDiff.mean >= 0.5 || animatedDiff.max >= 3) {
         failures.push(`${dir}: anim mean=${animatedDiff.mean.toFixed(3)} max=${animatedDiff.max}`)
       }
