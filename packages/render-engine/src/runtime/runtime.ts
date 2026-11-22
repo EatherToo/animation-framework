@@ -12,8 +12,8 @@ import {
 import { createConstraintSolver, type ConstraintData, type ConstraintSolver } from '../constraint/constraint'
 import { AnimationState, createTrack, sampleAnimation, type SampleResult, type Track } from '../animation/animation'
 import { buildInverseBind, skinMesh2D, type MeshData, type WeightedMeshData } from '../mesh/mesh'
-import { createPose, markAllDirty, updateWorld, type Pose } from '../core/pose'
-import { WORLD_STRIDE } from '../core/math'
+import { createPose, markAllDirty, setLocal, updateWorld, type Pose } from '../core/pose'
+import { CH_SX, CH_SY, POSE_STRIDE, WORLD_STRIDE } from '../core/math'
 import {
   buildMaskSet,
   maskChain,
@@ -425,6 +425,10 @@ export class Engine {
   private solver: ConstraintSolver | null = null
   private animationState: AnimationState | null = null
   private lastAnimation: SampleResult | null = null
+  private flipX = false
+  private flipY = false
+  private instanceScaleX = 1
+  private instanceScaleY = 1
   private renderAssets: RenderAssets | undefined
   private preparedAssets: RenderAssets | undefined
   private maskLibrary: MaskLibrary | undefined
@@ -628,6 +632,14 @@ export class Engine {
         }
       } else {
         this.lastAnimation = sampleAnimation(this.ownedTracks, pose, slotSet, h)
+      }
+      const root = pose.skeleton.roots[0]
+      if (root !== undefined && (this.flipX || this.flipY || this.instanceScaleX !== 1 || this.instanceScaleY !== 1)) {
+        const base = root * POSE_STRIDE
+        const sx = pose.skeleton.setupLocal[base + CH_SX] ?? 1
+        const sy = pose.skeleton.setupLocal[base + CH_SY] ?? 1
+        setLocal(pose, root, CH_SX, sx * (this.flipX ? -1 : 1) * this.instanceScaleX)
+        setLocal(pose, root, CH_SY, sy * (this.flipY ? -1 : 1) * this.instanceScaleY)
       }
       if (this.solver !== null) this.solver.solve(pose, h)
       updateWorld(pose)
@@ -862,6 +874,23 @@ export class Engine {
     this.assertLive()
     this.camera = camera
     this.viewProjection = viewProjection2D(camera)
+  }
+
+  /** 实例级翻转；只影响渲染，不写资产/setup。 */
+  setFlip(flipX: boolean, flipY: boolean): void {
+    this.assertLive()
+    this.flipX = flipX
+    this.flipY = flipY
+  }
+
+  /** 实例级缩放；作用在根骨，不改变其他骨 local。 */
+  setScale(scaleX: number, scaleY: number): void {
+    this.assertLive()
+    if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX === 0 || scaleY === 0) {
+      throw new Error('E_CONFIG')
+    }
+    this.instanceScaleX = scaleX
+    this.instanceScaleY = scaleY
   }
 
   /** 换肤：只换附件集合，不改 pose/drawOrder。 */

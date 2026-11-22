@@ -67,6 +67,9 @@ export type MaterialDef = {
   /** sprite 指向图集页；flat 为 -1。 */
   readonly page: number
   readonly filter: 'linear' | 'nearest'
+  readonly pma?: boolean
+  readonly twoColor?: boolean
+  readonly tintBlack?: boolean
 }
 
 /** 后端 prepare() 的输入：页纹理 + 材质；最多 4 页。 */

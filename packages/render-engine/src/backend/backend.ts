@@ -8,6 +8,7 @@ import type {
   RenderMask,
   TextureData,
 } from '../render/render'
+import { ProgramCache, variantOf } from '../render/shader-variants'
 import { maskChain, sampleTexture } from '../render/render'
 import { premultiply } from '../asset/image'
 
@@ -717,7 +718,8 @@ export class WebGL2Backend implements RenderBackend {
   private readonly gl: WebGL2Like
   private buffers: GLBuffers | null = null
   private readonly capacities = new Map<unknown, number>()
-  private readonly program: object
+  private program: object
+  private readonly programCache: ProgramCache | null
   private width = 1
   private height = 1
   private pixels: Uint8ClampedArray = new Uint8ClampedArray(4)
@@ -727,11 +729,12 @@ export class WebGL2Backend implements RenderBackend {
   private textures: unknown[] = []
   private whiteTexture: unknown = null
 
-  constructor(gl: WebGL2Like, program?: object) {
+  constructor(gl: WebGL2Like, program?: object, programCache?: ProgramCache) {
     if (gl === null || typeof gl !== 'object') throw new Error('WebGL2Backend: 缺少 gl 上下文')
     if (typeof gl.drawElements !== 'function') throw new Error('WebGL2Backend: gl.drawElements 不可用，无法提交绘制')
     this.gl = gl
     this.program = program ?? compileDefaultProgram(gl) ?? {}
+    this.programCache = programCache ?? null
     if (typeof gl.createBuffer === 'function') {
       this.buffers = {
         positions: gl.createBuffer(),
@@ -1061,6 +1064,18 @@ export class WebGL2Backend implements RenderBackend {
         this.setUniform1i('uUseTexture', 0)
       }
 
+      if (this.programCache !== null && assets !== null) {
+        const material = assets.materials.find((m) => m.id === packet.materialId)
+        if (material !== undefined) {
+          const maskMode = packet.maskPath >= 0 ? 'stencil' : 'none'
+          this.program = this.programCache.get(variantOf({
+            pma: material.pma === true || material.pma === undefined,
+            twoColor: material.twoColor === true || packet.twoColor === true,
+            tintBlack: false, kind: material.kind,
+          }, maskMode)) as object
+          gl.useProgram?.(this.program)
+        }
+      }
       const maskState = this.applyMasks(frame, packet.maskPath, assets)
       this.applyBlend(packet.blend)
 

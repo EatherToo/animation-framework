@@ -7,7 +7,7 @@ import { Engine } from '@/runtime/runtime'
 const sk = compileSkeleton({ name: 'api', profile: 'simple2d', bones: [{ name: 'root', parent: -1, length: 1 }] })
 const rgba = { r: 1, g: 1, b: 1, a: 1 }
 const slot: SlotData = { id: 'body', bone: 0, order: 0, color: rgba, blend: 'normal', attachment: 'a', mask: null, zOffset: 0 }
-const a: Attachment = { kind: 'region', id: 'a', color: rgba, region: { atlasKey: 'a', uvs: null, width: 2, height: 2 } }
+const a: Attachment = { kind: 'region', id: 'a', color: rgba, region: { atlasKey: 'a', uvs: null, width: 2, height: 2, x: 1 } }
 const b: Attachment = { kind: 'region', id: 'b', color: { r: 0, g: 1, b: 0, a: 1 }, region: { atlasKey: 'b', uvs: null, width: 4, height: 2 } }
 const asset: SkeletonAsset = {
   schema: 1, source: 'native', sourceVersion: '1', unitScale: 1,
@@ -42,5 +42,23 @@ describe('runtime API parity', () => {
     const bounds = engine.getBounds()
     expect(bounds.width).toBeCloseTo(2, 5)
     expect(bounds.height).toBeCloseTo(2, 5)
+  })
+})
+
+describe('runtime instance transform', () => {
+  it('applies instance scale and flip to rendered geometry', () => {
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load(asset)
+    engine.setScale(2, 3)
+    engine.update(0)
+    const scaled = engine.getBounds()
+    expect(scaled.width).toBeCloseTo(4, 5)
+    expect(scaled.height).toBeCloseTo(6, 5)
+    engine.setFlip(true, false)
+    engine.update(0)
+    const packet = engine.render().packets[0]!
+    let maxX = -Infinity
+    for (let i = 0; i < packet.positions.length; i += 2) maxX = Math.max(maxX, packet.positions[i]!)
+    expect(maxX).toBeLessThanOrEqual(0)
   })
 })
