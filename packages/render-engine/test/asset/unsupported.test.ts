@@ -13,7 +13,7 @@ const fixture = {
       },
     },
   }],
-  physics: [{ name: 'hair', bones: ['root'] }],
+  physics: [{ name: 'hair', bone: 'root', inertia: 0.8 }],
   animations: {},
 }
 
@@ -25,6 +25,9 @@ describe('unsupported Spine features are downgraded with explicit codes', () => 
     expect(codes).toContain('W_PHYSICS_SKIPPED')
     // two-color 已实现：dark 被读入，不再降级告警
     expect(asset.slots[0]!.dark?.r).toBe(1)
+    // physics 读入但默认不求解，数据保留
+    const physics = asset.constraints?.find((c) => c.kind === 'physics')
+    expect(physics).toMatchObject({ kind: 'physics', enabled: false, inertia: 0.8 })
     // sequence 降级为 region，资产仍可加载
     expect(asset.skins.get('default')!.attachments.get('seq')?.kind).toBe('region')
   })

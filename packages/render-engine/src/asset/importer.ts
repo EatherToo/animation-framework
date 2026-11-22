@@ -985,8 +985,34 @@ function readSpineConstraints(
     })
   }
 
-  for (const raw of arr(doc.physics)) {
-    add(ctx, 'warning', 'W_PHYSICS_SKIPPED', 'physics', 'physics 约束读入但不求解（二级物理走独立模块）', 'keep', raw)
+  for (const [index, raw] of arr(doc.physics).entries()) {
+    const o = obj(raw)
+    if (o === null) continue
+    const bone = idOf(o.bone)
+    if (bone === undefined) {
+      add(ctx, 'warning', 'W_PHYSICS_SKIPPED', `physics[${index}]`, 'physics 缺 bone，已跳过', 'skip', raw)
+      continue
+    }
+    const target = idOf(o.target)
+    out.push({
+      kind: 'physics',
+      id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `physics_${index}`,
+      order: Math.floor(num(o.order, index)),
+      // 文档：读入但默认不求解；enabled=false 仍保留数据。
+      enabled: false,
+      weight: clamp01(num(o.mix, 1)),
+      bone,
+      ...(target === undefined ? {} : { target }),
+      inertia: clamp01(num(o.inertia, 1)),
+      strength: clamp01(num(o.strength, 1)),
+      damping: clamp01(num(o.damping, 1)),
+      mass: Math.max(0.01, num(o.mass, 1)),
+      wind: num(o.wind, 0),
+      gravity: num(o.gravity, 0),
+      mix: clamp01(num(o.mix, 1)),
+      reset: o.reset === true,
+    })
+    add(ctx, 'warning', 'W_PHYSICS_SKIPPED', `physics[${index}]`, 'physics 约束已读入但默认不求解', 'keep', raw)
   }
   return out
 }
