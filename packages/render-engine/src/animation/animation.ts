@@ -85,6 +85,8 @@ export type ColorKey = {
   readonly light: RGBA
   readonly dark?: RGBA
   readonly curve?: Curve
+  /** Spine 多分量 timeline 中每个颜色分量独立的曲线。 */
+  readonly curves?: readonly (Curve | undefined)[]
 }
 
 /** 附件切换键；name 为 null 表示隐藏。 */
@@ -123,6 +125,26 @@ export type MixKey = {
   readonly curve?: Curve
 }
 
+export type ConstraintFrame = {
+  readonly time: number
+  readonly values: readonly number[]
+  readonly curves?: readonly (Curve | undefined)[]
+  readonly bendDirection?: 1 | -1
+  readonly compress?: boolean
+  readonly stretch?: boolean
+}
+
+export type ConstraintChannels = {
+  readonly kind: 'ik' | 'transform' | 'path' | 'physics' | 'slider'
+  readonly values: Readonly<Record<string, number | boolean>>
+  readonly alpha: number
+  readonly additive: boolean
+}
+
+export type ConstraintMixMap = Map<string, number> & {
+  channels: Map<string, ConstraintChannels[]>
+}
+
 export type ColorChannel = 'rgb' | 'alpha' | 'rgba' | 'rgb2' | 'alpha2' | 'rgba2'
 
 export type TimelineKey =
@@ -149,9 +171,15 @@ type TimelineBase = {
 export type ScalarTimeline = TimelineBase & {
   readonly kind:
     | 'rotate' | 'translate' | 'scale' | 'shear'
-    | 'ik' | 'transform' | 'path' | 'physics'
+    | 'ik' | 'transform' | 'path' | 'physics' | 'slider'
     | 'sequence'
   readonly keys: readonly ScalarKey[]
+}
+
+export type ConstraintFrameTimeline = Omit<TimelineBase, 'channel'> & {
+  readonly kind: 'ik' | 'transform' | 'path' | 'physics' | 'slider'
+  readonly channel?: 'time' | 'position' | 'spacing' | 'mix' | 'reset' | 'inertia' | 'strength' | 'damping' | 'mass' | 'wind' | 'gravity'
+  readonly frames: readonly ConstraintFrame[]
 }
 
 export type AttachmentTimeline = TimelineBase & {
@@ -170,6 +198,12 @@ export type DeformTimeline = TimelineBase & {
   readonly kind: 'deform'
   // 可选以免与旧版 `Extract<Timeline, { keys: unknown }>` 的 keys.value 收窄冲突。
   readonly keys?: readonly (ScalarKey | DeformKey)[]
+  /** Importer metadata: source-space coordinates and retained influence mapping. */
+  readonly baseVertices?: Float32Array
+  readonly weighted?: boolean
+  readonly vertexIndices?: readonly number[]
+  readonly unitScale?: number
+  readonly flipY?: boolean
 }
 
 export type DrawOrderTimeline = TimelineBase & {
@@ -188,6 +222,7 @@ export type EventTimeline = TimelineBase & {
 
 export type Timeline =
   | ScalarTimeline
+  | ConstraintFrameTimeline
   | AttachmentTimeline
   | ColorTimeline
   | DeformTimeline
@@ -209,6 +244,7 @@ export type TrackQueueEntry = {
   readonly delay: number
   readonly mixDuration: number
   readonly blendMode: 'replace' | 'additive'
+  readonly reverse: boolean
 }
 
 /** 每帧可变的播放状态；time 已按 loop 处理，lastTime 为上一帧采样时刻。 */
@@ -229,6 +265,17 @@ export type Track = {
   delay: number
   /** crossfade 目标 alpha。 */
   targetAlpha: number
+  /** Outgoing animation retained during a crossfade. */
+  mixingFrom?: Track
+  eventThreshold: number
+  reverse: boolean
+  /** Mix percentage while this entry is outgoing. */
+  mixingOutMix?: number
+  /** Outgoing timeline weights computed for each mix frame. */
+  timelineAlphas?: readonly number[]
+  mixAttachmentThreshold?: number
+  mixDrawOrderThreshold?: number
+  alphaAttachmentThreshold?: number
   queue: TrackQueueEntry[]
 }
 
@@ -259,7 +306,7 @@ export type SampleResult = {
   /** 约束 mix，字符串约束使用负数 id（见 constraintNames）。 */
   constraintMix: Map<number, number>
   /** 约束名 → 与 constraintMix 一致的 key。 */
-  constraintMixByName: Map<string, number>
+  constraintMixByName: ConstraintMixMap
   /** 负数 key 的名称表：constraintNames[-key-1]。 */
   constraintNames: string[]
   /** sequence 离散帧索引，key 为 slot 下标。 */
@@ -288,6 +335,7 @@ export type PlayOptions = {
   readonly delay?: number
   readonly track?: number
   readonly blendMode?: 'replace' | 'additive'
+  readonly reverse?: boolean
 }
 
 const EMPTY_CLIP: AnimationClip = { name: '__empty', duration: 0, timelines: [] }
@@ -296,11 +344,41 @@ const EMPTY_CLIP: AnimationClip = { name: '__empty', duration: 0, timelines: [] 
 /* AnimationState                                                              */
 /* -------------------------------------------------------------------------- */
 
+/** Directional crossfade durations between animation clips. */
+export class AnimationStateData {
+  defaultMix = 0
+  private readonly mixes = new Map<string, Map<string, number>>()
+
+  constructor(private readonly clips: ReadonlyMap<string, AnimationClip>) {}
+
+  setMix(from: string | AnimationClip, to: string | AnimationClip, duration: number): void {
+    const fromName = this.nameOf(from)
+    const toName = this.nameOf(to)
+    let destinations = this.mixes.get(fromName)
+    if (destinations === undefined) {
+      destinations = new Map()
+      this.mixes.set(fromName, destinations)
+    }
+    destinations.set(toName, duration)
+  }
+
+  getMix(from: string | AnimationClip, to: string | AnimationClip): number {
+    return this.mixes.get(this.nameOf(from))?.get(this.nameOf(to)) ?? this.defaultMix
+  }
+
+  private nameOf(clip: string | AnimationClip): string {
+    if (typeof clip !== 'string') return clip.name
+    if (!this.clips.has(clip)) throw new Error('E_ANIM')
+    return clip
+  }
+}
+
 /**
  * 文档 12 §3 的门面：管理多 track、时间缩放、暂停/恢复与帧末事件派发。
  * 采样与混合仍复用 sampleAnimation，避免两套语义。
  */
 export class AnimationState {
+  readonly data: AnimationStateData
   private readonly clips: ReadonlyMap<string, AnimationClip>
   private readonly pose: Pose
   private readonly slotSet: SlotSet
@@ -310,10 +388,11 @@ export class AnimationState {
   private timeScale = 1
   private disposed = false
 
-  constructor(clips: ReadonlyMap<string, AnimationClip>, pose: Pose, slotSet: SlotSet) {
+  constructor(clips: ReadonlyMap<string, AnimationClip>, pose: Pose, slotSet: SlotSet, data?: AnimationStateData) {
     this.clips = clips
     this.pose = pose
     this.slotSet = slotSet
+    this.data = data ?? new AnimationStateData(clips)
   }
 
   get tracks(): Track[] {
@@ -331,7 +410,10 @@ export class AnimationState {
     const index = Math.max(0, Math.floor(options.track ?? 0))
     while (this._tracks.length <= index) this._tracks.push(createTrack(EMPTY_CLIP))
     const targetAlpha = options.alpha ?? 1
-    const mixDuration = options.mixDuration ?? 0
+    const outgoing = this._tracks[index]
+    const previous = outgoing?.clip
+    const mixDuration = options.mixDuration ?? (previous === undefined || previous === EMPTY_CLIP
+      ? 0 : this.data.getMix(previous, clip))
     const track = createTrack(clip, {
       loop: options.loop ?? true,
       speed: options.speed ?? 1,
@@ -339,8 +421,10 @@ export class AnimationState {
       delay: options.delay ?? 0,
       mixDuration,
       targetAlpha,
+      reverse: options.reverse ?? false,
       ...(options.blendMode === undefined ? {} : { blendMode: options.blendMode }),
     })
+    if (mixDuration > 0 && outgoing !== undefined && outgoing.clip !== EMPTY_CLIP) track.mixingFrom = outgoing
     this._tracks[index] = track
     this.dispatch({ type: 'start', name, time: 0, track: index })
     return track
@@ -355,14 +439,23 @@ export class AnimationState {
     while (this._tracks.length <= index) this._tracks.push(createTrack(EMPTY_CLIP))
     const track = this._tracks[index]!
     if (track.clip === EMPTY_CLIP || track.clip.duration === 0) return this.play(name, options)
+    const last = track.queue[track.queue.length - 1]
+    const previous = last?.clip ?? track.clip
+    const mixDuration = options.mixDuration ?? this.data.getMix(previous, clip)
+    const start = last === undefined ? track.time : 0
+    const complete = track.loop && last === undefined && track.clip.duration > 0
+      ? (Math.floor(start / track.clip.duration) + 1) * track.clip.duration
+      : previous.duration
     track.queue.push({
       clip,
       loop: options.loop ?? true,
       speed: options.speed ?? 1,
       alpha: options.alpha ?? 1,
-      delay: options.delay ?? 0,
-      mixDuration: options.mixDuration ?? 0,
+      delay: options.delay !== undefined && options.delay > 0 ? options.delay
+        : Math.max(0, complete - mixDuration + (options.delay ?? 0)),
+      mixDuration,
       blendMode: options.blendMode ?? 'replace',
+      reverse: options.reverse ?? false,
     })
     return track
   }
@@ -418,8 +511,77 @@ export class AnimationState {
     this.assertLive()
     if (!Number.isFinite(dt) || dt < 0) throw new Error('E_TRACK')
     const scaled = dt * this.timeScale
+    // Spine tests queued delays against the last applied track time, then
+    // carries the excess into the new entry before advancing this frame.
+    this._tracks.forEach((track, index) => {
+      const next = track.queue[0]
+      if (next === undefined) return
+      const elapsed = track.lastTime + track.loopCount * track.clip.duration
+      if (elapsed < next.delay) return
+      track.queue.shift()
+      const outgoing = { ...track, queue: [] }
+      applyQueueEntry(track, next)
+      track.time = Math.max(0, elapsed - next.delay)
+      track.lastTime = track.time
+      if (next.mixDuration > 0) track.mixingFrom = outgoing
+      this.dispatch({ type: 'start', name: next.clip.name, time: 0, track: index })
+    })
     const prevLast = this._tracks.map((track) => track.lastTime)
-    const result = sampleAnimation(this._tracks, this.pose, this.slotSet, scaled)
+    const active: Track[] = []
+    const indices: number[] = []
+    for (let index = 0; index < this._tracks.length; index += 1) {
+      const track = this._tracks[index]!
+      const chain: Track[] = []
+      for (let entry = track.mixingFrom; entry !== undefined; entry = entry.mixingFrom) chain.unshift(entry)
+      for (const entry of chain) {
+        if (entry.mixDuration > 0) entry.mixTime = Math.min(entry.mixDuration, entry.mixTime + scaled)
+      }
+      for (let i = 0; i < chain.length; i += 1) {
+        const from = chain[i]!
+        const to = chain[i + 1] ?? track
+        const mix = to.mixDuration > 0 ? Math.min(1, (to.mixTime + scaled) / to.mixDuration) : 1
+        const fromMix = i === 0 ? 1 : from.mixDuration > 0
+          ? Math.min(1, from.mixTime / from.mixDuration) : 1
+        const a = from.targetAlpha * fromMix
+        const alphaMix = a * (1 - mix)
+        const keep = 1 - mix * to.targetAlpha
+        const alphaHold = keep > 0 ? alphaMix / keep : a
+        from.timelineAlphas = from.clip.timelines.map(timeline => {
+          if (timeline.kind === 'event' || !to.clip.timelines.some(other => timelineId(other) === timelineId(timeline)))
+            return alphaMix
+          for (let j = i + 2; j <= chain.length; j += 1) {
+            const next = chain[j] ?? track
+            if (!next.clip.timelines.some(other => timelineId(other) === timelineId(timeline))) {
+              const nextMix = next.mixDuration > 0 ? Math.min(1, (next.mixTime + scaled) / next.mixDuration) : 1
+              return alphaHold * (1 - nextMix)
+            }
+          }
+          return alphaHold
+        })
+        from.alpha = Math.max(0, ...from.timelineAlphas)
+        from.mixingOutMix = mix
+        active.push(from)
+        indices.push(index)
+      }
+      active.push(track)
+      indices.push(index)
+    }
+    const result = sampleAnimation(active, this.pose, this.slotSet, scaled)
+    if (this._tracks.length === 1 && this._tracks[0]?.clip === EMPTY_CLIP &&
+      this._tracks[0].mixTime >= this._tracks[0].mixDuration) {
+      for (let bone = 0; bone < this.pose.skeleton.setupLocal.length / POSE_STRIDE; bone += 1) {
+        for (let channel = 0; channel < POSE_STRIDE; channel += 1) {
+          setLocal(this.pose, bone, channel, this.pose.skeleton.setupLocal[bone * POSE_STRIDE + channel]!)
+        }
+      }
+    }
+    result.eventData = result.eventData.map(event => ({ ...event, track: indices[event.track] ?? event.track }))
+    for (const [index, track] of this._tracks.entries()) {
+      if (track.mixingFrom !== undefined && track.mixTime >= track.mixDuration) delete track.mixingFrom
+      if (track.clip === EMPTY_CLIP && (prevLast[index] ?? 0) > track.mixDuration) {
+        this._tracks[index] = createTrack(EMPTY_CLIP, { alpha: 0, speed: 0 })
+      }
+    }
     const pending: AnimationEvent[] = []
     for (const event of result.eventData) {
       pending.push({
@@ -441,15 +603,19 @@ export class AnimationState {
     })
     for (const event of pending) this.dispatch(event)
 
-    this._tracks.forEach((track, index) => {
-      const duration = track.clip.duration
-      if (track.loop || duration <= 0 || track.time < duration || (prevLast[index] ?? 0) >= duration) return
-      const next = track.queue.shift()
-      if (next === undefined) return
-      applyQueueEntry(track, next)
-      this.dispatch({ type: 'start', name: next.clip.name, time: 0, track: index })
-    })
     return result
+  }
+
+  /** Transition a track to setup pose; zero duration takes effect on the next update. */
+  setEmptyAnimation(index: number, mixDuration = 0): Track {
+    this.assertLive()
+    while (this._tracks.length <= index) this._tracks.push(createTrack(EMPTY_CLIP))
+    const previous = this._tracks[index]!
+    const empty = createTrack(EMPTY_CLIP, { loop: false, mixDuration,
+      alpha: mixDuration > 0 ? 0 : 1, targetAlpha: 1 })
+    if (mixDuration > 0 && previous.clip !== EMPTY_CLIP) empty.mixingFrom = previous
+    this._tracks[index] = empty
+    return empty
   }
 
   dispose(): void {
@@ -460,6 +626,13 @@ export class AnimationState {
   }
 }
 
+function timelineId(timeline: Timeline): string {
+  if (timeline.kind === 'event') return 'event'
+  const target = timeline.bone ?? timeline.slot ?? timeline.constraint ?? timeline.path ?? ''
+  const component = timeline.axis ?? (timeline.path === undefined ? '' : targetOf(timeline.path).component)
+  return `${timeline.kind}:${target}:${component}:${timeline.channel ?? ''}:${timeline.skin ?? ''}:${timeline.attachment ?? ''}`
+}
+
 function applyQueueEntry(track: Track, entry: TrackQueueEntry): void {
   track.clip = entry.clip
   track.time = 0
@@ -467,12 +640,13 @@ function applyQueueEntry(track: Track, entry: TrackQueueEntry): void {
   track.loopCount = 0
   track.loop = entry.loop
   track.speed = entry.speed
-  track.delay = entry.delay
+  track.delay = 0
   track.mixDuration = entry.mixDuration
   track.mixTime = 0
   track.targetAlpha = entry.alpha
   track.alpha = entry.mixDuration > 0 ? 0 : entry.alpha
   track.blendMode = entry.blendMode
+  track.reverse = entry.reverse
 }
 
 /** 建立 track；默认循环播放、完全替换、1 倍速。 */
@@ -480,7 +654,7 @@ export function createTrack(
   clip: AnimationClip,
   options?: Partial<Pick<
     Track,
-    'alpha' | 'speed' | 'loop' | 'blendMode' | 'time' | 'delay' | 'mixDuration' | 'targetAlpha'
+    'alpha' | 'speed' | 'loop' | 'blendMode' | 'time' | 'delay' | 'mixDuration' | 'targetAlpha' | 'reverse' | 'eventThreshold'
   >>,
 ): Track {
   const alpha = options?.alpha ?? 1
@@ -497,6 +671,8 @@ export function createTrack(
     mixTime: 0,
     delay: options?.delay ?? 0,
     targetAlpha: options?.targetAlpha ?? alpha,
+    eventThreshold: options?.eventThreshold ?? 0,
+    reverse: options?.reverse ?? false,
     queue: [],
   }
 }
@@ -511,50 +687,13 @@ function clamp01(v: number): number {
   return v
 }
 
-/** 三次贝塞尔单轴：P0=(0,0), P3=(1,1)，控制点 y 可越界（过冲）。 */
-function bezierAxis(u: number, c1: number, c2: number): number {
-  const m = 1 - u
-  return 3 * m * m * u * c1 + 3 * m * u * u * c2 + u * u * u
-}
-
-function bezierDerivative(u: number, c1: number, c2: number): number {
-  const m = 1 - u
-  return 3 * m * m * c1 + 6 * m * u * (c2 - c1) + 3 * u * u * (1 - c2)
-}
-
-/** 反解 x(u)=t：固定 8 次 Newton + 32 次二分兜底，保证确定性。 */
-function solveBezierU(t: number, c1x: number, c2x: number): number {
-  if (t <= 0) return 0
-  if (t >= 1) return 1
-  let u = t
-  for (let i = 0; i < 8; i += 1) {
-    const err = bezierAxis(u, c1x, c2x) - t
-    if (Math.abs(err) < 1e-6) return u
-    const d = bezierDerivative(u, c1x, c2x)
-    if (Math.abs(d) < 1e-8) break
-    u = clamp01(u - err / d)
-  }
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 32; i += 1) {
-    u = (lo + hi) / 2
-    const x = bezierAxis(u, c1x, c2x)
-    if (Math.abs(x - t) < 1e-6) return u
-    if (x < t) lo = u
-    else hi = u
-  }
-  return (lo + hi) / 2
-}
-
-/** 单段 x 单调且落在 [0,1] 才视为合法。 */
+/** 官方允许控制点交错或越界；只拒绝非有限值。 */
 function validSegment(segment: readonly number[]): boolean {
   if (segment.length !== 4) return false
   for (let i = 0; i < 4; i += 1) {
     if (!Number.isFinite(segment[i])) return false
   }
-  const c1x = segment[0]!
-  const c2x = segment[2]!
-  return c1x >= 0 && c1x <= 1 && c2x >= 0 && c2x <= 1 && c1x <= c2x
+  return true
 }
 
 /** 已校验的曲线段缓存；曲线是只读数据，按对象身份复用，避免逐帧重复校验。 */
@@ -600,18 +739,50 @@ function wantsBezier(curve: Curve | undefined): boolean {
  * 多段 Bezier：n 段把 [0,1] 等分，第 i 段在段内用第 i 组控制点求 y，
  * 再映射回全局 ((i + y) / n)。
  */
+const bezierPointCache = new WeakMap<object, Float32Array[]>()
+
 function bezierFraction(t: number, segments: readonly number[]): number {
   const count = segments.length / 4
   const scaled = clamp01(t) * count
   const index = Math.min(count - 1, Math.floor(scaled))
   const local = scaled - index
   const base = index * 4
-  const localY = bezierAxis(
-    solveBezierU(local, segments[base]!, segments[base + 2]!),
-    segments[base + 1]!,
-    segments[base + 3]!,
-  )
-  return count === 1 ? localY : (index + localY) / count
+  const x1 = segments[base]!, y1 = segments[base + 1]!
+  const x2 = segments[base + 2]!, y2 = segments[base + 3]!
+  let cached = bezierPointCache.get(segments)
+  if (cached === undefined) {
+    cached = []
+    bezierPointCache.set(segments, cached)
+  }
+  let points = cached[index]
+  if (points === undefined) {
+    points = new Float32Array(18)
+    cached[index] = points
+    const tmpx = (-2 * x1 + x2) * 0.03, tmpy = (-2 * y1 + y2) * 0.03
+    const dddx = (3 * (x1 - x2) + 1) * 0.006, dddy = (3 * (y1 - y2) + 1) * 0.006
+    let ddx = 2 * tmpx + dddx, ddy = 2 * tmpy + dddy
+    let dx = x1 * 0.3 + tmpx + dddx * 0.16666667
+    let dy = y1 * 0.3 + tmpy + dddy * 0.16666667
+    let x = dx, y = dy
+    for (let i = 0; i < 18; i += 2) {
+      points[i] = x
+      points[i + 1] = y
+      dx += ddx; dy += ddy
+      ddx += dddx; ddy += dddy
+      x += dx; y += dy
+    }
+  }
+  let prevX = 0, prevY = 0
+  for (let i = 0; i <= 18; i += 2) {
+    const nextX = i === 18 ? 1 : points[i]!
+    const nextY = i === 18 ? 1 : points[i + 1]!
+    if (local <= nextX || i === 18) {
+      const localY = prevY + (local - prevX) / (nextX - prevX) * (nextY - prevY)
+      return count === 1 ? localY : (index + localY) / count
+    }
+    prevX = nextX; prevY = nextY
+  }
+  return 1
 }
 
 /** Parent 式 3.19：正弦加速 + 匀速 + 正弦减速，默认 k1=0.25, k2=0.75。 */
@@ -845,6 +1016,7 @@ type SampledColor = { readonly light: RGBA; readonly dark: RGBA; readonly legacy
 function sampleColorKeys(
   keys: readonly (ScalarKey | ColorKey)[],
   time: number,
+  channel?: ColorChannel,
 ): SampledColor {
   if (keys.length === 0) return { light: ZERO_DARK, dark: ZERO_DARK, legacy: null }
   const first = keys[0]!
@@ -865,12 +1037,24 @@ function sampleColorKeys(
   const k0 = colorKeys[index]!
   const k1 = colorKeys[index + 1]!
   const span = k1.time - k0.time
-  const f = curveFraction(k0.curve, span <= 0 ? 1 : (time - k0.time) / span, undefined)
+  const u = span <= 0 ? 1 : (time - k0.time) / span
+  const fraction = (index: number) => curveFraction(k0.curves === undefined ? k0.curve : k0.curves[index], u, undefined)
   const d0 = k0.dark ?? ZERO_DARK
   const d1 = k1.dark ?? ZERO_DARK
+  const darkOffset = channel === 'rgb2' ? 3 : 4
   return {
-    light: mixRGBA(k0.light, k1.light, f),
-    dark: mixRGBA(d0, d1, f),
+    light: {
+      r: lerp(k0.light.r, k1.light.r, fraction(0)),
+      g: lerp(k0.light.g, k1.light.g, fraction(1)),
+      b: lerp(k0.light.b, k1.light.b, fraction(2)),
+      a: lerp(k0.light.a, k1.light.a, fraction(channel === 'alpha' ? 0 : 3)),
+    },
+    dark: {
+      r: lerp(d0.r, d1.r, fraction(darkOffset)),
+      g: lerp(d0.g, d1.g, fraction(darkOffset + 1)),
+      b: lerp(d0.b, d1.b, fraction(darkOffset + 2)),
+      a: lerp(d0.a, d1.a, fraction(7)),
+    },
     legacy: null,
   }
 }
@@ -886,16 +1070,16 @@ function applyColorChannels(
   const mode: ColorChannel = channel ?? 'rgba'
   let light = pending.light
   let dark = pending.dark
-  if (mode === 'rgb' || mode === 'rgba') {
+  if (mode === 'rgb' || mode === 'rgba' || mode === 'rgb2' || mode === 'rgba2') {
     light = mixRGBA(light, { ...light, r: sampled.light.r, g: sampled.light.g, b: sampled.light.b }, alpha)
   }
-  if (mode === 'alpha' || mode === 'rgba') {
+  if (mode === 'alpha' || mode === 'rgba' || mode === 'rgba2') {
     light = mixRGBA(light, { ...light, a: sampled.light.a }, alpha)
   }
   if (mode === 'rgb2' || mode === 'rgba2') {
     dark = mixRGBA(dark, { ...dark, r: sampled.dark.r, g: sampled.dark.g, b: sampled.dark.b }, alpha)
   }
-  if (mode === 'alpha2' || mode === 'rgba2') {
+  if (mode === 'alpha2') {
     dark = mixRGBA(dark, { ...dark, a: sampled.dark.a }, alpha)
   }
   return { light, dark }
@@ -904,6 +1088,35 @@ function applyColorChannels(
 /* -------------------------------------------------------------------------- */
 /* deform / drawOrder                                                          */
 /* -------------------------------------------------------------------------- */
+
+function sampleDeformKeys(keys: readonly DeformKey[], time: number, timeline: DeformTimeline): DeformKey {
+  const first = keys[0]!
+  if (timeline.unitScale === undefined && timeline.baseVertices === undefined && timeline.vertexIndices === undefined) {
+    return keys[lastKeyIndex(keys, time)]!
+  }
+  const length = timeline.baseVertices?.length ?? (timeline.vertexIndices?.length ?? 0) * 2
+  const sampled = new Float32Array(length)
+  const index = lastKeyIndex(keys, time)
+  const from = keys[index]!
+  const to = keys[Math.min(index + 1, keys.length - 1)]!
+  const span = to.time - from.time
+  const factor = span > 0 && time > from.time && index + 1 < keys.length
+    ? curveFraction(from.curve, (time - from.time) / span, undefined) : 0
+  const component = (key: DeformKey, sourceIndex: number, targetIndex: number): number => {
+    if (sourceIndex < 0) return 0
+    const raw = key.vertices[sourceIndex - key.offset]
+    if (raw === undefined) return 0
+    const scale = (timeline.unitScale ?? 1) * (targetIndex % 2 === 1 && timeline.flipY ? -1 : 1)
+    return raw * scale - (timeline.weighted ? 0 : timeline.baseVertices?.[targetIndex] ?? 0)
+  }
+  for (let i = 0; i < length; i += 1) {
+    const influenceSource = timeline.vertexIndices?.[Math.floor(i / 2)] ?? -1
+    const source = timeline.weighted ? (influenceSource < 0 ? -1 : influenceSource + i % 2) : i
+    const a = component(from, source, i)
+    sampled[i] = a + (component(to, source, i) - a) * factor
+  }
+  return { time, offset: 0, vertices: sampled }
+}
 
 function accumulateDeform(
   target: Map<string, Float32Array>,
@@ -975,7 +1188,7 @@ function fireEvents(
     if (e.time < from || e.time > to) continue
     if (!includeFrom && e.time === from) continue
     // 去重键含循环序号与事件时间：同一圈同一事件至多一次，跨圈各自触发。
-    const id = `${loopTag}:${e.time}:${e.name}`
+    const id = `${track}:${loopTag}:${e.time}:${e.name}`
     if (seen.has(id)) continue
     seen.add(id)
     out.push({
@@ -1015,6 +1228,64 @@ function blend(cur: number | undefined, setup: number, sample: number, alpha: nu
  * replace 通道每帧从 setup 重建（scrub 幂等），additive 通道在其上叠加。
  * 返回的 events 是本帧一次性结果；dominant 为最后写入的 replace clip 名。
  */
+export function applySliderBoneAnimation(
+  clip: AnimationClip, pose: Pose, time: number, mix: number, additive: boolean, loop: boolean,
+): void {
+  const at = loop && clip.duration > 0 ? ((time % clip.duration) + clip.duration) % clip.duration : time
+  for (const timeline of clip.timelines) {
+    if (timeline.kind !== 'rotate' && timeline.kind !== 'translate' && timeline.kind !== 'scale' && timeline.kind !== 'shear') continue
+    const bone = boneOf(timeline, pose.skeleton)
+    if (bone === undefined || timeline.keys.length === 0 || at < timeline.keys[0]!.time) continue
+    const component = timeline.path === undefined ? '' : timeline.path.slice(timeline.path.lastIndexOf('.') + 1)
+    const channels = timeline.kind === 'rotate' ? [CH_ROT] : timeline.kind === 'translate'
+      ? component === 'x' ? [CH_X] : component === 'y' ? [CH_Y] : [CH_X, CH_Y]
+      : timeline.kind === 'scale' ? component === 'sx' ? [CH_SX] : component === 'sy' ? [CH_SY] : [CH_SX, CH_SY]
+        : component === 'shx' ? [CH_SHX] : component === 'shy' ? [CH_SHY] : [CH_SHX, CH_SHY]
+    const value = sampleScalar(timeline.keys, at)
+    for (const channel of channels) {
+      const setup = pose.skeleton.setupLocal[bone * POSE_STRIDE + channel]!
+      const current = pose.local[bone * POSE_STRIDE + channel]!
+      const target = timeline.kind === 'scale' ? setup * value : setup + value
+      const next = additive ? current + (timeline.kind === 'scale' ? setup * (value - 1) : value) * mix
+        : current + (target - current) * mix
+      setLocal(pose, bone, channel, next)
+    }
+  }
+}
+
+/** Apply instant slider timelines to the current applied slot state at constraint time. */
+export function applySliderSlotAnimation(
+  clip: AnimationClip, slotSet: SlotSet, time: number, loop: boolean,
+): void {
+  // Slider.update passes null for events; Animation.apply reduces mapped time modulo duration.
+  const at = loop && clip.duration > 0 ? time % clip.duration : time
+  const positions = new Map<number, number>()
+  for (const timeline of clip.timelines) {
+    if (timeline.kind === 'attachment') {
+      const keys = timeline.keys
+      if (keys === undefined || keys.length === 0 || at < keys[0]!.time) continue
+      const index = slotOf(timeline)
+      if (index < 0 || index >= slotSet.slots.length) continue
+      const key = keys[lastKeyIndex(keys, at)]!
+      if (isAttachmentKey(key)) setSlotAttachment(slotSet, index, key.name)
+    } else if (timeline.kind === 'drawOrder') {
+      const keys = timeline.keys
+      if (keys === undefined || keys.length === 0 || at < keys[0]!.time) continue
+      if (isDrawOrderKey(keys[0]!)) {
+        const key = keys[lastKeyIndex(keys, at)] as DrawOrderKey
+        setDrawOrder(slotSet, applyDrawOffsets(setupDrawOrder(slotSet), key.offsets))
+      } else {
+        const position = /^drawOrder\[(\d+)\]$/.exec(timeline.path ?? '')
+        if (position !== null) positions.set(Number(position[1]), sampleStepped(keys as readonly ScalarKey[], at))
+      }
+    }
+  }
+  if (positions.size > 0) {
+    const order = setupDrawOrder(slotSet).map((slot, position) => positions.get(position) ?? slot)
+    setDrawOrder(slotSet, order)
+  }
+}
+
 export function sampleAnimation(
   tracks: readonly Track[],
   pose: Pose,
@@ -1026,17 +1297,28 @@ export function sampleAnimation(
   const accs = new Map<BoneId, Acc>()
   let dominant: string | null = null
   const pendingAttachment = new Map<number, string | null>()
+  for (const track of tracks) {
+    if (track.mixingOutMix === undefined) continue
+    for (const timeline of track.clip.timelines) {
+      if (timeline.kind !== 'attachment') continue
+      const index = slotOf(timeline)
+      pendingAttachment.set(index, slotSet.slots[index]?.data.attachment ?? null)
+    }
+  }
   const pendingColor = new Map<number, PendingColor>()
+  const darkSlots = new Set<number>()
   const pendingLegacyColor = new Map<number, number>()
   const pendingDeform = new Map<number, number>()
   const deformOffsets = new Map<string, Float32Array>()
   const pendingIk = new Map<number, number>()
   const pendingSequence = new Map<number, number>()
   const constraintMix = new Map<number, number>()
-  const constraintMixByName = new Map<string, number>()
+  const constraintMixByName = new Map<string, number>() as ConstraintMixMap
+  constraintMixByName.channels = new Map<string, ConstraintChannels[]>()
   const constraintIds = new Map<string, number>()
   const constraintNames: string[] = []
   let drawOrderSpec: { kind: 'shift'; shift: number } | { kind: 'order'; order: number[] } | null = null
+  const drawOrderPositions = new Map<number, number>()
   const skeleton = pose.skeleton
 
   const addConstraint = (name: string, mix: number): void => {
@@ -1065,7 +1347,7 @@ export function sampleAnimation(
       continue
     }
     // crossfade：按 mixTime 线性提升 alpha；未设置 mixDuration 时完全不动 alpha。
-    if (track.mixDuration > 0 && track.mixTime < track.mixDuration && dt > 0) {
+    if (track.mixingOutMix === undefined && track.mixDuration > 0 && track.mixTime < track.mixDuration && dt > 0) {
       track.mixTime = Math.min(track.mixDuration, track.mixTime + dt)
       track.alpha = track.targetAlpha * (track.mixTime / track.mixDuration)
     }
@@ -1077,28 +1359,49 @@ export function sampleAnimation(
     const isFirst = prev === 0 && prevLoops === 0 && track.time === 0 && dt > 0
     let curr = track.time
 
-    if (dt > 0 && track.speed > 0 && duration > 0) {
+    if (dt > 0 && track.speed > 0 && (duration > 0 || clip === EMPTY_CLIP)) {
       curr += dt * track.speed
-      if (track.loop) {
+      if (track.loop && duration > 0) {
         if (curr >= duration) {
           const wraps = Math.floor(curr / duration)
           track.loopCount += wraps
           curr -= wraps * duration
         }
-      } else if (curr > duration) {
+      } else if (duration > 0 && curr > duration) {
         curr = duration
       }
     }
     track.time = curr
 
     const loops = track.loopCount - prevLoops
-    if (dt !== 0 && track.alpha >= 0.5) {
+    if (dt !== 0 && (track.mixingOutMix === undefined
+      ? track.alpha > 0 : track.mixingOutMix < track.eventThreshold)) {
       const evs: EventKey[] = []
       for (const tl of clip.timelines) {
         if (tl.kind === 'event') evs.push(...eventKeysOf(tl))
       }
       if (evs.length > 0) {
-        if (isFirst) {
+        if (track.reverse) {
+          const from = duration - prev
+          const to = duration - curr
+          // Spine's reverse interval includes the destination, excludes the origin,
+          // and visits the low segment before the high segment on a loop wrap.
+          if (from >= to) {
+            for (const event of evs) {
+              if (event.time >= to && event.time < from)
+                fireEvents([event], event.time, event.time, true, 0, trackIndex, eventData, seen)
+            }
+          } else {
+            for (const event of evs) {
+              if (event.time < from)
+                fireEvents([event], event.time, event.time, true, 0, trackIndex, eventData, seen)
+            }
+            for (const event of evs) {
+              if (event.time >= to)
+                fireEvents([event], event.time, event.time, true, 1, trackIndex, eventData, seen)
+            }
+          }
+        } else if (isFirst) {
           for (let k = 0; k < loops; k += 1) fireEvents(evs, 0, duration, true, k, trackIndex, eventData, seen)
           fireEvents(evs, 0, curr, true, loops, trackIndex, eventData, seen)
         } else if (loops > 0) {
@@ -1111,18 +1414,27 @@ export function sampleAnimation(
       }
     }
     track.lastTime = curr
+    const applyTime = track.reverse ? duration - curr : curr
 
     const additive = track.blendMode === 'additive'
     let wrote = false
-    for (const tl of clip.timelines) {
+    for (const [timelineIndex, tl] of clip.timelines.entries()) {
       if (tl.kind === 'event') continue
+      const alpha = track.timelineAlphas?.[timelineIndex] ?? track.alpha
+      if (alpha <= 0 && tl.kind !== 'attachment' && tl.kind !== 'drawOrder') continue
 
       if (tl.kind === 'rotate') {
         const id = boneOf(tl, skeleton)
-        if (id === undefined) continue
+        if (id === undefined || tl.keys.length === 0) continue
         const acc = accs.get(id) ?? {}
         const setup = skeleton.setupLocal[id * POSE_STRIDE + CH_ROT]!
-        acc.rot = blend(acc.rot, setup, sampleAngle(tl.keys, curr), track.alpha, additive, false)
+        if (applyTime < tl.keys[0]!.time) {
+          // An unowned channel starts at setup; an earlier track remains the underlying mix.
+          if (acc.rot === undefined) acc.rot = setup
+          accs.set(id, acc)
+          continue
+        }
+        acc.rot = blend(acc.rot, setup, sampleAngle(tl.keys, applyTime), alpha, additive, false)
         accs.set(id, acc)
         wrote = true
         continue
@@ -1130,18 +1442,25 @@ export function sampleAnimation(
 
       if (tl.kind === 'translate' || tl.kind === 'scale' || tl.kind === 'shear') {
         const id = boneOf(tl, skeleton)
-        if (id === undefined) continue
+        if (id === undefined || tl.keys.length === 0) continue
         if (tl.kind === 'scale' && additive) continue // 乘数不可叠加
-        const value = sampleScalar(tl.keys, curr)
         const component = tl.axis !== undefined
           ? axisComponent(tl.kind, tl.axis)
           : targetOf(tl.path ?? '').component
         const acc = accs.get(id) ?? {}
         const base = id * POSE_STRIDE
+        if (applyTime < tl.keys[0]!.time) {
+          for (const c of componentsOf(tl.kind, component)) {
+            if (acc[c] === undefined) acc[c] = skeleton.setupLocal[base + CHANNEL_OF[c]!]!
+          }
+          accs.set(id, acc)
+          continue
+        }
+        const value = sampleScalar(tl.keys, applyTime)
         for (const c of componentsOf(tl.kind, component)) {
           const channel = CHANNEL_OF[c]!
           const setup = skeleton.setupLocal[base + channel]!
-          acc[c] = blend(acc[c], setup, value, track.alpha, additive, tl.kind === 'scale')
+          acc[c] = blend(acc[c], setup, value, alpha, additive, tl.kind === 'scale')
         }
         accs.set(id, acc)
         wrote = true
@@ -1150,13 +1469,55 @@ export function sampleAnimation(
 
       if (tl.kind === 'sequence') {
         const index = slotOf(tl)
-        pendingSequence.set(index, Math.round(sampleStepped(tl.keys, curr)))
+        pendingSequence.set(index, Math.round(sampleStepped(tl.keys, applyTime)))
         wrote = true
         continue
       }
 
-      if (tl.kind === 'ik' || tl.kind === 'transform' || tl.kind === 'path' || tl.kind === 'physics') {
-        const mix = sampleScalar(tl.keys, curr)
+      if ((tl.kind === 'ik' || tl.kind === 'transform' || tl.kind === 'path' || tl.kind === 'physics' || tl.kind === 'slider') && 'frames' in tl) {
+        if (tl.frames.length === 0) continue
+        if (tl.kind === 'physics' && tl.channel === 'reset') {
+          const crossed = tl.frames.some(frame => (loops > 0 || frame.time > prev ||
+            (isFirst && frame.time === 0)) && frame.time <= curr)
+          if (crossed && dt > 0) {
+            const name = tl.constraint ?? tl.path ?? '-1'
+            const existing = constraintMixByName.channels.get(name) ?? []
+            existing.push({ kind: 'physics', values: { reset: true }, alpha: alpha, additive: false })
+            constraintMixByName.channels.set(name, existing)
+          }
+          continue
+        }
+        if (curr < tl.frames[0]!.time && !(tl.kind === 'physics' && (tl.path === '-1' || tl.path === ''))) continue
+        const name = tl.constraint ?? tl.path
+        if (name === undefined) continue
+        const fields = tl.kind === 'ik' ? ['mix', 'softness']
+          : tl.kind === 'transform' ? ['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY']
+            : tl.kind === 'physics' || tl.kind === 'slider' ? [tl.channel ?? 'mix']
+              : tl.channel === 'mix' ? ['mixRotate', 'mixX', 'mixY'] : [tl.channel ?? 'position']
+        const values: Record<string, number | boolean> = {}
+        for (const [component, field] of fields.entries()) {
+          values[field] = tl.kind === 'physics' && curr < tl.frames[0]!.time ? 0 : sampleScalar(tl.frames.map(frame => ({
+            time: frame.time, value: frame.values[component]!,
+            ...(frame.curves?.[component] === undefined ? {} : { curve: frame.curves[component] }),
+          })), curr)
+        }
+        if (tl.kind === 'ik') {
+          const frame = tl.frames[lastKeyIndex(tl.frames, curr)]!
+          values.bendDirection = frame.bendDirection ?? 1
+          values.compress = frame.compress ?? false
+          values.stretch = frame.stretch ?? false
+        }
+        const channel = { kind: tl.kind, values, alpha: alpha, additive }
+        const existing = constraintMixByName.channels.get(name) ?? []
+        existing.push(channel)
+        constraintMixByName.channels.set(name, existing)
+        wrote = true
+        continue
+      }
+
+      if (tl.kind === 'ik' || tl.kind === 'transform' || tl.kind === 'path' || tl.kind === 'physics' || tl.kind === 'slider') {
+        if (!('keys' in tl)) continue
+        const mix = sampleScalar(tl.keys, applyTime)
         addConstraint(tl.constraint ?? tl.path ?? String(slotOf(tl)), mix)
         if (tl.kind === 'ik') pendingIk.set(slotOf(tl), clamp01(mix))
         wrote = true
@@ -1168,9 +1529,16 @@ export function sampleAnimation(
         const keys = tl.keys
         if (keys === undefined || keys.length === 0) continue
         const index = slotOf(tl)
+        if (track.mixingOutMix !== undefined &&
+          (track.mixingOutMix >= (track.mixAttachmentThreshold ?? 0) ||
+            alpha < (track.alphaAttachmentThreshold ?? 0))) {
+          if (!pendingAttachment.has(index)) pendingAttachment.set(index, slotSet.slots[index]?.data.attachment ?? null)
+          continue
+        }
+        if (track.mixingOutMix === undefined && alpha < (track.alphaAttachmentThreshold ?? 0)) continue
         const first = keys[0]
         if (first !== undefined && isAttachmentKey(first)) {
-          const key = keys[lastKeyIndex(keys, curr)]!
+          const key = keys[lastKeyIndex(keys, applyTime)]!
           pendingAttachment.set(index, isAttachmentKey(key) ? key.name : String('value' in key ? key.value : ''))
         } else {
           pendingAttachment.set(index, String(sampleScalar(keys as readonly ScalarKey[], curr)))
@@ -1184,15 +1552,16 @@ export function sampleAnimation(
         const keys = tl.keys
         if (keys === undefined || keys.length === 0) continue
         const index = slotOf(tl)
-        const sampled = sampleColorKeys(keys, curr)
+        const sampled = sampleColorKeys(keys, applyTime, tl.channel)
         if (sampled.legacy !== null) {
           pendingLegacyColor.set(index, sampled.legacy)
         }
         const base = pendingColor.get(index) ?? {
           light: slotSet.slots[index]?.data.color ?? { r: 1, g: 1, b: 1, a: 1 },
-          dark: ZERO_DARK,
+          dark: slotSet.slots[index]?.data.dark ?? ZERO_DARK,
         }
-        pendingColor.set(index, applyColorChannels(base, sampled, tl.channel, track.alpha))
+        pendingColor.set(index, applyColorChannels(base, sampled, tl.channel, alpha))
+        if (tl.channel === 'rgb2' || tl.channel === 'rgba2' || tl.channel === 'alpha2') darkSlots.add(index)
         wrote = true
         continue
       }
@@ -1203,8 +1572,8 @@ export function sampleAnimation(
         const index = slotOf(tl)
         const first = keys[0]
         if (first !== undefined && isDeformKey(first)) {
-          const key = keys[lastKeyIndex(keys, curr)] as DeformKey
-          accumulateDeform(deformOffsets, key, track.alpha, deformMeshKey(tl, index))
+          const key = sampleDeformKeys(keys as readonly DeformKey[], applyTime, tl)
+          accumulateDeform(deformOffsets, key, alpha, deformMeshKey(tl, index))
         } else {
           pendingDeform.set(index, sampleScalar(keys as readonly ScalarKey[], curr))
         }
@@ -1213,16 +1582,22 @@ export function sampleAnimation(
       }
 
       if (tl.kind === 'drawOrder') {
-        if (additive) continue
+        if (additive || (track.mixingOutMix !== undefined &&
+          track.mixingOutMix >= (track.mixDrawOrderThreshold ?? 0))) continue
         const keys = tl.keys
         if (keys === undefined || keys.length === 0) continue
         const first = keys[0]
         if (first !== undefined && isDrawOrderKey(first)) {
-          const key = keys[lastKeyIndex(keys, curr)] as DrawOrderKey
+          const key = keys[lastKeyIndex(keys, applyTime)] as DrawOrderKey
           drawOrderSpec = { kind: 'order', order: applyDrawOffsets(setupDrawOrder(slotSet), key.offsets) }
         } else {
-          const shift = sampleScalar(keys as readonly ScalarKey[], curr)
-          drawOrderSpec = { kind: 'shift', shift }
+          const position = /^drawOrder\[(\d+)\]$/.exec(tl.path ?? '')
+          if (position !== null) {
+            drawOrderPositions.set(Number(position[1]), sampleStepped(keys as readonly ScalarKey[], applyTime))
+          } else {
+            const shift = sampleScalar(keys as readonly ScalarKey[], curr)
+            drawOrderSpec = { kind: 'shift', shift }
+          }
         }
         wrote = true
         continue
@@ -1255,7 +1630,9 @@ export function sampleAnimation(
   }
 
   const baseOrder = setupDrawOrder(slotSet)
-  if (drawOrderSpec === null) {
+  if (drawOrderPositions.size > 0) {
+    setDrawOrder(slotSet, baseOrder.map((slot, position) => drawOrderPositions.get(position) ?? slot))
+  } else if (drawOrderSpec === null) {
     setDrawOrder(slotSet, baseOrder)
   } else if (drawOrderSpec.kind === 'order') {
     setDrawOrder(slotSet, drawOrderSpec.order)
@@ -1268,7 +1645,9 @@ export function sampleAnimation(
   }
 
   const colorDark = new Map<number, RGBA>()
-  for (const [slot, color] of pendingColor) colorDark.set(slot, color.dark)
+  for (const [slot, color] of pendingColor) {
+    if (darkSlots.has(slot) || slotSet.slots[slot]?.data.dark !== undefined) colorDark.set(slot, color.dark)
+  }
 
   return {
     events: eventData.map((event) => event.name),

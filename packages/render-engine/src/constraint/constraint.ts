@@ -9,12 +9,14 @@
  */
 import {
   CH_ROT, CH_SHX, CH_SHY, CH_SX, CH_SY, CH_X, CH_Y, POSE_STRIDE, WORLD_STRIDE,
-  angleDelta, createAffine, invertAffine, normalizeAngle,
+  angleDelta, createAffine, invertAffine, normalizeAngle, parentBasis,
 } from '../core/math'
-import { addRotation, getRotation, setLocal, updateWorld, type Pose } from '../core/pose'
+import { addRotation, getRotation, setLocal, setWorldOverride, updateWorld, type Pose } from '../core/pose'
 import type { CompiledSkeleton } from '../core/skeleton'
+import { applySliderBoneAnimation, applySliderSlotAnimation, type AnimationClip, type ConstraintMixMap } from '../animation/animation'
+import type { SlotSet } from '../slot/slot'
 
-export type ConstraintKind = 'transform' | 'path' | 'ik' | 'physics'
+export type ConstraintKind = 'transform' | 'path' | 'ik' | 'physics' | 'slider'
 
 /** 所有约束的公共头。order 小者先求值，order 相同按 id 字典序。 */
 export type ConstraintBase = {
@@ -30,7 +32,27 @@ export type ConstraintBase = {
  * 让 bone 跟随 sourceBone 的 transform。
  * 旧字段 mixRotation / mixTranslation 保留；新字段逐轴覆盖，缺省时回退到旧字段。
  */
+export type TransformProperty = 'rotate' | 'x' | 'y' | 'scaleX' | 'scaleY' | 'shearY'
+
+export type TransformFrom = {
+  readonly kind: TransformProperty
+  readonly offset: number
+  readonly to: readonly {
+    readonly kind: TransformProperty
+    readonly offset: number
+    readonly max: number
+    readonly scale: number
+  }[]
+}
+
 export type TransformConstraint = ConstraintBase & {
+  readonly bones?: readonly number[]
+  readonly localSource?: boolean
+  readonly localTarget?: boolean
+  readonly additive?: boolean
+  readonly clamp?: boolean
+  readonly offsets?: readonly number[]
+  readonly properties?: readonly TransformFrom[]
   kind: 'transform'
   /** 旧字段；未提供时回退到 target。 */
   sourceBone?: number
@@ -85,11 +107,24 @@ export type PathConstraint = ConstraintBase & {
   readonly translateMix?: number
   /** 闭合路径：最后一段回到首点。 */
   readonly closed?: boolean
+  /** Spine path vertices retain their per-bone weights in attachment vertex order. */
+  readonly spinePath?: {
+    readonly vertices: readonly (readonly { readonly bone: number; readonly x: number; readonly y: number; readonly weight: number }[])[]
+    readonly lengths: Float32Array
+    readonly closed: boolean
+    readonly constantSpeed: boolean
+  }
+  readonly spacingMode?: 'length' | 'fixed' | 'percent' | 'proportional'
+  readonly positionMode?: 'fixed' | 'percent'
+  readonly rotateMode?: 'tangent' | 'chain' | 'chainScale'
+  readonly offsetRotation?: number
 }
 
 /** 以 bone 为末端锚点、chainLength 为链节数的 IK 约束；目标取自 targetBone 的原点。 */
 export type IkConstraint = ConstraintBase & {
   kind: 'ik'
+  /** Imported Spine 4.3 IK uses the official one/two-bone equations. */
+  readonly spine?: boolean
   /** 旧字段；未提供时回退到 target。 */
   targetBone?: number
   /** 与 targetBone 等价的 Spine 命名。 */
@@ -120,12 +155,30 @@ export type IkConstraint = ConstraintBase & {
  */
 export type PhysicsConstraint = ConstraintBase & {
   kind: 'physics'
+  /** Spine world-force context, in imported bone units. Defaults match Skeleton. */
+  readonly environment?: { referenceScale: number; windX: number; windY: number; gravityX: number; gravityY: number; scaleX?: number; scaleY?: number }
+  readonly x?: number
+  readonly y?: number
+  readonly rotate?: number
+  readonly scaleX?: number
+  readonly shearX?: number
+  readonly limit?: number
+  readonly step?: number
+  readonly scaleYMode?: 'None' | 'Uniform' | 'Volume'
+  readonly inertiaGlobal?: boolean
+  readonly strengthGlobal?: boolean
+  readonly dampingGlobal?: boolean
+  readonly massGlobal?: boolean
+  readonly windGlobal?: boolean
+  readonly gravityGlobal?: boolean
+  readonly mixGlobal?: boolean
   /** 可选参考骨；缺省使用 bone 的父骨。 */
   readonly target?: number
   readonly inertia?: number
   readonly strength?: number
   readonly damping?: number
   readonly mass?: number
+  readonly massInverse?: number
   readonly wind?: number
   readonly gravity?: number
   readonly mix?: number
@@ -135,6 +188,13 @@ export type PhysicsConstraint = ConstraintBase & {
 
 /** 单条骨骼惯性约束的可变状态；可导出供外部重置/诊断。 */
 export type PhysicsConstraintState = {
+  spine?: {
+    ux: number; uy: number; cx: number; cy: number; tx: number; ty: number
+    x: number; y: number; rot: number; scale: number
+    xv: number; yv: number; rv: number; sv: number
+    xl: number; yl: number; rl: number; sl: number
+    remaining: number; reset: boolean; time: number; lastTime: number
+  }
   offsetX: number
   offsetY: number
   offsetRot: number
@@ -156,7 +216,23 @@ export type PhysicsConstraintState = {
   initialized: boolean
 }
 
-export type ConstraintData = TransformConstraint | PathConstraint | IkConstraint | PhysicsConstraint
+export type SliderConstraint = ConstraintBase & {
+  kind: 'slider'
+  readonly animation: string
+  readonly clip?: AnimationClip
+  readonly sourceBone?: number
+  readonly property?: TransformProperty
+  readonly from?: number
+  readonly to?: number
+  readonly scale?: number
+  readonly time: number
+  readonly mix: number
+  readonly local: boolean
+  readonly additive: boolean
+  readonly loop: boolean
+}
+
+export type ConstraintData = TransformConstraint | PathConstraint | IkConstraint | PhysicsConstraint | SliderConstraint
 
 /** IK 求解结果。reason 覆盖：命中 / 不可达 / 限位 / 迭代超限 / 退化。 */
 export type IkResult = {
@@ -167,8 +243,10 @@ export type IkResult = {
 }
 
 export type ConstraintSolver = {
-  solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>): void
+  solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>, slotSet?: SlotSet, animationReset?: boolean): void
   results: ReadonlyMap<string, IkResult>
+  /** Spine Skeleton.physicsTranslate: inherited host movement in skeleton coordinates. */
+  physicsTranslate(x: number, y: number): void
   /** 清空 IK 结果与所有 physics 累积状态（下一帧重新初始化）。 */
   reset(): void
 }
@@ -233,6 +311,10 @@ function transformSourceBone(c: TransformConstraint): number {
   const source = c.sourceBone ?? c.target
   if (source === undefined) throw new Error('constraint.sourceBone')
   return source
+}
+
+function transformBones(c: TransformConstraint): readonly number[] {
+  return c.bones !== undefined && c.bones.length > 0 ? c.bones : [c.bone]
 }
 
 /** 当前姿态下整条链的实际长度（各段枢轴距离 + 末端尖端）。 */
@@ -422,8 +504,8 @@ function validateIkConstraint(c: IkConstraint): void {
   const dir = bendDirectionOf(c)
   if (dir !== 1 && dir !== -1) throw new Error('ik.bendDirection')
   ikTargetBone(c)
+  if (c.softness !== undefined && (!Number.isFinite(c.softness) || c.softness < 0)) throw new Error('ik.softness')
   for (const [name, value] of [
-    ['softness', c.softness],
     ['compress', c.compress],
     ['stretch', c.stretch],
     ['mix', c.mix],
@@ -520,6 +602,136 @@ function solveAnalytic(
     iterations: 1,
     reason: forcedReason === 'limit' ? 'limit' : 'ok',
   }
+}
+
+// Spine 4.3 IK is solved in the parent bone's parent space. In particular,
+// child offsets and nonuniform scale cannot be replaced by rest lengths.
+function solveSpineIk(pose: Pose, c: IkConstraint): IkResult {
+  const sk = pose.skeleton
+  const child = c.bone
+  const parent = c.chainLength === 2 ? sk.parent[child]! : child
+  const grandparent = sk.parent[parent]!
+  const target = targetOf(pose, ikTargetBone(c))
+  if (parent < 0 || grandparent < 0) return degenerateResult(pose, target, child)
+  if (c.chainLength === 2 && (sk.inherit[parent] !== 'normal' || sk.inherit[child] !== 'normal')) {
+    const residual = residualOf(pose, target, [parent, child])
+    return { reached: residual <= c.tolerance, residual, iterations: 0, reason: 'ok' }
+  }
+  const mix = clamp01((c.mix ?? 1) * c.weight)
+  const pi = parent * POSE_STRIDE, gi = grandparent * WORLD_STRIDE
+  const px = pose.local[pi + CH_X]!, py = pose.local[pi + CH_Y]!
+  const psx0 = pose.local[pi + CH_SX]!, psy0 = pose.local[pi + CH_SY]!
+  const w = pose.world
+  const a0 = w[gi]!, b0 = w[gi + 2]!, c0 = w[gi + 1]!, d0 = w[gi + 3]!
+  const det = a0 * d0 - b0 * c0
+  const inverse = Math.abs(det) <= 1e-8 ? 0 : 1 / det
+  const tx0 = target[0] - w[gi + 4]!, ty0 = target[1] - w[gi + 5]!
+  let tx = (tx0 * d0 - ty0 * b0) * inverse - px
+  let ty = (ty0 * a0 - tx0 * c0) * inverse - py
+  if (c.chainLength === 1) {
+    let delta = Math.atan2(ty, tx) - pose.local[pi + CH_SHX]! - pose.local[pi + CH_ROT]!
+    if (psx0 < 0) delta += Math.PI
+    addRotation(pose, parent, normalizeAngle(delta) * mix)
+    const length = sk.bones[parent]!.length * psx0
+    const distance2 = tx * tx + ty * ty
+    if (length > 1e-8 && ((c.compress && distance2 < length * length)
+      || (c.stretch && distance2 > length * length))) {
+      const factor = (Math.sqrt(distance2) / length - 1) * mix + 1
+      setLocal(pose, parent, CH_SX, psx0 * factor)
+      if (c.uniform) setLocal(pose, parent, CH_SY, psy0 * factor)
+    }
+    updateWorld(pose)
+    const residual = residualOf(pose, target, [parent])
+    return { reached: residual <= c.tolerance, residual, iterations: 1, reason: 'ok' }
+  }
+  const ci = child * POSE_STRIDE, wi = parent * WORLD_STRIDE
+  const psx = Math.abs(psx0), psy = Math.abs(psy0), csx = Math.abs(pose.local[ci + CH_SX]!)
+  const os1 = psx0 < 0 ? Math.PI : 0
+  const os2 = pose.local[ci + CH_SX]! < 0 ? Math.PI : 0
+  const s2 = (psx0 < 0 ? -1 : 1) * (psy0 < 0 ? -1 : 1)
+  const uniform = Math.abs(psx - psy) <= 1e-8
+  const cx = pose.local[ci + CH_X]!
+  let cy = pose.local[ci + CH_Y]!
+  if (!uniform || c.stretch) {
+    cy = 0
+    setLocal(pose, child, CH_Y, 0)
+  }
+  const cwx = w[wi]! * cx + w[wi + 2]! * cy + w[wi + 4]!
+  const cwy = w[wi + 1]! * cx + w[wi + 3]! * cy + w[wi + 5]!
+  const lx = cwx - w[gi + 4]!, ly = cwy - w[gi + 5]!
+  const dx = (lx * d0 - ly * b0) * inverse - px
+  const dy = (ly * a0 - lx * c0) * inverse - py
+  const l1 = Math.hypot(dx, dy)
+  let l2 = sk.bones[child]!.length * csx
+  if (l1 < 1e-8) return degenerateResult(pose, target, child)
+  let dd = tx * tx + ty * ty
+  let softness = c.softness ?? 0
+  if (softness !== 0) {
+    softness *= psx * (csx + 1) * 0.5
+    const td = Math.sqrt(dd), sd = td - l1 - l2 * psx + softness
+    if (sd > 0 && td > 0) {
+      let p = Math.min(1, sd / (softness * 2)) - 1
+      p = (sd - softness * (1 - p * p)) / td
+      tx -= p * tx
+      ty -= p * ty
+      dd = tx * tx + ty * ty
+    }
+  }
+  const bend = bendDirectionOf(c)
+  let a1 = 0, a2 = 0
+  if (uniform) {
+    l2 *= psx
+    const cos = Math.max(-1, Math.min(1, (dd - l1 * l1 - l2 * l2) / (2 * l1 * l2)))
+    a2 = Math.acos(cos) * bend
+    if (c.stretch && dd > (l1 + l2) ** 2) {
+      const factor = (Math.sqrt(dd) / (l1 + l2) - 1) * mix + 1
+      setLocal(pose, parent, CH_SX, psx0 * factor)
+      if (c.uniform) setLocal(pose, parent, CH_SY, psy0 * factor)
+    }
+    const a = l1 + l2 * cos, b = l2 * Math.sin(a2)
+    a1 = Math.atan2(ty * a - tx * b, tx * a + ty * b)
+  } else {
+    const a = psx * l2, b = psy * l2, aa = a * a, bb = b * b, ta = Math.atan2(ty, tx)
+    const cc = bb * l1 * l1 + aa * dd - aa * bb
+    const c1 = -2 * bb * l1, c2 = bb - aa, disc = c1 * c1 - 4 * c2 * cc
+    let solved = false
+    if (disc >= 0) {
+      let q = Math.sqrt(disc)
+      if (c1 < 0) q = -q
+      q = -(c1 + q) * 0.5
+      const r0 = q / c2, r1 = cc / q
+      const r = Math.abs(r0) < Math.abs(r1) ? r0 : r1
+      const other = dd - r * r
+      if (other >= 0) {
+        const y = Math.sqrt(other) * bend
+        a1 = ta - Math.atan2(y, r)
+        a2 = Math.atan2(y / psy, (r - l1) / psx)
+        solved = true
+      }
+    }
+    if (!solved) {
+      let minAngle = Math.PI, minX = l1 - a, minDist = minX * minX, minY = 0
+      let maxAngle = 0, maxX = l1 + a, maxDist = maxX * maxX, maxY = 0
+      let candidate = -a * l1 / (aa - bb)
+      if (candidate >= -1 && candidate <= 1) {
+        candidate = Math.acos(candidate)
+        const x = a * Math.cos(candidate) + l1, y = b * Math.sin(candidate), dist = x * x + y * y
+        if (dist < minDist) { minAngle = candidate; minDist = dist; minX = x; minY = y }
+        if (dist > maxDist) { maxAngle = candidate; maxDist = dist; maxX = x; maxY = y }
+      }
+      if (dd <= (minDist + maxDist) * 0.5) {
+        a1 = ta - Math.atan2(minY * bend, minX); a2 = minAngle * bend
+      } else {
+        a1 = ta - Math.atan2(maxY * bend, maxX); a2 = maxAngle * bend
+      }
+    }
+  }
+  const os = Math.atan2(cy, cx) * s2
+  addRotation(pose, parent, normalizeAngle(a1 - os + os1 - pose.local[pi + CH_ROT]!) * mix)
+  addRotation(pose, child, normalizeAngle((a2 + os) * s2 + os2 - pose.local[ci + CH_SHX]! * s2 - pose.local[ci + CH_ROT]!) * mix)
+  updateWorld(pose)
+  const residual = residualOf(pose, target, [parent, child])
+  return { reached: residual <= c.tolerance, residual, iterations: 1, reason: 'ok' }
 }
 
 /** CCD：由外向内逐关节把「末端→关节」转到「目标→关节」，单次增量夹到 ±MAX_STEP。 */
@@ -651,6 +863,7 @@ export function solveIk(pose: Pose, c: IkConstraint): IkResult {
   validateIkConstraint(c)
   const skel = pose.skeleton
   updateWorld(pose)
+  if (c.spine && (c.chainLength === 1 || c.chainLength === 2)) return solveSpineIk(pose, c)
   let target = targetOf(pose, ikTargetBone(c))
 
   const bones = chainBoneIds(skel, c.bone, c.chainLength)
@@ -887,7 +1100,7 @@ function checkCreationCycles(list: readonly ConstraintData[]): void {
   for (const c of list) {
     if (!c.enabled || c.weight === 0) continue
     if (c.kind === 'transform') {
-      addEdge(graph, c.bone, transformSourceBone(c))
+      for (const bone of transformBones(c)) addEdge(graph, bone, transformSourceBone(c))
     } else if (c.kind === 'ik') {
       // 构建期只能判自包含；祖先落在链内的情况在 solve 拿到骨架后判（checkSolveCycles）。
       const target = ikTargetBone(c)
@@ -910,7 +1123,7 @@ function checkSolveCycles(list: readonly ConstraintData[], skel: CompiledSkeleto
   for (const c of list) {
     if (!c.enabled || c.weight === 0) continue
     if (c.kind === 'transform') {
-      addEdge(graph, c.bone, transformSourceBone(c))
+      for (const bone of transformBones(c)) addEdge(graph, bone, transformSourceBone(c))
     } else if (c.kind === 'ik') {
       const bones = chainBoneIds(skel, c.bone, c.chainLength)
       const target = ikTargetBone(c)
@@ -997,21 +1210,189 @@ function transformTargetValues(pose: Pose, c: TransformConstraint): TransformTar
   }
 }
 
+// Preserve shearX while factoring the constrained matrix into Spine's angular
+// shear channels (the X axis is rotation + shearX, not rotation + atan(shearY)).
+function writeMappedWorld(pose: Pose, bone: number, world: Float64Array): void {
+  const parent = pose.skeleton.parent[bone]!
+  const local = createAffine()
+  if (parent < 0) local.set(world)
+  else {
+    const basis = createAffine()
+    for (let k = 0; k < WORLD_STRIDE; k += 1) basis[k] = pose.world[parent * WORLD_STRIDE + k]!
+    parentBasis(pose.skeleton.inherit[bone]!, basis, basis)
+    const inverse = invertAffine(basis)
+    if (!inverse) throw new Error('constraint.worldToLocal: singular parent')
+    const a = inverse[0]!, b = inverse[1]!, c = inverse[2]!, d = inverse[3]!
+    local[0] = a * world[0]! + c * world[1]!
+    local[1] = b * world[0]! + d * world[1]!
+    local[2] = a * world[2]! + c * world[3]!
+    local[3] = b * world[2]! + d * world[3]!
+    local[4] = a * world[4]! + c * world[5]! + inverse[4]!
+    local[5] = b * world[4]! + d * world[5]! + inverse[5]!
+  }
+  const i = bone * POSE_STRIDE
+  const shearX = pose.local[i + CH_SHX]!
+  const xLength = Math.hypot(local[0]!, local[1]!)
+  const yLength = Math.hypot(local[2]!, local[3]!)
+  const sxSign = pose.local[i + CH_SX]! < 0 ? -1 : 1
+  const sySign = pose.local[i + CH_SY]! < 0 ? -1 : 1
+  const sx = xLength * sxSign
+  // A zero X axis is valid after ToScaleX. Use the Y axis as the anchor.
+  const rot = xLength > EPS_DIR ? Math.atan2(local[1]! * sxSign, local[0]! * sxSign) - shearX
+    : yLength > EPS_DIR ? Math.atan2(-local[2]! * sySign, local[3]! * sySign) - pose.local[i + CH_SHY]!
+      : pose.local[i + CH_ROT]!
+  const sy = yLength * sySign
+  setLocal(pose, bone, CH_X, local[4]!)
+  setLocal(pose, bone, CH_Y, local[5]!)
+  setLocal(pose, bone, CH_ROT, rot)
+  setLocal(pose, bone, CH_SX, sx)
+  setLocal(pose, bone, CH_SY, sy)
+  setLocal(pose, bone, CH_SHY, yLength > EPS_DIR
+    ? Math.atan2(-local[2]! * sySign, local[3]! * sySign) - rot : pose.local[i + CH_SHY]!)
+}
+
 /**
  * 逐轴 transform 约束。每个通道独立 mix：rotation/translation/scale/shear 互不牵连。
  * 只写 Pose.local；世界模式在父空间比较，local 模式直接使用 target 的 local 值。
  */
 function applyTransform(pose: Pose, c: TransformConstraint): void {
+  if (c.properties !== undefined) {
+    const src = transformSourceBone(c)
+    if (!Number.isInteger(src) || src < 0 || src >= pose.skeleton.count) throw new Error('constraint.sourceBone')
+    const channels: Record<TransformProperty, number> = {
+      rotate: CH_ROT, x: CH_X, y: CH_Y, scaleX: CH_SX, scaleY: CH_SY, shearY: CH_SHY,
+    }
+    const offsets = c.offsets ?? [0, 0, 0, 0, 0, 0]
+    const offsetOf: Record<TransformProperty, number> = {
+      rotate: 0, x: 1, y: 2, scaleX: 3, scaleY: 4, shearY: 5,
+    }
+    const mixOf: Record<TransformProperty, number> = {
+      rotate: finiteOr(c.mixRotate, finiteOr(c.mixRotation, 1)),
+      x: finiteOr(c.mixX, finiteOr(c.mixTranslation, 1)),
+      y: finiteOr(c.mixY, finiteOr(c.mixTranslation, 1)),
+      scaleX: finiteOr(c.mixScaleX, 0), scaleY: finiteOr(c.mixScaleY, 0),
+      shearY: finiteOr(c.mixShearY, 0),
+    }
+    const localSource = c.localSource ?? (c.local !== false)
+    const localTarget = c.localTarget ?? (c.local !== false)
+    const additive = c.additive ?? c.relative === true
+    for (const bone of transformBones(c)) {
+      if (!Number.isInteger(bone) || bone < 0 || bone >= pose.skeleton.count) throw new Error('constraint.bone')
+      updateWorld(pose)
+      const matrix = createAffine()
+      for (let k = 0; k < WORLD_STRIDE; k += 1) matrix[k] = pose.world[bone * WORLD_STRIDE + k]!
+      let worldChanged = false
+      for (let f = 0; f < c.properties.length; f += 1) {
+        const from: TransformFrom = c.properties[f]!
+        const si = src * POSE_STRIDE
+        const so = src * WORLD_STRIDE
+        const sx = pose.world[so]!, sy = pose.world[so + 1]!
+        const bx = pose.world[so + 2]!, by = pose.world[so + 3]!
+        const ox = offsets[1] ?? 0, oy = offsets[2] ?? 0
+        let sourceValue: number
+        if (localSource) sourceValue = pose.local[si + channels[from.kind]]! + (offsets[offsetOf[from.kind]] ?? 0)
+        else if (from.kind === 'rotate') {
+          sourceValue = Math.atan2(sy, sx) + (sx * by - bx * sy > 0 ? 1 : -1) * (offsets[0] ?? 0)
+          if (sourceValue < 0) sourceValue += Math.PI * 2
+        } else if (from.kind === 'x') sourceValue = sx * ox + bx * oy + pose.world[so + 4]!
+        else if (from.kind === 'y') sourceValue = sy * ox + by * oy + pose.world[so + 5]!
+        else if (from.kind === 'scaleX') sourceValue = Math.hypot(sx, sy) + (offsets[3] ?? 0)
+        else if (from.kind === 'scaleY') sourceValue = Math.hypot(bx, by) + (offsets[4] ?? 0)
+        else sourceValue = Math.atan2(by, bx) - Math.atan2(sy, sx) - Math.PI / 2 + (offsets[5] ?? 0)
+        const value = sourceValue - from.offset
+        for (let t = 0; t < from.to.length; t += 1) {
+          const to: TransformFrom['to'][number] = from.to[t]!
+          const mix = c.weight * mixOf[to.kind]
+          if (mix === 0) continue
+          let desired = to.offset + value * to.scale
+          if (c.clamp === true) desired = Math.max(Math.min(to.offset, to.max), Math.min(Math.max(to.offset, to.max), desired))
+          if (localTarget) {
+            const index = bone * POSE_STRIDE + channels[to.kind]
+            const current = pose.local[index]!
+            if (to.kind === 'scaleX' || to.kind === 'scaleY') {
+              if (additive) desired = current * (1 + (desired - 1) * mix)
+              else if (current !== 0) desired = current + (desired - current) * mix
+              else continue
+            } else desired = current + (additive ? desired : desired - current) * mix
+            setLocal(pose, bone, channels[to.kind], desired)
+            continue
+          }
+          worldChanged = true
+          if (to.kind === 'x' || to.kind === 'y') {
+            const index = to.kind === 'x' ? 4 : 5
+            matrix[index] = matrix[index]! + (additive ? desired : desired - matrix[index]!) * mix
+          } else if (to.kind === 'rotate') {
+            let angle = additive ? desired : desired - Math.atan2(matrix[1]!, matrix[0]!)
+            if (angle > Math.PI) angle -= 2 * Math.PI
+            else if (angle < -Math.PI) angle += 2 * Math.PI
+            angle *= mix
+            const cos = Math.cos(angle), sin = Math.sin(angle)
+            const a = matrix[0]!, b = matrix[2]!, cc = matrix[1]!, d = matrix[3]!
+            matrix[0] = cos * a - sin * cc
+            matrix[2] = cos * b - sin * d
+            matrix[1] = sin * a + cos * cc
+            matrix[3] = sin * b + cos * d
+          } else if (to.kind === 'scaleX' || to.kind === 'scaleY') {
+            const x = to.kind === 'scaleX' ? 0 : 2, y = x + 1
+            const length = Math.hypot(matrix[x]!, matrix[y]!)
+            if (additive || length !== 0) {
+              const factor = additive ? 1 + (desired - 1) * mix : 1 + (desired - length) * mix / length
+              matrix[x] = matrix[x]! * factor
+              matrix[y] = matrix[y]! * factor
+            }
+          } else {
+            const angleY = Math.atan2(matrix[3]!, matrix[2]!)
+            let angle = additive ? desired : desired + Math.PI / 2 - angleY + Math.atan2(matrix[1]!, matrix[0]!)
+            if (!additive) {
+              if (angle > Math.PI) angle -= 2 * Math.PI
+              else if (angle < -Math.PI) angle += 2 * Math.PI
+            }
+            const result = angleY + angle * mix
+            const length = Math.hypot(matrix[2]!, matrix[3]!)
+            matrix[2] = Math.cos(result) * length
+            matrix[3] = Math.sin(result) * length
+          }
+        }
+      }
+      if (worldChanged) writeMappedWorld(pose, bone, matrix)
+    }
+    return
+  }
   const src = transformSourceBone(c)
   if (!Number.isInteger(src) || src < 0 || src >= pose.skeleton.count) throw new Error('constraint.sourceBone')
-  const target = transformTargetValues(pose, c)
   const weight = clamp01(c.weight)
-  const mixRotate = clamp01(finiteOr(c.mixRotate, finiteOr(c.mixRotation, 1)))
-  const mixX = clamp01(finiteOr(c.mixX, finiteOr(c.mixTranslation, 1)))
-  const mixY = clamp01(finiteOr(c.mixY, finiteOr(c.mixTranslation, 1)))
-  const mixScaleX = clamp01(finiteOr(c.mixScaleX, 0))
-  const mixScaleY = clamp01(finiteOr(c.mixScaleY, 0))
-  const mixShearY = clamp01(finiteOr(c.mixShearY, 0))
+  if (finiteOr(c.mixRotate, finiteOr(c.mixRotation, 1)) === 0
+    && finiteOr(c.mixX, finiteOr(c.mixTranslation, 1)) === 0
+    && finiteOr(c.mixY, finiteOr(c.mixTranslation, 1)) === 0
+    && finiteOr(c.mixScaleX, 0) === 0 && finiteOr(c.mixScaleY, 0) === 0
+    && finiteOr(c.mixShearY, 0) === 0) return
+  // Legacy Spine absolute-world translation interpolates the constrained world
+  // origin toward target.localToWorld(offset), including signed mix values.
+  if (c.local === false && c.relative !== true && finiteOr(c.mixRotate, finiteOr(c.mixRotation, 1)) === 0
+    && finiteOr(c.mixScaleX, 0) === 0 && finiteOr(c.mixScaleY, 0) === 0 && finiteOr(c.mixShearY, 0) === 0) {
+    for (const bone of transformBones(c)) {
+      updateWorld(pose)
+      const targetOffset = src * WORLD_STRIDE
+      const tx = pose.world[targetOffset]! * finiteOr(c.offsetX, 0)
+        + pose.world[targetOffset + 2]! * finiteOr(c.offsetY, 0) + pose.world[targetOffset + 4]!
+      const ty = pose.world[targetOffset + 1]! * finiteOr(c.offsetX, 0)
+        + pose.world[targetOffset + 3]! * finiteOr(c.offsetY, 0) + pose.world[targetOffset + 5]!
+      const offset = bone * WORLD_STRIDE
+      const matrix = createAffine()
+      for (let k = 0; k < WORLD_STRIDE; k += 1) matrix[k] = pose.world[offset + k]!
+      matrix[4] = matrix[4]! + (tx - matrix[4]!) * weight * finiteOr(c.mixX, finiteOr(c.mixTranslation, 1))
+      matrix[5] = matrix[5]! + (ty - matrix[5]!) * weight * finiteOr(c.mixY, finiteOr(c.mixTranslation, 1))
+      writeMappedWorld(pose, bone, matrix)
+    }
+    return
+  }
+  const target = transformTargetValues(pose, c)
+  const mixRotate = finiteOr(c.mixRotate, finiteOr(c.mixRotation, 1))
+  const mixX = finiteOr(c.mixX, finiteOr(c.mixTranslation, 1))
+  const mixY = finiteOr(c.mixY, finiteOr(c.mixTranslation, 1))
+  const mixScaleX = finiteOr(c.mixScaleX, 0)
+  const mixScaleY = finiteOr(c.mixScaleY, 0)
+  const mixShearY = finiteOr(c.mixShearY, 0)
   const offRot = finiteOr(c.offsetRotation, 0)
   const offX = finiteOr(c.offsetX, 0)
   const offY = finiteOr(c.offsetY, 0)
@@ -1026,33 +1407,33 @@ function applyTransform(pose: Pose, c: TransformConstraint): void {
   const curShy = pose.local[di + CH_SHY]!
 
   const fr = weight * mixRotate
-  if (fr > 0) {
+  if (fr !== 0) {
     const desired = relative ? curRot + target.rot + offRot : target.rot + offRot
     const delta = angleDelta(curRot, desired)
     if (delta !== 0) addRotation(pose, c.bone, delta * fr)
   }
   const fx = weight * mixX
-  if (fx > 0) {
+  if (fx !== 0) {
     const desired = relative ? curX + target.x + offX : target.x + offX
     setLocal(pose, c.bone, CH_X, curX + (desired - curX) * fx)
   }
   const fy = weight * mixY
-  if (fy > 0) {
+  if (fy !== 0) {
     const desired = relative ? curY + target.y + offY : target.y + offY
     setLocal(pose, c.bone, CH_Y, curY + (desired - curY) * fy)
   }
   const fsx = weight * mixScaleX
-  if (fsx > 0) {
+  if (fsx !== 0) {
     const desired = target.sx + offSx
     setLocal(pose, c.bone, CH_SX, pose.local[di + CH_SX]! * lerp(1, desired, fsx))
   }
   const fsy = weight * mixScaleY
-  if (fsy > 0) {
+  if (fsy !== 0) {
     const desired = target.sy + offSy
     setLocal(pose, c.bone, CH_SY, pose.local[di + CH_SY]! * lerp(1, desired, fsy))
   }
   const fshy = weight * mixShearY
-  if (fshy > 0) {
+  if (fshy !== 0) {
     const desired = relative ? curShy + target.shy + offShy : target.shy + offShy
     setLocal(pose, c.bone, CH_SHY, curShy + (desired - curShy) * fshy)
   }
@@ -1117,11 +1498,200 @@ function toParentLocal(pose: Pose, bone: number, px: number, py: number): [numbe
   ]
 }
 
+function spinePathWorldVertices(pose: Pose, path: NonNullable<PathConstraint['spinePath']>): number[] {
+  const world: number[] = []
+  for (const influences of path.vertices) {
+    let x = 0, y = 0
+    for (const influence of influences) {
+      const o = influence.bone * WORLD_STRIDE
+      const m = pose.world
+      const w = influence.weight
+      x += (m[o]! * influence.x + m[o + 2]! * influence.y + m[o + 4]!) * w
+      y += (m[o + 1]! * influence.x + m[o + 3]! * influence.y + m[o + 5]!) * w
+    }
+    world.push(x, y)
+  }
+  return world
+}
+
+function spineCurveLengths(world: readonly number[], closed: boolean): number[] {
+  const count = world.length / 6 - (closed ? 1 : 2) + 1
+  const lengths = Array<number>(count)
+  let x1 = world[2]!, y1 = world[3]!, total = 0
+  for (let curve = 0; curve < count; curve++) {
+    const ids = closed && curve === count - 1 ? [world.length / 2 - 2, world.length / 2 - 1, 0, 1] : [curve * 3 + 1, curve * 3 + 2, curve * 3 + 3, curve * 3 + 4]
+    const cx1 = world[ids[1]! * 2]!, cy1 = world[ids[1]! * 2 + 1]!
+    const cx2 = world[ids[2]! * 2]!, cy2 = world[ids[2]! * 2 + 1]!
+    const x2 = world[ids[3]! * 2]!, y2 = world[ids[3]! * 2 + 1]!
+    let tmpx = (x1 - cx1 * 2 + cx2) * 0.1875, tmpy = (y1 - cy1 * 2 + cy2) * 0.1875
+    let dddfx = ((cx1 - cx2) * 3 - x1 + x2) * 0.09375, dddfy = ((cy1 - cy2) * 3 - y1 + y2) * 0.09375
+    let ddfx = tmpx * 2 + dddfx, ddfy = tmpy * 2 + dddfy
+    let dfx = (cx1 - x1) * 0.75 + tmpx + dddfx * 0.16666667
+    let dfy = (cy1 - y1) * 0.75 + tmpy + dddfy * 0.16666667
+    total += Math.hypot(dfx, dfy)
+    dfx += ddfx; dfy += ddfy; ddfx += dddfx; ddfy += dddfy
+    total += Math.hypot(dfx, dfy)
+    dfx += ddfx; dfy += ddfy
+    total += Math.hypot(dfx, dfy)
+    dfx += ddfx + dddfx; dfy += ddfy + dddfy
+    total += Math.hypot(dfx, dfy)
+    lengths[curve] = total
+    x1 = x2; y1 = y2
+  }
+  return lengths
+}
+
+function spineCurveSegment(world: readonly number[], ids: readonly number[], fraction: number): number {
+  const [x1, y1, cx1, cy1, cx2, cy2, x2, y2] = ids.flatMap(id => [world[id * 2]!, world[id * 2 + 1]!])
+  const segments: number[] = []
+  let tmpx = (x1! - cx1! * 2 + cx2!) * 0.03, tmpy = (y1! - cy1! * 2 + cy2!) * 0.03
+  let dddfx = ((cx1! - cx2!) * 3 - x1! + x2!) * 0.006, dddfy = ((cy1! - cy2!) * 3 - y1! + y2!) * 0.006
+  let ddfx = tmpx * 2 + dddfx, ddfy = tmpy * 2 + dddfy
+  let dfx = (cx1! - x1!) * 0.3 + tmpx + dddfx * 0.16666667
+  let dfy = (cy1! - y1!) * 0.3 + tmpy + dddfy * 0.16666667
+  let total = Math.hypot(dfx, dfy)
+  segments.push(total)
+  for (let i = 1; i < 8; i++) {
+    dfx += ddfx; dfy += ddfy; ddfx += dddfx; ddfy += dddfy
+    total += Math.hypot(dfx, dfy)
+    segments.push(total)
+  }
+  dfx += ddfx; dfy += ddfy
+  total += Math.hypot(dfx, dfy); segments.push(total)
+  dfx += ddfx + dddfx; dfy += ddfy + dddfy
+  total += Math.hypot(dfx, dfy); segments.push(total)
+  let p = fraction * total, segment = 0
+  while (segment < 9 && p > segments[segment]!) segment++
+  const prev = segment === 0 ? 0 : segments[segment - 1]!
+  return (segment + (p - prev) / (segments[segment]! - prev)) * 0.1
+}
+
+function sampleSpinePath(world: readonly number[], lengths: ArrayLike<number>, closed: boolean, distance: number, constantSpeed: boolean): [number, number, number] {
+  const vertexCount = world.length / 2
+  const curveCount = vertexCount / 3 - (closed ? 1 : 2)
+  const pathLength = lengths[curveCount]!
+  if (!(pathLength > 0)) return [world[2] ?? 0, world[3] ?? 0, 0]
+  let p = distance
+  if (closed) p = ((p % pathLength) + pathLength) % pathLength
+  if (!closed && (p < 0 || p > pathLength)) {
+    const index = p < 0 ? 1 : vertexCount - 3
+    const x1 = world[index * 2]!, y1 = world[index * 2 + 1]!
+    const x2 = world[(index + 1) * 2]!, y2 = world[(index + 1) * 2 + 1]!
+    const angle = Math.atan2(y2 - y1, x2 - x1)
+    const d = p < 0 ? p : p - pathLength
+    return [p < 0 ? x1 + d * Math.cos(angle) : x2 + d * Math.cos(angle),
+      p < 0 ? y1 + d * Math.sin(angle) : y2 + d * Math.sin(angle), angle]
+  }
+  let curve = 0
+  while (curve < curveCount && p > lengths[curve]!) curve++
+  const prev = curve === 0 ? 0 : lengths[curve - 1]!
+  let t = (p - prev) / (lengths[curve]! - prev)
+  const first = curve * 3 + 1
+  const ids = closed && curve === curveCount
+    ? [vertexCount - 2, vertexCount - 1, 0, 1]
+    : [first, first + 1, first + 2, first + 3]
+  if (constantSpeed) t = spineCurveSegment(world, ids, t)
+  const [x1, y1, cx1, cy1, cx2, cy2, x2, y2] = ids.flatMap(id => [world[id * 2]!, world[id * 2 + 1]!])
+  if (t === 0 || Number.isNaN(t)) return [x1!, y1!, Math.atan2(cy1! - y1!, cx1! - x1!)]
+  const u = 1 - t, tt = t * t, uu = u * u
+  const x = x1! * uu * u + cx1! * 3 * uu * t + cx2! * 3 * u * tt + x2! * tt * t
+  const y = y1! * uu * u + cy1! * 3 * uu * t + cy2! * 3 * u * tt + y2! * tt * t
+  const angle = t < 0.001 ? Math.atan2(cy1! - y1!, cx1! - x1!)
+    : Math.atan2(y - (y1! * uu + cy1! * 2 * u * t + cy2! * tt),
+      x - (x1! * uu + cx1! * 2 * u * t + cx2! * tt))
+  return [x, y, angle]
+}
+
+function applySpinePath(pose: Pose, c: PathConstraint): void {
+  const path = c.spinePath!
+  const bones = pathBones(c)
+  if (bones.length === 0 || path.vertices.length < 4) return
+  const weight = clamp01(c.weight)
+  const mixRotate = clamp01(weight * finiteOr(c.mixRotate, 1))
+  const mixX = clamp01(weight * finiteOr(c.mixX, 1))
+  const mixY = clamp01(weight * finiteOr(c.mixY, 1))
+  if (mixRotate === 0 && mixX === 0 && mixY === 0) return
+  updateWorld(pose)
+  const vertices = spinePathWorldVertices(pose, path)
+  const lengths = path.constantSpeed ? spineCurveLengths(vertices, path.closed) : path.lengths
+  const curveCount = vertices.length / 6 - (path.closed ? 1 : 2)
+  const total = lengths[curveCount]!
+  if (!(total > 0)) return
+  const tangent = c.rotateMode === 'tangent', scale = c.rotateMode === 'chainScale'
+  const count = tangent ? bones.length : bones.length + 1
+  const spaces = Array<number>(count).fill(0)
+  const boneLengths = Array<number>(bones.length).fill(0)
+  const spacing = finiteOr(c.spacing, 0)
+  for (let i = 0; i < count - 1; i++) {
+    const bone = bones[i]!
+    const o = bone * WORLD_STRIDE
+    const setupLength = pose.skeleton.bones[bone]!.length
+    const worldLength = Math.hypot(setupLength * pose.world[o]!, setupLength * pose.world[o + 1]!)
+    if (scale) boneLengths[i] = worldLength
+    spaces[i + 1] = c.spacingMode === 'percent' ? spacing
+      : c.spacingMode === 'proportional' ? worldLength : setupLength < 1e-6 ? spacing
+        : (c.spacingMode === 'length' ? Math.max(0, setupLength + spacing) : spacing) * worldLength / setupLength
+  }
+  if (c.spacingMode === 'proportional') {
+    const sum = spaces.reduce((a, b) => a + b, 0)
+    if (sum > 0) for (let i = 1; i < count; i++) spaces[i] = spaces[i]! * count / sum * spacing
+  }
+  const multiplier = c.spacingMode === 'percent' ? total : c.spacingMode === 'proportional' ? total / count : 1
+  let position = finiteOr(c.position, 0) * (c.positionMode === 'percent' ? total : 1)
+  const positions: [number, number, number][] = []
+  for (let i = 0; i < count; i++) {
+    position += spaces[i]! * multiplier
+    positions.push(sampleSpinePath(vertices, lengths, path.closed, position, path.constantSpeed))
+  }
+  let [boneX, boneY] = positions[0]!
+  const initialMatrices = bones.map(bone => Array.from(pose.world.subarray(bone * WORLD_STRIDE, (bone + 1) * WORLD_STRIDE)))
+  const offsetRotation = finiteOr(c.offsetRotation, 0)
+    * (c.targetBone === undefined || pose.world[c.targetBone * WORLD_STRIDE]! * pose.world[c.targetBone * WORLD_STRIDE + 3]!
+      - pose.world[c.targetBone * WORLD_STRIDE + 2]! * pose.world[c.targetBone * WORLD_STRIDE + 1]! > 0 ? 1 : -1)
+  for (let i = 0; i < bones.length; i++) {
+    const bone = bones[i]!
+    const m = initialMatrices[i]!
+    m[4] = m[4]! + (boneX - m[4]!) * mixX
+    m[5] = m[5]! + (boneY - m[5]!) * mixY
+    const [x, y, angle] = positions[i + 1] ?? positions[i]!
+    const dx = x - boneX, dy = y - boneY
+    if (scale && boneLengths[i] !== 0) {
+      const s = (Math.hypot(dx, dy) / boneLengths[i]! - 1) * mixRotate + 1
+      m[0] = m[0]! * s
+      m[1] = m[1]! * s
+    }
+    boneX = x; boneY = y
+    if (mixRotate > 0) {
+      let r = (tangent || spaces[i + 1] === 0 ? angle : Math.atan2(dy, dx)) - Math.atan2(m[1]!, m[0]!)
+      if (offsetRotation !== 0 || c.rotateMode !== 'chain') r += offsetRotation
+      else {
+        const cos = Math.cos(r), sin = Math.sin(r), len = pose.skeleton.bones[bone]!.length
+        boneX += (len * (cos * m[0]! - sin * m[1]!) - dx) * mixRotate
+        boneY += (len * (sin * m[0]! + cos * m[1]!) - dy) * mixRotate
+      }
+      if (r > Math.PI) r -= 2 * Math.PI
+      else if (r < -Math.PI) r += 2 * Math.PI
+      const cos = Math.cos(r * mixRotate), sin = Math.sin(r * mixRotate)
+      const [a, c0, b, d] = m
+      m[0] = cos * a! - sin * c0!
+      m[1] = sin * a! + cos * c0!
+      m[2] = cos * b! - sin * d!
+      m[3] = sin * b! + cos * d!
+    }
+    // Spine path constraints modify world only; applied local animation channels remain unchanged.
+    setWorldOverride(pose, bone, m)
+  }
+}
+
 /**
  * 把一条或多条骨沿路径分布：position 为归一化弧长，spacing 为相邻骨间距。
  * 平移与旋转各自 mix；闭合路径在首尾之间补最后一段。
  */
 function applyPath(pose: Pose, c: PathConstraint): void {
+  if (c.spinePath) {
+    applySpinePath(pose, c)
+    return
+  }
   const bones = pathBones(c)
   const weight = clamp01(c.weight)
   const baseMix = finiteOr(c.mix, 1)
@@ -1155,6 +1725,10 @@ function applyPath(pose: Pose, c: PathConstraint): void {
 }
 
 function applyIk(pose: Pose, c: IkConstraint, results: Map<string, IkResult>): void {
+  if (c.spine) {
+    results.set(c.id, solveIk(pose, c))
+    return
+  }
   const bones = chainBoneIds(pose.skeleton, c.bone, c.chainLength)
   if (!bones) {
     updateWorld(pose)
@@ -1194,10 +1768,19 @@ export function createConstraintSolver(constraints: readonly ConstraintData[]): 
   const physicsStates = new Map<string, PhysicsConstraintState>()
   return {
     results: results as ReadonlyMap<string, IkResult>,
+    physicsTranslate(x: number, y: number): void {
+      for (const state of physicsStates.values()) {
+        const s = state.spine
+        if (s === undefined) continue
+        s.ux -= x; s.uy -= y
+        s.cx -= x; s.cy -= y
+      }
+    },
     reset(): void {
       results.clear()
       // 保留 applied/written，下一次求解据此把已写入 Pose 的偏移撤回，避免重复叠加。
       for (const state of physicsStates.values()) {
+        delete state.spine
         state.offsetX = 0
         state.offsetY = 0
         state.offsetRot = 0
@@ -1208,25 +1791,91 @@ export function createConstraintSolver(constraints: readonly ConstraintData[]): 
         state.initialized = false
       }
     },
-    solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>): void {
+    solve(pose: Pose, dt: number, weights?: ReadonlyMap<string, number>, slotSet?: SlotSet, animationReset = false): void {
       checkSolveCycles(ordered, pose.skeleton)
       results.clear()
       updateWorld(pose)
       for (const base of ordered) {
         const override = weights?.get(base.id)
-        const c = override === undefined ? base : { ...base, weight: clamp01(override) }
+        let c: ConstraintData = override === undefined ? base : { ...base, weight: clamp01(override) }
+        const channelMap = (weights as ConstraintMixMap | undefined)?.channels
+        const channels = channelMap?.get(base.id) ?? []
+        const globalChannels = base.kind === 'physics' ? channelMap?.get('-1') ?? [] : []
+        let timelineReset = false
+        for (let channel of [...channels, ...globalChannels]) {
+          if (base.kind === 'physics' && globalChannels.includes(channel)) {
+            const filtered = Object.fromEntries(Object.entries(channel.values).filter(([field]) =>
+              field === 'reset' || base[`${field}Global` as keyof PhysicsConstraint] === true))
+            if (Object.keys(filtered).length === 0) continue
+            channel = { ...channel, values: filtered }
+          }
+          if (channel.kind !== c.kind) continue
+          const values: Record<string, unknown> = { ...c }
+          for (const [field, target] of Object.entries(channel.values)) {
+            if (field === 'reset') {
+              if (target) { values.reset = true; timelineReset = animationReset }
+              continue
+            }
+            if (field === 'bendDirection' || field === 'compress' || field === 'stretch') {
+              if (!channel.additive && channel.alpha >= 0.5) {
+                if (field === 'bendDirection') values.bendDirection = target
+                else values[field] = target ? 1 : 0
+              }
+              continue
+            }
+            const key = c.kind === 'ik' && field === 'mix' ? 'weight' : field
+            if (c.kind === 'physics' && field === 'mass') {
+              const physicsBase = base as PhysicsConstraint
+              const setupMass = physicsBase.mass ?? 1 / (physicsBase.massInverse ?? 1)
+              const currentMass = 1 / Number(values.massInverse ?? 1 / setupMass)
+              const mass = channel.additive ? currentMass + Number(target) * channel.alpha
+                : currentMass + (Number(target) - currentMass) * channel.alpha
+              if (mass > 0) {
+                values.mass = mass
+                values.massInverse = 1 / mass
+              }
+              continue
+            }
+            const setup = Number((base as unknown as Record<string, unknown>)[key] ?? (key.startsWith('mix') ? 1 : 0))
+            const current = Number(values[key] ?? setup)
+            values[key] = channel.additive ? current + Number(target) * channel.alpha
+              : current + (Number(target) - current) * channel.alpha
+          }
+          c = values as ConstraintData
+        }
         if (!c.enabled || c.weight === 0) continue
         if (c.kind === 'transform') {
           applyTransform(pose, c)
         } else if (c.kind === 'path') {
           applyPath(pose, c)
+        } else if (c.kind === 'slider') {
+          if (c.clip !== undefined && c.mix !== 0) {
+            let time = c.time
+            if (c.sourceBone !== undefined && c.property !== undefined) {
+              const i = c.sourceBone * POSE_STRIDE, w = c.sourceBone * WORLD_STRIDE
+              const local = pose.local, world = pose.world
+              const value = c.local ? ({ rotate: local[i + CH_ROT]! * 180 / Math.PI,
+                x: local[i + CH_X]!, y: local[i + CH_Y]!, scaleX: local[i + CH_SX]!,
+                scaleY: local[i + CH_SY]!, shearY: local[i + CH_SHY]! * 180 / Math.PI })[c.property]
+                : ({ rotate: (Math.atan2(world[w + 1]!, world[w]!) * 180 / Math.PI + 360) % 360,
+                  x: world[w + 4]!, y: world[w + 5]!,
+                  scaleX: Math.hypot(world[w]!, world[w + 1]!),
+                  scaleY: Math.hypot(world[w + 2]!, world[w + 3]!),
+                  shearY: Math.atan2(world[w]! * world[w + 2]! + world[w + 1]! * world[w + 3]!,
+                    world[w]! * world[w + 3]! - world[w + 1]! * world[w + 2]!) * 180 / Math.PI })[c.property]
+              time = (c.to ?? 0) + (value - (c.from ?? 0)) * (c.scale ?? 1)
+              time = c.loop && c.clip.duration > 0 ? c.clip.duration + time % c.clip.duration : Math.max(0, time)
+            }
+            applySliderBoneAnimation(c.clip, pose, time, c.mix, c.additive, c.loop)
+            if (slotSet !== undefined) applySliderSlotAnimation(c.clip, slotSet, time, c.loop)
+          }
         } else if (c.kind === 'physics') {
           let state = physicsStates.get(c.id)
           if (state === undefined) {
             state = createPhysicsConstraintState()
             physicsStates.set(c.id, state)
           }
-          stepPhysicsConstraint(pose, c, state, dt)
+          stepPhysicsConstraint(pose, c, state, dt, timelineReset)
         } else {
           applyIk(pose, c, results)
         }
@@ -1261,6 +1910,7 @@ export function createPhysicsConstraintState(): PhysicsConstraintState {
 
 /** 清零累积状态；下一帧重新以当前姿态为基准，不产生跳变。 */
 export function resetPhysicsConstraintState(state: PhysicsConstraintState): void {
+  delete state.spine
   state.offsetX = 0
   state.offsetY = 0
   state.offsetRot = 0
@@ -1278,6 +1928,140 @@ export function resetPhysicsConstraintState(state: PhysicsConstraintState): void
   state.lastRot = 0
   state.accumulator = 0
   state.initialized = false
+}
+
+// Spine 4.3 physics acts on the constrained world basis, not on local channels.
+// Equations derived from @esotericsoftware/spine-core@4.3.13 PhysicsConstraint;
+// Spine Runtimes copyright (c) 2013-2025 Esoteric Software LLC. The Spine
+// Runtimes License Agreement applies: https://esotericsoftware.com/spine-editor-license
+// Our world affine layout is [a,c,b,d,x,y], with angles in radians.
+function stepSpinePhysics(pose: Pose, c: PhysicsConstraint, state: PhysicsConstraintState, dt: number, timelineReset = false): void {
+  updateWorld(pose)
+  const k = c.bone * WORLD_STRIDE
+  const world = createAffine()
+  for (let j = 0; j < WORLD_STRIDE; j += 1) world[j] = pose.world[k + j]!
+  const s = state.spine ?? (state.spine = {
+    ux: 0, uy: 0, cx: 0, cy: 0, tx: 0, ty: 0,
+    x: 0, y: 0, rot: 0, scale: 0, xv: 0, yv: 0, rv: 0, sv: 0,
+    xl: 0, yl: 0, rl: 0, sl: 0, remaining: 0, reset: true, time: 0, lastTime: 0,
+  })
+  const mix = finiteOr(c.mix, 1) * c.weight
+  if (mix === 0) return
+  const t = c.step!
+  if (!(t > 0)) throw new Error('physics.step')
+  if (c.reset) {
+    Object.assign(s, { x: 0, y: 0, rot: 0, scale: 0, xv: 0, yv: 0, rv: 0, sv: 0,
+      xl: 0, yl: 0, rl: 0, sl: 0, remaining: 0, reset: true })
+  }
+  const env = c.environment ?? { referenceScale: 1, windX: 1, windY: 0, gravityX: 0, gravityY: 1 }
+  const sx = env.scaleX ?? 1, sy = env.scaleY ?? 1
+  const inertia = finiteOr(c.inertia, 0)
+  const strength = finiteOr(c.strength, 0)
+  const massInverse = finiteOr(c.massInverse, 1 / finiteOr(c.mass, 1))
+  const damping = finiteOr(c.damping, 1) ** (60 * t)
+  const wind = finiteOr(c.wind, 0), gravity = finiteOr(c.gravity, 0)
+  const length = pose.skeleton.bones[c.bone]!.length
+  s.time += Math.max(0, dt)
+  if (c.reset && !timelineReset) s.lastTime = s.time
+  const elapsed = Math.max(0, s.time - s.lastTime)
+  s.lastTime = s.time
+  const qx = finiteOr(c.limit, 0) * elapsed * Math.abs(sx)
+  const qy = finiteOr(c.limit, 0) * elapsed * Math.abs(sy)
+  const clamp = (value: number, limit: number): number => Math.max(-limit, Math.min(limit, value))
+  const oldRemaining = s.remaining
+  s.remaining += elapsed
+  let z = 0
+  if (s.reset) {
+    s.reset = false
+    s.ux = world[4]!; s.uy = world[5]!
+  } else {
+    let a = s.remaining
+    const xEnabled = (c.x ?? 0) > 0, yEnabled = (c.y ?? 0) > 0
+    const angular = (c.rotate ?? 0) > 0 || (c.shearX ?? 0) > 0
+    const scaling = (c.scaleX ?? 0) > 0
+    const m = t * massInverse
+    if (xEnabled || yEnabled) {
+      if (xEnabled) { s.x += clamp((s.ux - world[4]!) * inertia, qx); s.ux = world[4]! }
+      if (yEnabled) { s.y += clamp((s.uy - world[5]!) * inertia, qy); s.uy = world[5]! }
+      if (a >= t) {
+        const oldX = s.x, oldY = s.y
+        const ax = env.referenceScale * (wind * env.windX + gravity * env.gravityX) * sx
+        const ay = env.referenceScale * (wind * env.windY + gravity * env.gravityY) * sy
+        do {
+          if (xEnabled) { s.xv += (ax - s.x * strength) * m; s.x += s.xv * t; s.xv *= damping }
+          if (yEnabled) { s.yv -= (ay + s.y * strength) * m; s.y += s.yv * t; s.yv *= damping }
+          a -= t
+        } while (a >= t)
+        s.xl = s.x - oldX; s.yl = s.y - oldY
+      }
+      z = Math.max(0, 1 - a / t)
+      if (xEnabled) world[4] = world[4]! + (s.x - s.xl * z) * mix * c.x!
+      if (yEnabled) world[5] = world[5]! + (s.y - s.yl * z) * mix * c.y!
+    }
+    if (angular || scaling) {
+      const ca = Math.atan2(world[1]!, world[0]!)
+      let dx = clamp(s.cx - world[4]!, qx), dy = clamp(s.cy - world[5]!, qy)
+      let co = 0, si = 0
+      const mr = ((c.rotate ?? 0) + (c.shearX ?? 0)) * mix
+      if (angular) {
+        const lag = s.rl * Math.max(0, 1 - oldRemaining / t)
+        const angle = Math.atan2(dy + s.ty, dx + s.tx) - ca - (s.rot - lag) * mr
+        s.rot += (angle - Math.ceil(angle / (Math.PI * 2) - 0.5) * Math.PI * 2) * inertia
+        const direction = (s.rot - lag) * mr + ca
+        co = Math.cos(direction); si = Math.sin(direction)
+        const r = length * Math.hypot(world[0]!, world[1]!)
+        if (scaling && r > 0) s.scale += (dx * co + dy * si) * inertia / r
+      } else {
+        co = Math.cos(ca); si = Math.sin(ca)
+        const r = length * Math.hypot(world[0]!, world[1]!) - s.sl * Math.max(0, 1 - oldRemaining / t)
+        if (r > 0) s.scale += (dx * co + dy * si) * inertia / r
+      }
+      a = s.remaining
+      if (a >= t) {
+        const oldRot = s.rot, oldScale = s.scale
+        const ax = wind * env.windX + gravity * env.gravityX
+        const ay = wind * env.windY + gravity * env.gravityY
+        do {
+          a -= t
+          if (scaling) { s.sv += (ax * co - ay * si - s.scale * strength) * m; s.scale += s.sv * t; s.sv *= damping }
+          if (angular) {
+            s.rv -= ((ax * si + ay * co) * length / env.referenceScale + s.rot * strength) * m
+            s.rot += s.rv * t; s.rv *= damping
+            if (a >= t) { const direction = s.rot * mr + ca; co = Math.cos(direction); si = Math.sin(direction) }
+          }
+        } while (a >= t)
+        s.rl = s.rot - oldRot; s.sl = s.scale - oldScale
+      }
+      z = Math.max(0, 1 - a / t)
+    }
+    s.remaining = a
+  }
+  s.cx = world[4]!; s.cy = world[5]!
+  const angle = (s.rot - s.rl * z) * mix
+  const rotateAxis = (axis: 0 | 2, radians: number): void => {
+    const co = Math.cos(radians), si = Math.sin(radians)
+    const x = world[axis]!, y = world[axis + 1]!
+    world[axis] = co * x - si * y; world[axis + 1] = si * x + co * y
+  }
+  if ((c.shearX ?? 0) > 0) {
+    if ((c.rotate ?? 0) > 0) rotateAxis(2, angle * c.rotate!)
+    rotateAxis(0, angle * ((c.rotate ?? 0) + c.shearX!))
+  } else if ((c.rotate ?? 0) > 0) {
+    rotateAxis(0, angle * c.rotate!); rotateAxis(2, angle * c.rotate!)
+  }
+  if ((c.scaleX ?? 0) > 0) {
+    const scale = 1 + (s.scale - s.sl * z) * mix * c.scaleX!
+    world[0] = world[0]! * scale; world[1] = world[1]! * scale
+    let scaleY = 1
+    if (c.scaleYMode === 'Uniform') scaleY = scale
+    if (c.scaleYMode === 'Volume') {
+      const magnitude = Math.abs(scale)
+      scaleY = magnitude >= 0.7 ? 1 / magnitude : 4 - 3.67347 * magnitude
+    }
+    world[2] = world[2]! * scaleY; world[3] = world[3]! * scaleY
+  }
+  s.tx = length * world[0]!; s.ty = length * world[1]!
+  if ([...world].every(Number.isFinite)) setWorldOverride(pose, c.bone, world)
 }
 
 function validatePhysicsConstraint(pose: Pose, c: PhysicsConstraint): void {
@@ -1316,9 +2100,9 @@ function applyPhysicsOffset(pose: Pose, c: PhysicsConstraint, state: PhysicsCons
   const baseX = sameX ? curX - state.appliedX : curX
   const baseY = sameY ? curY - state.appliedY : curY
   const baseRot = sameRot ? curRot - state.appliedRot : curRot
-  const desiredX = state.offsetX * factor
-  const desiredY = state.offsetY * factor
-  const desiredRot = state.offsetRot * factor
+  const desiredX = state.offsetX * factor * (c.x ?? 1)
+  const desiredY = state.offsetY * factor * (c.y ?? 1)
+  const desiredRot = state.offsetRot * factor * (c.rotate ?? 1)
   const nextX = baseX + desiredX
   const nextY = baseY + desiredY
   const nextRot = baseRot + desiredRot
@@ -1342,8 +2126,13 @@ export function stepPhysicsConstraint(
   c: PhysicsConstraint,
   state: PhysicsConstraintState,
   dt: number,
+  timelineReset = false,
 ): void {
   validatePhysicsConstraint(pose, c)
+  if (c.step !== undefined) {
+    stepSpinePhysics(pose, c, state, dt, timelineReset)
+    return
+  }
   updateWorld(pose)
   const parent = pose.skeleton.parent[c.bone]!
   const reference = c.target ?? parent

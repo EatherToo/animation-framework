@@ -107,7 +107,7 @@ function clean(value: number): number {
 }
 
 describe('S3 3.8: 兼容转换后的骨架/坐标/权重', () => {
-  const asset = importSpine38(fixture38(), { unitScale: SCALE })
+  const asset = importSpine38(fixture38(), { unitScale: SCALE, sourceYDown: true })
 
   it('保留源版本 3.8.75 且 report.errors = 0', () => {
     expect(asset.source).toBe('spine')
@@ -166,7 +166,7 @@ describe('S3 3.8: 兼容转换后的骨架/坐标/权重', () => {
   })
 
   it('同输入两次导入 hash 稳定', () => {
-    const again = importSpine38(fixture38(), { unitScale: SCALE })
+    const again = importSpine38(fixture38(), { unitScale: SCALE, sourceYDown: true })
     expect(asset.hash).toBe(again.hash)
     expect(asset.hash).toMatch(/^[0-9a-f]{64}$/)
   })
@@ -219,6 +219,6 @@ function ensureAsset(value: SkeletonAsset): SkeletonAsset {
 
 describe('S3 3.8: 返回类型可用', () => {
   it('导入产物可传回 validateBoneWorld', () => {
-    expect(ensureAsset(importSpine38(fixture38(), { unitScale: SCALE })).schema).toBe(1)
+    expect(ensureAsset(importSpine38(fixture38(), { unitScale: SCALE, sourceYDown: true })).schema).toBe(1)
   })
 })

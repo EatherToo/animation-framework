@@ -57,7 +57,7 @@ function handOrigin(asset: SkeletonAsset): readonly [number, number] {
 }
 
 describe('M5 smoke: 导入 → 姿态 → 动画 → 换肤', () => {
-  const asset = importSpine(humanoidJson(), { unitScale: 0.01 })
+  const asset = importSpine(humanoidJson(), { unitScale: 0.01, sourceYDown: true })
   const slotSet: SlotSet = createSlotSet(asset.slots, asset.skins, 'default')
 
   it('6 骨人形导入后手骨世界坐标符合预期', () => {

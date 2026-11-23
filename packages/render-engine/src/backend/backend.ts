@@ -8,8 +8,8 @@ import type {
   RenderMask,
   TextureData,
 } from '../render/render'
-import { ProgramCache, variantOf } from '../render/shader-variants'
-import { maskChain, sampleTexture } from '../render/render'
+import { FRAGMENT, VERTEX, ProgramCache, variantOf } from '../render/shader-variants'
+import { maskChain, sampleTexture, validateAssets } from '../render/render'
 import { premultiply } from '../asset/image'
 
 export interface Viewport {
@@ -20,6 +20,12 @@ export interface Viewport {
 export interface BackendStats {
   drawCalls: number
   packets: number
+  /** Submitted packet groups; runtime prebatch count is carried by RenderFrame.stats. */
+  batches: number
+  textureBinds: number
+  programSwitches: number
+  /** Buffer payload submitted by the WebGL backend, including stencil geometry. */
+  uploadedBytes: number
   uploadedVertices: number
   /** mask 求值次数（层数 × 覆盖像素）。 */
   maskTests: number
@@ -42,6 +48,21 @@ export interface RenderBackend {
 const EPS = 1e-12
 const mulU8 = (a: number, b: number): number => (((a * b + 127) / 255) | 0)
 const clampUnit = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
+
+function assetError(code: string, detail: string): Error & { code: string } {
+  return Object.assign(new Error(`${code}: ${detail}`), { code })
+}
+
+function checkAssets(assets: RenderAssets): void {
+  const { errors } = validateAssets(assets)
+  if (errors.length > 0) throw assetError('E_ASSET_INVALID', errors.join('; '))
+}
+
+function spritePage(material: MaterialDef | null, pages: readonly TextureData[] | undefined): void {
+  if (material?.kind === 'sprite' && pages?.[material.page] === undefined) {
+    throw assetError('E_TEXTURE_MISSING', `材质 ${material.id} 的图集页 ${material.page} 缺失`)
+  }
+}
 
 /** 点到线段距离（像素），用于 mask feather 软边。 */
 function distanceToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
@@ -172,7 +193,8 @@ export interface CpuBackendOptions {
 export class CpuBackend implements RenderBackend {
   readonly kind = 'cpu' as const
   readonly stats: BackendStats = {
-    drawCalls: 0, packets: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
+    drawCalls: 0, packets: 0, batches: 0, textureBinds: 0, programSwitches: 0,
+    uploadedBytes: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
   }
 
   private width: number
@@ -206,6 +228,7 @@ export class CpuBackend implements RenderBackend {
 
   /** CPU 端资产只是引用；真正采样在 draw 时进行。 */
   prepare(assets: RenderAssets): void {
+    checkAssets(assets)
     this.assets = assets
   }
 
@@ -222,12 +245,13 @@ export class CpuBackend implements RenderBackend {
 
   private clear(): void {
     const [r, g, b, a] = this.background
-    for (let i = 0; i < this.color.length; i += 4) {
-      this.color[i] = r
-      this.color[i + 1] = g
-      this.color[i + 2] = b
-      this.color[i + 3] = a
-    }
+    // Materialize through the clamped view so fractional/out-of-range backgrounds retain their semantics.
+    this.color[0] = r
+    this.color[1] = g
+    this.color[2] = b
+    this.color[3] = a
+    const packed = new Uint32Array(this.color.buffer)
+    packed.fill(packed[0]!)
   }
 
   private toScreen(frame: RenderFrame, x: number, y: number): [number, number] {
@@ -266,6 +290,34 @@ export class CpuBackend implements RenderBackend {
     const maxX = Math.min(ssW - 1, Math.ceil(Math.max(p0.x, p1.x, p2.x) * ss - 0.5))
     const minY = Math.max(0, Math.floor(Math.min(p0.y, p1.y, p2.y) * ss - 0.5))
     const maxY = Math.min(ssH - 1, Math.ceil(Math.max(p0.y, p1.y, p2.y) * ss - 0.5))
+    if (this.currentBlend === 'normal' && !this.currentTwoColor && this.page === null &&
+        this.masks.length === 0 && this.depthMode === 'none' &&
+        p0.a === 255 && p1.a === 255 && p2.a === 255 &&
+        p0.r === p1.r && p1.r === p2.r &&
+        p0.g === p1.g && p1.g === p2.g &&
+        p0.b === p1.b && p1.b === p2.b) {
+      const rgba = new Uint8ClampedArray([p0.r, p0.g, p0.b, 255])
+      const packed = new Uint32Array(rgba.buffer)[0]!
+      const pixels = new Uint32Array(this.color.buffer)
+      const top0 = p2.y - p1.y < 0 || (p2.y === p1.y && p2.x > p1.x)
+      const top1 = p0.y - p2.y < 0 || (p0.y === p2.y && p0.x > p2.x)
+      const top2 = p1.y - p0.y < 0 || (p1.y === p0.y && p1.x > p0.x)
+      for (let sy = minY; sy <= maxY; sy += 1) {
+        const py = (sy + 0.5) / ss
+        let di = sy * ssW + minX
+        for (let sx = minX; sx <= maxX; sx += 1, di += 1) {
+          const px = (sx + 0.5) / ss
+          const w0 = edge(p1, p2, px, py)
+          if (w0 < 0 || (w0 === 0 && !top0)) continue
+          const w1 = edge(p2, p0, px, py)
+          if (w1 < 0 || (w1 === 0 && !top1)) continue
+          const w2 = edge(p0, p1, px, py)
+          if (w2 < 0 || (w2 === 0 && !top2)) continue
+          pixels[di] = packed
+        }
+      }
+      return
+    }
     for (let sy = minY; sy <= maxY; sy += 1) {
       const py = (sy + 0.5) / ss
       for (let sx = minX; sx <= maxX; sx += 1) {
@@ -286,10 +338,11 @@ export class CpuBackend implements RenderBackend {
         const dr = Math.round(b0 * (p0.dr ?? 0) + b1 * (p1.dr ?? 0) + b2 * (p2.dr ?? 0))
         const dg = Math.round(b0 * (p0.dg ?? 0) + b1 * (p1.dg ?? 0) + b2 * (p2.dg ?? 0))
         const db = Math.round(b0 * (p0.db ?? 0) + b1 * (p1.db ?? 0) + b2 * (p2.db ?? 0))
+        const da = Math.round(b0 * (p0.da ?? 0) + b1 * (p1.da ?? 0) + b2 * (p2.da ?? 0))
         const u = b0 * p0.u + b1 * p1.u + b2 * p2.u
         const v = b0 * p0.v + b1 * p1.v + b2 * p2.v
         const z = b0 * p0.z + b1 * p1.z + b2 * p2.z
-        this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, dr, dg, db, z)
+        this.shadeFragment(sx, sy, px, py, u, v, r, g, b, a, dr, dg, db, da, z)
       }
     }
   }
@@ -299,25 +352,16 @@ export class CpuBackend implements RenderBackend {
     sx: number, sy: number, px: number, py: number,
     u: number, v: number,
     r: number, g: number, b: number, a: number,
-    dr: number, dg: number, db: number,
+    dr: number, dg: number, db: number, da: number,
     z: number,
   ): void {
     if (a <= 0) return
     const ssW = this.width * this.ss
-    if (this.masks.length > 0) {
-      let coverage = 1
-      for (const ctx of this.masks) {
-        this.stats.maskTests += 1
-        coverage *= this.maskCoverageAt(ctx, px / this.ss, py / this.ss)
-        if (coverage <= 0) return
-      }
-      if (coverage < 1) {
-        const c = Math.round(coverage * 255)
-        r = mulU8(r, c)
-        g = mulU8(g, c)
-        b = mulU8(b, c)
-        a = mulU8(a, c)
-      }
+    let coverage = 1
+    for (const ctx of this.masks) {
+      this.stats.maskTests += 1
+      coverage *= this.maskCoverageAt(ctx, px / this.ss, py / this.ss)
+      if (coverage <= 0) return
     }
     if (this.depthMode !== 'none' && this.depthBuffer !== null) {
       const di = sy * ssW + sx
@@ -325,21 +369,31 @@ export class CpuBackend implements RenderBackend {
       if (!Number.isFinite(z) || z >= current) return
       if (this.depthMode === 'write') this.depthBuffer[di] = z
     }
+    let texel: [number, number, number, number] = [255, 255, 255, 255]
     if (this.material !== null && this.material.kind === 'sprite' && this.page !== null) {
-      const texel = sampleTexture(this.page, u, v, this.material.filter)
+      texel = sampleTexture(this.page, u, v, this.page.magFilter ?? this.page.filter ?? this.material.filter)
       this.stats.textureSamples += 1
+    }
+    if (this.currentTwoColor) {
+      const tintBlack = this.material?.tintBlack === true
+      const darkFactor = (texel[3] - 255) * (tintBlack ? 255 : da) / 255 + 255
+      r = Math.round((darkFactor - texel[0]) * (tintBlack ? 0 : dr) / 255 + texel[0] * r / 255)
+      g = Math.round((darkFactor - texel[1]) * (tintBlack ? 0 : dg) / 255 + texel[1] * g / 255)
+      b = Math.round((darkFactor - texel[2]) * (tintBlack ? 0 : db) / 255 + texel[2] * b / 255)
+    } else {
       r = mulU8(texel[0], r)
       g = mulU8(texel[1], g)
       b = mulU8(texel[2], b)
-      a = mulU8(texel[3], a)
+    }
+    a = mulU8(texel[3], a)
+    if (coverage < 1) {
+      const c = Math.round(coverage * 255)
+      r = mulU8(r, c)
+      g = mulU8(g, c)
+      b = mulU8(b, c)
+      a = mulU8(a, c)
     }
     if (a <= 0) return
-    if (this.currentTwoColor) {
-      const inv = 255 - a
-      r += Math.round(dr * inv / 255)
-      g += Math.round(dg * inv / 255)
-      b += Math.round(db * inv / 255)
-    }
     blendPixel(this.color, (sy * ssW + sx) * 4, r, g, b, a, this.currentBlend)
   }
 
@@ -426,12 +480,17 @@ export class CpuBackend implements RenderBackend {
     this.clear()
     this.stats.drawCalls = 0
     this.stats.packets = 0
+    this.stats.batches = 0
+    this.stats.textureBinds = 0
+    this.stats.programSwitches = 0
+    this.stats.uploadedBytes = 0
     this.stats.uploadedVertices = 0
     this.stats.maskTests = 0
     this.stats.textureSamples = 0
     const ss = this.ss
     const ssW = this.width * ss
     const ssH = this.height * ss
+    if (frame.assets !== undefined && frame.assets !== this.assets) this.prepare(frame.assets)
     const assets = frame.assets ?? this.assets
     this.depthMode = frame.depthMode ?? 'none'
     if (this.depthMode !== 'none') {
@@ -447,10 +506,12 @@ export class CpuBackend implements RenderBackend {
 
     for (const packet of frame.packets) {
       this.stats.packets += 1
+      this.stats.batches += 1
       this.stats.drawCalls += 1
       this.currentBlend = packet.blend
-      this.currentTwoColor = packet.twoColor === true && packet.dark !== undefined
       this.material = assets?.materials.find((m) => m.id === packet.materialId) ?? null
+      this.currentTwoColor = (packet.twoColor === true && packet.dark !== undefined) || this.material?.tintBlack === true
+      spritePage(this.material, assets?.pages)
       this.page = this.material !== null && this.material.kind === 'sprite' && assets !== null
         ? assets.pages[this.material.page] ?? null
         : null
@@ -542,6 +603,7 @@ const GL_ELEMENT_ARRAY_BUFFER = 0x8893
 const GL_DYNAMIC_DRAW = 0x88e8
 const GL_FLOAT = 0x1406
 const GL_UNSIGNED_BYTE = 0x1401
+const GL_UNSIGNED_SHORT = 0x1403
 const GL_UNSIGNED_INT = 0x1405
 const GL_TRIANGLES = 0x0004
 const GL_RGBA = 0x1908
@@ -557,6 +619,8 @@ const GL_LINEAR = 0x2601
 const GL_NEAREST = 0x2600
 const GL_LINEAR_MIPMAP_LINEAR = 0x2703
 const GL_NEAREST_MIPMAP_NEAREST = 0x2700
+const GL_LINEAR_MIPMAP_NEAREST = 0x2701
+const GL_NEAREST_MIPMAP_LINEAR = 0x2702
 const GL_CLAMP_TO_EDGE = 0x812f
 const GL_REPEAT = 0x2901
 /** 全局 UNPACK 状态：上传后必须恢复 0，否则会重复预乘。 */
@@ -576,7 +640,12 @@ const GL_LEQUAL = 0x0203
 const GL_KEEP = 0x1e00
 const GL_REPLACE = 0x1e01
 const GL_STENCIL_BUFFER_BIT = 0x0400
+const GL_STENCIL_BITS = 0x0d57
 const GL_DEPTH_BUFFER_BIT = 0x0100
+
+function indexType(indices: Uint16Array | Uint32Array): number {
+  return indices instanceof Uint16Array ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT
+}
 
 /** WebGL2 所需的最小接口；方法全部可选，便于注入 mock 并做能力降级。 */
 export interface WebGL2Like {
@@ -587,6 +656,8 @@ export interface WebGL2Like {
   bufferSubData?(target: number, offset: number, data: ArrayBufferView): void
   getAttribLocation?(program: unknown, name: string): number
   enableVertexAttribArray?(index: number): void
+  disableVertexAttribArray?(index: number): void
+  vertexAttrib4f?(index: number, x: number, y: number, z: number, w: number): void
   vertexAttribPointer?(index: number, size: number, type: number, normalized: boolean, stride: number, offset: number): void
   getUniformLocation?(program: unknown, name: string): unknown
   uniformMatrix3fv?(location: unknown, transpose: boolean, value: ArrayLike<number>): void
@@ -594,6 +665,7 @@ export interface WebGL2Like {
   uniform1i?(location: unknown, value: number): void
   uniform1f?(location: unknown, value: number): void
   uniform2f?(location: unknown, x: number, y: number): void
+  uniform4f?(location: unknown, x: number, y: number, z: number, w: number): void
   createShader?(type: number): unknown
   shaderSource?(shader: unknown, source: string): void
   compileShader?(shader: unknown): void
@@ -624,6 +696,8 @@ export interface WebGL2Like {
   disable?(cap: number): void
   stencilFunc?(func: number, ref: number, mask: number): void
   stencilOp?(fail: number, zfail: number, zpass: number): void
+  stencilMask?(mask: number): void
+  getParameter?(pname: number): unknown
   clearStencil?(s: number): void
   colorMask?(r: boolean, g: boolean, b: boolean, a: boolean): void
   depthFunc?(func: number): void
@@ -644,40 +718,9 @@ const GL_FRAGMENT_SHADER = 0x8b30
 const GL_COMPILE_STATUS = 0x8b81
 const GL_LINK_STATUS = 0x8b82
 
-const DEFAULT_VERTEX_SHADER = `#version 300 es
-in vec2 aPosition;
-in vec2 aUv;
-in vec4 aColor;
-in vec4 aDark;
-uniform mat3 viewProjection;
-uniform vec2 uResolution;
-out vec2 vUv;
-out vec4 vColor;
-out vec4 vDark;
-void main() {
-  vec3 p = viewProjection * vec3(aPosition, 1.0);
-  vec2 ndc = vec2(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0);
-  gl_Position = vec4(ndc, 0.0, 1.0);
-  vUv = aUv;
-  vColor = aColor;
-  vDark = aDark;
-}`
-
-const DEFAULT_FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
-in vec2 vUv;
-in vec4 vColor;
-in vec4 vDark;
-uniform sampler2D uTexture;
-uniform float uUseTexture;
-uniform float uTwoColor;
-out vec4 outColor;
-void main() {
-  vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
-  vec4 c = vColor * texel;
-  if (uTwoColor > 0.5) c.rgb += vDark.rgb * (1.0 - texel.a);
-  outColor = c;
-}`
+// 默认程序也支持 alpha mask；是否采样由 uAlphaMask 逐包控制。
+const DEFAULT_VERTEX_SHADER = VERTEX
+const DEFAULT_FRAGMENT_SHADER = FRAGMENT.replace('#version 300 es', '#version 300 es\n#define ALPHA_MASK 1\n#define TWO_COLOR 1')
 
 /** 真实 GL 下默认编译内置 shader；mock 缺少 shader 方法时退回空 program。 */
 function compileDefaultProgram(gl: WebGL2Like): object | null {
@@ -710,7 +753,8 @@ function compileDefaultProgram(gl: WebGL2Like): object | null {
 export class WebGL2Backend implements RenderBackend {
   readonly kind = 'webgl2' as const
   readonly stats: BackendStats = {
-    drawCalls: 0, packets: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
+    drawCalls: 0, packets: 0, batches: 0, textureBinds: 0, programSwitches: 0,
+    uploadedBytes: 0, uploadedVertices: 0, maskTests: 0, textureSamples: 0,
   }
   /** 上下文恢复次数，供测试/诊断。 */
   restoreCount = 0
@@ -732,6 +776,9 @@ export class WebGL2Backend implements RenderBackend {
   constructor(gl: WebGL2Like, program?: object, programCache?: ProgramCache) {
     if (gl === null || typeof gl !== 'object') throw new Error('WebGL2Backend: 缺少 gl 上下文')
     if (typeof gl.drawElements !== 'function') throw new Error('WebGL2Backend: gl.drawElements 不可用，无法提交绘制')
+    if (gl.getParameter !== undefined && Number(gl.getParameter(GL_STENCIL_BITS)) < 1) {
+      throw new Error('WebGL2Backend: 缺少 stencil buffer（创建上下文时需指定 stencil: true）')
+    }
     this.gl = gl
     this.program = program ?? compileDefaultProgram(gl) ?? {}
     this.programCache = programCache ?? null
@@ -746,8 +793,13 @@ export class WebGL2Backend implements RenderBackend {
     }
   }
 
-  /** 上传页纹理与 1x1 白纹理；只在 prepare/热更新时调用，draw 内绝不上传。 */
+  /** 上传页纹理与 1x1 白纹理；帧切换资产时同步更新页绑定。 */
   prepare(assets: RenderAssets): void {
+    checkAssets(assets)
+    if (this.textures.length > 0) {
+      for (const texture of this.textures) this.gl.deleteTexture?.(texture)
+      if (this.whiteTexture !== null) this.gl.deleteTexture?.(this.whiteTexture)
+    }
     this.assets = assets
     this.uploadAssets(assets)
   }
@@ -765,7 +817,7 @@ export class WebGL2Backend implements RenderBackend {
       const page = assets.pages[i]!
       const texture = gl.createTexture()
       gl.activeTexture?.(GL_TEXTURE0 + i)
-      gl.bindTexture?.(GL_TEXTURE_2D, texture)
+      this.bindTexture(GL_TEXTURE_2D, texture)
       // straight 页在 CPU 做唯一一次预乘；同时把 GL 全局预乘状态压回 0，避免重复乘。
       const pixels = page.pma === false ? premultiply(page.data) : page.data
       gl.pixelStorei?.(GL_UNPACK_PREMULTIPLY_ALPHA_WEBGL, 0)
@@ -773,23 +825,33 @@ export class WebGL2Backend implements RenderBackend {
         GL_TEXTURE_2D, 0, GL_RGBA8, page.width, page.height, 0,
         GL_RGBA, GL_UNSIGNED_BYTE, pixels,
       )
-      const nearest = (page.filter ?? filterOf(i)) === 'nearest'
-      const mipmap = page.mipmap === true
-      const minFilter = mipmap
-        ? (nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR)
-        : (nearest ? GL_NEAREST : GL_LINEAR)
-      const wrap = page.wrap === 'repeat' ? GL_REPEAT : GL_CLAMP_TO_EDGE
+      const nearest = (page.magFilter ?? page.filter ?? filterOf(i)) === 'nearest'
+      const mipmap = page.mipmap === true || (page.minFilter?.startsWith('mipmap') ?? false)
+      const minFilter = (() => {
+        switch (page.minFilter) {
+          case 'nearest': return GL_NEAREST
+          case 'linear': return GL_LINEAR
+          case 'mipmapNearestNearest': return GL_NEAREST_MIPMAP_NEAREST
+          case 'mipmapLinearNearest': return GL_LINEAR_MIPMAP_NEAREST
+          case 'mipmapNearestLinear': return GL_NEAREST_MIPMAP_LINEAR
+          case 'mipmap':
+          case 'mipmapLinearLinear': return GL_LINEAR_MIPMAP_LINEAR
+          default: return mipmap
+            ? (nearest ? GL_NEAREST_MIPMAP_NEAREST : GL_LINEAR_MIPMAP_LINEAR)
+            : (nearest ? GL_NEAREST : GL_LINEAR)
+        }
+      })()
       gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minFilter)
       gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, nearest ? GL_NEAREST : GL_LINEAR)
-      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap)
-      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (page.uWrap ?? page.wrap) === 'repeat' ? GL_REPEAT : GL_CLAMP_TO_EDGE)
+      gl.texParameteri?.(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (page.vWrap ?? page.wrap) === 'repeat' ? GL_REPEAT : GL_CLAMP_TO_EDGE)
       if (mipmap) gl.generateMipmap?.(GL_TEXTURE_2D)
       this.textures.push(texture)
     }
     // flat 材质绑定 1x1 白纹理，配合 uUseTexture=0 走纯顶点色。
     const white = gl.createTexture()
     gl.activeTexture?.(GL_TEXTURE0)
-    gl.bindTexture?.(GL_TEXTURE_2D, white)
+    this.bindTexture(GL_TEXTURE_2D, white)
     gl.texImage2D?.(
       GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0,
       GL_RGBA, GL_UNSIGNED_BYTE, new Uint8Array([255, 255, 255, 255]),
@@ -842,6 +904,7 @@ export class WebGL2Backend implements RenderBackend {
       this.capacities.set(buffer, need)
     }
     gl.bufferSubData(target, 0, data)
+    this.stats.uploadedBytes += data.byteLength
   }
 
   private setAttrib(name: string, size: number, type: number, normalized: boolean): void {
@@ -851,6 +914,14 @@ export class WebGL2Backend implements RenderBackend {
         gl.vertexAttribPointer === undefined) return
     gl.enableVertexAttribArray(loc)
     gl.vertexAttribPointer(loc, size, type, normalized, 0, 0)
+  }
+
+  private resetDarkAttrib(): void {
+    const gl = this.gl
+    const loc = gl.getAttribLocation?.(this.program, 'aDark')
+    if (loc === undefined || loc < 0) return
+    gl.disableVertexAttribArray?.(loc)
+    gl.vertexAttrib4f?.(loc, 0, 0, 0, 0)
   }
 
   private setUniform1f(name: string, value: number): void {
@@ -869,13 +940,18 @@ export class WebGL2Backend implements RenderBackend {
 
   private setViewProjection(vp: Float32Array | undefined): void {
     const gl = this.gl
-    if (vp === undefined || gl.getUniformLocation === undefined) return
+    if (gl.getUniformLocation === undefined || gl.uniformMatrix3fv === undefined) return
     const loc = gl.getUniformLocation(this.program, 'viewProjection')
     if (loc === null || loc === undefined) return
-    if (vp.length >= 16 && gl.uniformMatrix4fv !== undefined) {
-      gl.uniformMatrix4fv(loc, false, vp)
-    } else if (vp.length >= 9 && gl.uniformMatrix3fv !== undefined) {
-      gl.uniformMatrix3fv(loc, false, vp.subarray(0, 9))
+    if (vp !== undefined && vp.length >= 16) {
+      // The shader accepts pixel-space mat3; convert the 4x4 NDC affine projection.
+      gl.uniformMatrix3fv(loc, false, new Float32Array([
+        vp[0]! * this.width / 2, -vp[1]! * this.height / 2, 0,
+        vp[4]! * this.width / 2, -vp[5]! * this.height / 2, 0,
+        (vp[12]! + 1) * this.width / 2, (1 - vp[13]!) * this.height / 2, 1,
+      ]))
+    } else {
+      gl.uniformMatrix3fv(loc, false, vp?.length === 9 ? vp : new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]))
     }
   }
 
@@ -885,6 +961,65 @@ export class WebGL2Backend implements RenderBackend {
     const loc = gl.getUniformLocation(this.program, name)
     if (loc === null || loc === undefined) return
     gl.uniform1i(loc, value)
+  }
+
+  private maskMode(frame: RenderFrame, path: number): 'none' | 'stencil' | 'alpha' {
+    if (path < 0 || frame.maskPaths === undefined || frame.masks === undefined) return 'none'
+    const chain = maskChain(path, frame.maskPaths)
+    if (chain.error) return 'none'
+    let mode: 'none' | 'stencil' | 'alpha' = 'none'
+    for (const id of chain.ids) {
+      const mask = frame.masks.masks[id]
+      if (mask?.mode === 'alpha') {
+        if (mode === 'alpha') throw new Error('WebGL2Backend: 多级 alpha mask 尚不支持')
+        mode = 'alpha'
+      } else if (mask?.mode === 'stencil' && mode === 'none') {
+        mode = 'stencil'
+      }
+    }
+    return mode
+  }
+
+  private bindTexture(target: number, texture: unknown): void {
+    if (this.gl.bindTexture === undefined) return
+    this.gl.bindTexture(target, texture)
+    this.stats.textureBinds += 1
+  }
+
+  private useProgram(program: object): void {
+    if (this.gl.useProgram === undefined) return
+    this.gl.useProgram(program)
+    this.stats.programSwitches += 1
+  }
+
+  private setAlphaMask(mask: RenderMask, frame: RenderFrame): void {
+    const alpha = mask.alpha
+    const texture = alpha === undefined ? undefined : this.textures[alpha.page]
+    if (texture === undefined) throw assetError('E_TEXTURE_MISSING', `alpha mask ${mask.id} 的纹理页缺失`)
+    const { x, y, width, height } = mask.bounds
+    const corners = [
+      this.toScreen(frame, x, y), this.toScreen(frame, x + width, y),
+      this.toScreen(frame, x, y + height), this.toScreen(frame, x + width, y + height),
+    ]
+    const xs = corners.map((corner) => corner[0])
+    const ys = corners.map((corner) => corner[1])
+    const minX = Math.min(...xs)
+    const minY = Math.min(...ys)
+    const gl = this.gl
+    gl.activeTexture?.(GL_TEXTURE1)
+    this.bindTexture(GL_TEXTURE_2D, texture)
+    this.setUniform1i('uMask', 1)
+    const loc = gl.getUniformLocation?.(this.program, 'uMaskBounds')
+    if (loc !== null && loc !== undefined) {
+      gl.uniform4f?.(loc, minX, minY, Math.max(Math.max(...xs) - minX, EPS), Math.max(Math.max(...ys) - minY, EPS))
+    }
+    const m = alpha!.uvMatrix
+    const matrix = new Float32Array([m[0]!, m[1]!, 0, m[2]!, m[3]!, 0, m[4]!, m[5]!, 1])
+    const matrixLoc = gl.getUniformLocation?.(this.program, 'uMaskUvMatrix')
+    if (matrixLoc !== null && matrixLoc !== undefined) gl.uniformMatrix3fv?.(matrixLoc, false, matrix)
+    this.setUniform1f('uMaskInvert', mask.invert ? 1 : 0)
+    this.setUniform1f('uMaskFeather', mask.feather)
+    this.setUniform1f('uAlphaMask', 1)
   }
 
   /** world 包围盒 → 设备像素矩形；无 viewProjection 时按像素坐标直通。 */
@@ -971,27 +1106,27 @@ export class WebGL2Backend implements RenderBackend {
         const gl = this.gl
         gl.enable?.(GL_STENCIL_TEST)
         gl.colorMask?.(false, false, false, false)
+        gl.stencilMask?.(0xff)
         gl.clearStencil?.(0)
         gl.clear?.(GL_STENCIL_BUFFER_BIT)
         gl.stencilFunc?.(GL_ALWAYS, 1, 0xff)
         gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_REPLACE)
+        // Mask geometry must not be rejected by the packet depth test.
+        gl.disable?.(GL_DEPTH_TEST)
         // mask 是独立几何：必须上传自己的顶点/索引，不能复用上一个 packet 的 buffer。
         this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, mask.positions)
         this.setAttrib('aPosition', 2, GL_FLOAT, false)
         this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, mask.indices)
-        this.setUniform1i('uUseTexture', 0)
-        gl.drawElements?.(GL_TRIANGLES, mask.indices.length, GL_UNSIGNED_INT, 0)
+        this.setUniform1f('uUseTexture', 0)
+        gl.drawElements?.(GL_TRIANGLES, mask.indices.length, indexType(mask.indices), 0)
+        if (frame.depthMode !== undefined && frame.depthMode !== 'none') gl.enable?.(GL_DEPTH_TEST)
         gl.colorMask?.(true, true, true, true)
+        gl.stencilMask?.(0x00)
         gl.stencilFunc?.(mask.invert ? GL_NOTEQUAL : GL_EQUAL, 1, 0xff)
         gl.stencilOp?.(GL_KEEP, GL_KEEP, GL_KEEP)
         state.stencil = true
-      } else if (mask.mode === 'alpha' && mask.alpha !== undefined) {
-        const texture = this.textures[mask.alpha.page]
-        if (texture !== undefined) {
-          this.gl.activeTexture?.(GL_TEXTURE1)
-          this.gl.bindTexture?.(GL_TEXTURE_2D, texture)
-          this.setUniform1i('uMask', 1)
-        }
+      } else if (mask.mode === 'alpha') {
+        this.setAlphaMask(mask, frame)
       }
     }
     return state
@@ -1000,6 +1135,7 @@ export class WebGL2Backend implements RenderBackend {
   private resetMaskState(state: { scissor: boolean; stencil: boolean }): void {
     if (state.scissor) this.gl.disable?.(GL_SCISSOR_TEST)
     if (state.stencil) this.gl.disable?.(GL_STENCIL_TEST)
+    if (state.stencil) this.gl.stencilMask?.(0xff)
     this.gl.colorMask?.(true, true, true, true)
     this.gl.activeTexture?.(GL_TEXTURE0)
   }
@@ -1024,11 +1160,15 @@ export class WebGL2Backend implements RenderBackend {
     }
     this.stats.drawCalls = 0
     this.stats.packets = 0
+    this.stats.batches = 0
+    this.stats.textureBinds = 0
+    this.stats.programSwitches = 0
+    this.stats.uploadedBytes = 0
     this.stats.uploadedVertices = 0
     this.stats.maskTests = 0
     this.stats.textureSamples = 0
     const gl = this.gl
-    gl.useProgram?.(this.program)
+    this.useProgram(this.program)
     this.setViewProjection(frame.viewProjection)
     this.setResolution(frame.width, frame.height)
 
@@ -1042,41 +1182,47 @@ export class WebGL2Backend implements RenderBackend {
       gl.clear?.(GL_DEPTH_BUFFER_BIT)
     }
 
+    if (frame.assets !== undefined && frame.assets !== this.assets) this.prepare(frame.assets)
     const assets = frame.assets ?? this.assets
     for (const packet of frame.packets) {
       const vertexCount = Math.floor(packet.uvs.length / 2)
       const stride = vertexCount > 0 ? packet.positions.length / vertexCount : 2
       const material = assets?.materials.find((m) => m.id === packet.materialId) ?? null
+      spritePage(material, assets?.pages)
       const texture = material !== null && material.kind === 'sprite'
         ? this.textures[material.page]
         : undefined
+      if (material?.kind === 'sprite' && texture === undefined) {
+        throw assetError('E_TEXTURE_MISSING', `材质 ${material.id} 的图集页 ${material.page} 尚未上传`)
+      }
 
+      const maskMode = this.maskMode(frame, packet.maskPath)
+      if (this.programCache !== null && material !== null) {
+        this.program = this.programCache.get(variantOf({
+          pma: material.pma ?? true,
+          twoColor: packet.twoColor === true || material.tintBlack === true,
+          tintBlack: material.tintBlack === true, kind: material.kind,
+        }, maskMode)) as object
+        this.useProgram(this.program)
+      }
+      this.setViewProjection(frame.viewProjection)
+      this.setResolution(frame.width, frame.height)
+      this.setUniform1f('uAlphaMask', 0)
       if (texture !== undefined) {
         gl.activeTexture?.(GL_TEXTURE0)
-        gl.bindTexture?.(GL_TEXTURE_2D, texture)
-        this.setUniform1i('uAtlas', 0)
-        this.setUniform1i('uUseTexture', 1)
+        this.bindTexture(GL_TEXTURE_2D, texture)
+        this.setUniform1i('uTexture', 0)
+        this.setUniform1f('uUseTexture', 1)
       } else {
         if (this.whiteTexture !== null) {
           gl.activeTexture?.(GL_TEXTURE0)
-          gl.bindTexture?.(GL_TEXTURE_2D, this.whiteTexture)
+          this.bindTexture(GL_TEXTURE_2D, this.whiteTexture)
         }
-        this.setUniform1i('uUseTexture', 0)
+        this.setUniform1f('uUseTexture', 0)
       }
 
-      if (this.programCache !== null && assets !== null) {
-        const material = assets.materials.find((m) => m.id === packet.materialId)
-        if (material !== undefined) {
-          const maskMode = packet.maskPath >= 0 ? 'stencil' : 'none'
-          this.program = this.programCache.get(variantOf({
-            pma: material.pma === true || material.pma === undefined,
-            twoColor: material.twoColor === true || packet.twoColor === true,
-            tintBlack: false, kind: material.kind,
-          }, maskMode)) as object
-          gl.useProgram?.(this.program)
-        }
-      }
       const maskState = this.applyMasks(frame, packet.maskPath, assets)
+      this.setUniform1f('uUseTexture', texture === undefined ? 0 : 1)
       this.applyBlend(packet.blend)
 
       this.upload(GL_ARRAY_BUFFER, this.buffers?.positions, packet.positions)
@@ -1088,14 +1234,18 @@ export class WebGL2Backend implements RenderBackend {
       if (packet.dark !== undefined) {
         this.upload(GL_ARRAY_BUFFER, this.buffers?.darks, packet.dark)
         this.setAttrib('aDark', 4, GL_UNSIGNED_BYTE, true)
+      } else {
+        this.resetDarkAttrib()
       }
-      this.setUniform1f('uTwoColor', packet.twoColor === true ? 1 : 0)
+      this.setUniform1f('uTwoColor', (packet.twoColor === true && packet.dark !== undefined) || material?.tintBlack === true ? 1 : 0)
+      this.setUniform1f('uTintBlack', material?.tintBlack === true ? 1 : 0)
       this.upload(GL_ELEMENT_ARRAY_BUFFER, this.buffers?.indices, packet.indices)
-      gl.drawElements?.(GL_TRIANGLES, packet.indices.length, GL_UNSIGNED_INT, 0)
+      gl.drawElements?.(GL_TRIANGLES, packet.indices.length, indexType(packet.indices), 0)
       this.resetMaskState(maskState)
 
       this.stats.drawCalls += 1
       this.stats.packets += 1
+      this.stats.batches += 1
       this.stats.uploadedVertices += vertexCount
     }
 

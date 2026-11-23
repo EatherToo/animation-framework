@@ -19,6 +19,12 @@ export type MeshData = {
 export type WeightedMeshData = MeshData & {
   readonly boneIndices: Uint16Array
   readonly weights: Float32Array
+  /** Number of influence slots per vertex; legacy meshes use four. */
+  readonly influencesPerVertex?: number
+  /** Spine source local x/y for each retained influence. */
+  readonly influencePositions?: Float32Array
+  /** Source deform x-component index per influence; -1 for padding/fallback. */
+  readonly influenceSourceIndices?: Int32Array
 }
 
 /** FFD：offsets 是存储空间绝对偏移（非增量）。 */
@@ -60,16 +66,18 @@ export function buildInverseBind(pose: Pose): Float32Array {
 const delta = createAffine()
 const temp = createAffine()
 
-/** 把网格顶点变换到 world 空间，固定 4 影响。 */
+/** 把网格顶点变换到 world 空间；旧资产缺省每顶点 4 影响。 */
 export function skinMesh2D(
   mesh: MeshData | WeightedMeshData,
   pose: Pose,
   inverseBind: Float32Array,
   out: Float32Array = new Float32Array(mesh.positions.length),
+  deform?: Float32Array,
 ): Float32Array {
   const positions = mesh.positions
   if (out.length !== positions.length) throw new Error('mesh.output.length')
   const weighted = 'boneIndices' in mesh && 'weights' in mesh
+  const stride = weighted ? (mesh as WeightedMeshData).influencesPerVertex ?? 4 : 0
   const invOff = (bone: number) => bone * WORLD_STRIDE
 
   for (let v = 0; v < positions.length / 2; v += 1) {
@@ -90,8 +98,29 @@ export function skinMesh2D(
       }
       continue
     }
+    const influencePositions = (mesh as WeightedMeshData).influencePositions
+    if (influencePositions !== undefined) {
+      let wx = 0
+      let wy = 0
+      for (let j = 0; j < stride; j += 1) {
+        const influence = v * stride + j
+        const w = (mesh as WeightedMeshData).weights[influence]!
+        if (w === 0) continue
+        const bone = (mesh as WeightedMeshData).boneIndices[influence]!
+        if (bone >= pose.skeleton.count) throw new Error('mesh.boneIndex')
+        const off = bone * WORLD_STRIDE
+        const local = influence * 2
+        const x = influencePositions[local]! + (deform?.[local] ?? 0)
+        const y = influencePositions[local + 1]! + (deform?.[local + 1] ?? 0)
+        wx += w * (pose.world[off]! * x + pose.world[off + 2]! * y + pose.world[off + 4]!)
+        wy += w * (pose.world[off + 1]! * x + pose.world[off + 3]! * y + pose.world[off + 5]!)
+      }
+      out[v * 2] = wx
+      out[v * 2 + 1] = wy
+      continue
+    }
     if (mesh.vertexSpace === 'boneLocal') {
-      const bone = (mesh as WeightedMeshData).boneIndices[v * 4]!
+      const bone = (mesh as WeightedMeshData).boneIndices[v * stride]!
       const off = bone * WORLD_STRIDE
       for (let k = 0; k < WORLD_STRIDE; k += 1) temp[k] = pose.world[off + k]!
       out[v * 2] = temp[0]! * px + temp[2]! * py + temp[4]!
@@ -100,10 +129,10 @@ export function skinMesh2D(
     }
     let wx = 0
     let wy = 0
-    for (let j = 0; j < 4; j += 1) {
-      const w = (mesh as WeightedMeshData).weights[v * 4 + j]!
+    for (let j = 0; j < stride; j += 1) {
+      const w = (mesh as WeightedMeshData).weights[v * stride + j]!
       if (w === 0) continue
-      const bone = (mesh as WeightedMeshData).boneIndices[v * 4 + j]!
+      const bone = (mesh as WeightedMeshData).boneIndices[v * stride + j]!
       if (bone < 0 || bone >= pose.skeleton.count) throw new Error('mesh.boneIndex')
       const off = bone * WORLD_STRIDE
       for (let k = 0; k < WORLD_STRIDE; k += 1) temp[k] = pose.world[off + k]!
@@ -157,23 +186,24 @@ export function validateTopology(mesh: MeshData | WeightedMeshData): TopologyRep
 
   if ('boneIndices' in mesh && 'weights' in mesh) {
     const weighted = mesh as WeightedMeshData
-    if (weighted.boneIndices.length !== vertexCount * 4 || weighted.weights.length !== vertexCount * 4) {
+    const stride = weighted.influencesPerVertex ?? 4
+    if (!Number.isInteger(stride) || stride < 1 ||
+        weighted.boneIndices.length !== vertexCount * stride || weighted.weights.length !== vertexCount * stride ||
+        (weighted.influencePositions !== undefined && weighted.influencePositions.length !== vertexCount * stride * 2) ||
+        (weighted.influenceSourceIndices !== undefined && weighted.influenceSourceIndices.length !== vertexCount * stride)) {
       errors.push('weightLength')
     }
     for (let v = 0; v < vertexCount; v += 1) {
       let sum = 0
-      let influences = 0
-      for (let j = 0; j < 4; j += 1) {
-        const w = weighted.weights[v * 4 + j]!
+      for (let j = 0; j < stride; j += 1) {
+        const w = weighted.weights[v * stride + j]!
         if (!Number.isFinite(w) || w < 0) errors.push('weightInvalid')
         if (w > 0) {
-          influences += 1
           sum += w
-          const bone = weighted.boneIndices[v * 4 + j]!
+          const bone = weighted.boneIndices[v * stride + j]!
           if (!Number.isInteger(bone) || bone < 0) errors.push('weightBoneIndex')
         }
       }
-      if (influences > 4) errors.push('weightInfluences')
       if (Math.abs(sum - 1) > 1e-3) errors.push('weightSum')
     }
   }

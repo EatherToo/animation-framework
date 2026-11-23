@@ -4,6 +4,8 @@
  * 页数上限、稳定 hash 与 atlasRegionRef。
  */
 import { describe, expect, it } from '@jest/globals'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
   atlasRegionRef,
   importSpineAtlas,
@@ -146,6 +148,104 @@ body
     expect(atlas.pages[0]!.image).toEqual({ width: 128, height: 64 })
     expect(atlas.padding).toBe(6)
     expect(atlas.bleed).toBe(3)
+  })
+})
+
+describe('N8-T2 atlas: 逐页元数据', () => {
+  const twoPages = `first.png
+size: 32,32
+format: RGBA8888
+filter: MipMapLinearLinear,Nearest
+repeat: x
+pma: true
+first-region
+  bounds: 0,0,8,8
+
+second.png
+size: 64,64
+filter: Linear,Linear
+repeat: y
+second-region
+  bounds: 0,0,8,8
+`
+
+  it('各页独立保存官方过滤、寻址、PMA 和页名', () => {
+    const atlas = importSpineAtlas(twoPages)
+    expect(atlas.pages[0]).toMatchObject({
+      name: 'first.png', format: 'RGBA8888', minFilter: 'MipMapLinearLinear',
+      magFilter: 'Nearest', uWrap: 'Repeat', vWrap: 'ClampToEdge', pma: true,
+    })
+    expect(atlas.pages[1]).toMatchObject({
+      name: 'second.png', minFilter: 'Linear', magFilter: 'Linear',
+      uWrap: 'ClampToEdge', vWrap: 'Repeat', pma: false,
+    })
+    expect(atlas.pma).toBe(true) // 旧 API 只返回首页值。
+    expect(atlas.regions.get('second-region')!.page).toBe(1)
+  })
+
+  it('命名图片按页名绑定，旧无名称 options.pages 保留按索引绑定', () => {
+    const firstImage = { width: 32, height: 32 }
+    const secondImage = { width: 64, height: 64 }
+    const atlas = importSpineAtlas(twoPages, { pages: [
+      { index: 0, name: 'second.png', width: 64, height: 64, image: secondImage },
+      { index: 1, name: 'first.png', width: 32, height: 32, image: firstImage },
+    ] })
+    expect(atlas.pages[0]!.image).toBe(firstImage)
+    expect(atlas.pages[1]!.image).toBe(secondImage)
+    const legacy = importSpineAtlas(twoPages, { pages: [
+      { index: 0, width: 32, height: 32, image: firstImage },
+      { index: 1, width: 64, height: 64, image: secondImage },
+    ] })
+    expect(legacy.pages[1]!.image).toBe(secondImage)
+  })
+
+  it('省略字段按官方默认 Nearest/ClampToEdge/straight，重复标志各轴独立', () => {
+    const atlas = importSpineAtlas(pageText(0))
+    expect(atlas.pages[0]).toMatchObject({
+      name: 'p0.png', minFilter: 'Nearest', magFilter: 'Nearest',
+      uWrap: 'ClampToEdge', vWrap: 'ClampToEdge', pma: false,
+    })
+    const repeated = importSpineAtlas(twoPages.replace('repeat: x', 'repeat: xy'))
+    expect(repeated.pages[0]).toMatchObject({ uWrap: 'Repeat', vWrap: 'Repeat' })
+    expect(repeated.hash).not.toBe(importSpineAtlas(twoPages).hash)
+  })
+})
+
+describe('A27/A41 Spine 3.8 atlas ninepatch', () => {
+  const text = readFileSync(resolve(__dirname, '../../../../test/fixtures/synthetic/atlas38/split.atlas'), 'utf8')
+
+  it('parses legacy xy/size, trim, splits and pads without changing ordinary region UVs', () => {
+    const atlas = importSpineAtlas(text)
+    const dialog = atlas.regions.get('dialog')!
+    expect(atlas.pages[0]!.name).toBe('legacy-38.png')
+    expect({ x: dialog.x, y: dialog.y, width: dialog.width, height: dialog.height })
+      .toEqual({ x: 12, y: 8, width: 30, height: 20 })
+    expect(dialog.trim).toEqual({ offsetX: 2, offsetY: 3, sourceWidth: 40, sourceHeight: 30 })
+    expect(dialog.split).toEqual({ left: 4, right: 6, top: 3, bottom: 5 })
+    expect(dialog.pad).toEqual({ left: -1, right: -1, top: 7, bottom: 2 })
+    expect(Object.isFrozen(dialog.split)).toBe(true)
+    expect(mapUv(dialog, 0, 0)[0]).toBeCloseTo((12 - 2) / 128, 8)
+    expect(mapUv(dialog, 0, 0)[1]).toBeCloseTo((8 - (30 - 3 - 20)) / 64, 8)
+    expect(atlas.regions.get('frame')!.split).toBeUndefined()
+    expect(atlas.regions.get('frame')!.pad).toBeUndefined()
+    const splitOnly = importSpineAtlas(text.replace('  pad: -1,-1,7,2\n', ''))
+    expect(splitOnly.regions.get('dialog')!.split).toEqual(dialog.split)
+    expect(splitOnly.regions.get('dialog')!.pad).toBeUndefined()
+    const modern = importSpineAtlas(text.replace('xy: 12,8\n  size: 30,20', 'bounds: 12,8,30,20')
+      .replace('xy: 50,8\n  size: 12,10', 'bounds: 50,8,12,10'))
+    expect(modern.regions.get('dialog')!.uvMatrix).toEqual(dialog.uvMatrix)
+    expect(importSpineAtlas(text).hash).toBe(atlas.hash)
+    expect(importSpineAtlas(text.replace('split: 4,6,3,5', 'split: 5,6,3,5')).hash).not.toBe(atlas.hash)
+    expect(importSpineAtlas(text.replace('pad: -1,-1,7,2', 'pad: -1,-1,8,2')).hash).not.toBe(atlas.hash)
+  })
+
+  it('rejects malformed inset tuples and pad without splits', () => {
+    expect(() => importSpineAtlas(text.replace('split: 4,6,3,5', 'split: 4,6,3')))
+      .toThrow(/E_ATLAS_REGION/)
+    expect(() => importSpineAtlas(text.replace('split: 4,6,3,5\n', '')))
+      .toThrow(/E_ATLAS_REGION/)
+    expect(() => importSpineAtlas(text.replace('pad: -1,-1,7,2', 'pad: -1,1.5,7,2')))
+      .toThrow(/E_ATLAS_REGION/)
   })
 })
 

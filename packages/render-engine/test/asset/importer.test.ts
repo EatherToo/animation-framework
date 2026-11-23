@@ -12,7 +12,9 @@ import {
   type ImportIssue,
   type SkeletonAsset,
 } from '@/asset/importer'
-import type { AnimationClip } from '@/animation/animation'
+import { createTrack, sampleAnimation, type AnimationClip, type DeformTimeline } from '@/animation/animation'
+import { createPose } from '@/core/pose'
+import { createSlotSet } from '@/slot/slot'
 
 const HALF_PI = Math.PI / 2
 const SCALE = 0.01
@@ -179,7 +181,7 @@ function coreOf(asset: SkeletonAsset): Omit<SkeletonAsset, 'hash' | 'report'> {
 }
 
 describe('M5 importer: Spine 4.2 正常导入', () => {
-  const asset = importSpine(spineFixture(), { unitScale: SCALE })
+  const asset = importSpine(spineFixture(), { unitScale: SCALE, sourceYDown: true })
 
   it('骨数/名字/父子/坐标共轭正确', () => {
     expect(asset.source).toBe('spine')
@@ -230,13 +232,153 @@ describe('M5 importer: Spine 4.2 正常导入', () => {
     expect(asset.events).toEqual([{ time: 0.5, name: 'clap' }])
   })
 
+  it('缺省 slot 和附件颜色不产生回退诊断', () => {
+    const fixture = spineFixture() as any
+    delete fixture.slots[0].color
+    delete fixture.skins[0].attachments.bodySlot.body.color
+    const parsed = importSpine(fixture, { unitScale: SCALE, sourceYDown: true })
+    expect(parsed.report.issues.filter((issue) => issue.code === 'I_COLOR_DEFAULT')).toEqual([])
+  })
+
+  it('默认 Spine y-up，显式 sourceYDown 才转换坐标', () => {
+    const standard = importSpine(spineFixture(), { unitScale: SCALE })
+    expect(standard.skeleton.bones[1]!.setup.y).toBeCloseTo(-0.1, 6)
+    expect(asset.skeleton.bones[1]!.setup.y).toBeCloseTo(0.1, 6)
+  })
+
+  it('保留动画段曲线并按 Spine 偏移算法重建 drawOrder', () => {
+    const fixture = spineFixture() as any
+    fixture.animations.wave.bones.arm.rotate[0].curve = 'stepped'
+    fixture.animations.wave.bones.hand.translate[0].curve = [0.25, 2, 0.75, 8, 0.25, 4, 0.75, 16]
+    const parsed = importSpine(fixture, { unitScale: SCALE, sourceYDown: true })
+    const clip = parsed.animations.get('wave')!
+    const rotate = keyTimeline(clip, (t) => t.kind === 'rotate' && t.path === 'arm')
+    const translate = keyTimeline(clip, (t) => t.kind === 'translate' && t.path === 'hand.x')
+    expect((rotate.keys[0] as any).curve).toBe('stepped')
+    const translateY = keyTimeline(clip, (t) => t.kind === 'translate' && t.path === 'hand.y')
+    for (const timeline of [translate, translateY]) {
+      const curve = (timeline.keys[0] as any).curve as number[]
+      for (const [index, expected] of [0.25, 0.2, 0.75, 0.8].entries()) {
+        expect(curve[index]).toBeCloseTo(expected, 6)
+      }
+    }
+    const order = keyTimeline(clip, (t) => t.path === 'drawOrder[0]')
+    expect(order.keys[0]!.value).toBe(1)
+
+    fixture.slots.push(
+      { name: 'third', bone: 'spine' },
+      { name: 'fourth', bone: 'spine' },
+    )
+    fixture.animations.wave.drawOrder = [{
+      time: 0, offsets: [{ slot: 'bodySlot', offset: 1 }, { slot: 'handSlot', offset: 1 }],
+    }]
+    const four = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const values = [0, 1, 2, 3].map((index) =>
+      keyTimeline(four, (t) => t.path === `drawOrder[${index}]`).keys[0]!.value,
+    )
+    expect(values).toEqual([2, 0, 1, 3])
+  })
+
+  it('骨骼键保持 setup 偏移/倍数并导入逐轴与 shear 变体', () => {
+    const fixture = spineFixture() as any
+    fixture.bones[2].scaleX = 2
+    fixture.animations.wave.bones.arm.translatex = [{ time: 0.25, value: 10 }]
+    fixture.animations.wave.bones.arm.scalex = [{ time: 0.25, value: 1.5 }]
+    fixture.animations.wave.bones.arm.shear = [{ time: 0.5, x: 15, y: -20 }]
+    fixture.animations.wave.bones.arm.sheary = [{ time: 0.75, value: 30 }]
+    const clip = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const get = (kind: string, path: string) => keyTimeline(clip, (t) => t.kind === kind && t.path === path).keys[0]!.value
+    expect(get('translate', 'hand.x')).toBeCloseTo(0, 6)
+    expect(get('translate', 'arm.x')).toBeCloseTo(0.1, 6)
+    expect(get('scale', 'arm.sx')).toBeCloseTo(1.5, 6)
+    expect(get('shear', 'arm.shx')).toBeCloseTo(15 * Math.PI / 180, 6)
+    expect(get('shear', 'arm.shy')).toBeCloseTo(30 * Math.PI / 180, 6)
+  })
+
+  it('双分量 shear 曲线分别读取控制点的绝对时间和值', () => {
+    const fixture = spineFixture() as any
+    fixture.animations.wave.bones.arm.shear = [
+      { time: 0, x: 0, y: 0, curve: [0.25, 5, 0.75, 10, 0.25, -2, 0.75, -8] },
+      { time: 1, x: 15, y: -10 },
+    ]
+    const clip = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const x = keyTimeline(clip, (t) => t.kind === 'shear' && t.path === 'arm.shx')
+    const y = keyTimeline(clip, (t) => t.kind === 'shear' && t.path === 'arm.shy')
+    expect((x.keys[0] as any).curve[1]).toBeCloseTo(1 / 3, 6)
+    expect((x.keys[0] as any).curve[3]).toBeCloseTo(2 / 3, 6)
+    expect((y.keys[0] as any).curve).toEqual([0.25, 0.2, 0.75, 0.8])
+  })
+
+  it('导入 4.3 slot 颜色通道和双颜色载荷', () => {
+    const fixture = spineFixture() as any
+    fixture.animations.wave.slots.bodySlot = {
+      rgba: [{ time: 0, color: 'ff804080', curve: 'stepped' }],
+      rgb2: [{ time: 0.2, light: 'abcdef', dark: '123456' }],
+      alpha: [{ time: 0.3, value: 0.4 }, { time: 0.4 }],
+    }
+    const clip = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const colors = clip.timelines.filter((item) => item.kind === 'color' && item.path === '0') as any[]
+    expect(colors.map((item) => item.channel)).toEqual(['rgba', 'alpha', 'rgb2'])
+    expect(colors[0].keys[0]).toMatchObject({ curve: 'stepped', light: { r: 1, a: 128 / 255 } })
+    expect(colors[1].keys[1].light.a).toBe(0)
+    expect(colors[2].keys[0]).toMatchObject({ light: { r: 171 / 255 }, dark: { r: 18 / 255 } })
+  })
+
+  it('slot rgba 曲线按分量展开并归一化绝对控制点', () => {
+    const fixture = spineFixture() as any
+    fixture.animations.wave.slots.bodySlot = {
+      rgba: [
+        { time: 0, color: '00000000', curve: [
+          0.25, 0, 0.75, 0, 0.25, 1, 0.75, 1,
+          0.25, 0, 0.75, 0, 0.25, 1, 0.75, 1,
+        ] },
+        { time: 1, color: 'ffffffff' },
+      ],
+    }
+    const clip = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const timeline = clip.timelines.find((item) => item.kind === 'color' && item.channel === 'rgba') as any
+    expect(timeline.keys[0].curves).toEqual([
+      [0.25, 0, 0.75, 0], [0.25, 1, 0.75, 1],
+      [0.25, 0, 0.75, 0], [0.25, 1, 0.75, 1],
+    ])
+  })
+
+  it('4.3 transform properties 只启用声明的目标通道并继承 Y mix', () => {
+    const fixture = spineFixture() as any
+    fixture.constraints = [{
+      type: 'transform', name: 'partial', source: 'arm', bones: ['hand'],
+      mixX: 0, mixScaleX: 0.3,
+      localSource: true, localTarget: true, additive: true, clamp: true,
+      properties: { x: { offset: 2, to: { x: {}, y: { offset: 4, max: 8, scale: 2 } } },
+        y: { to: { y: {} } }, scaleX: { to: { scaleX: {} } } },
+    }]
+    const asset = importSpine(fixture, { unitScale: SCALE, sourceYDown: true })
+    expect(asset.constraints?.[0]).toMatchObject({
+      kind: 'transform', mixRotate: 0, mixX: 0, mixY: 0,
+      mixScaleX: 0.3, mixScaleY: 0, mixShearY: 0,
+      localSource: true, localTarget: true, additive: true, clamp: true,
+      properties: expect.arrayContaining([{ kind: 'x', offset: 0.02, to: [
+        { kind: 'x', offset: 0, max: 0.01, scale: 1 },
+        { kind: 'y', offset: -0.04, max: -0.08, scale: -2 },
+      ] }]),
+    })
+  })
+
+  it('事件 timeline 保留数值和字符串载荷', () => {
+    const fixture = spineFixture() as any
+    fixture.animations.wave.events = [{ time: 0.5, name: 'step', int: 3, float: 0.75, string: 'left' }]
+    const clip = importSpine(fixture, { unitScale: SCALE, sourceYDown: true }).animations.get('wave')!
+    const timeline = clip.timelines.find((item) => item.kind === 'event')!
+    expect(timeline).toMatchObject({ events: [{ time: 0.5, name: 'step', int: 3, float: 0.75, string: 'left' }] })
+  })
+
   it('canonicalHash 稳定且为 64 位小写 hex', () => {
-    const again = importSpine(spineFixture(), { unitScale: SCALE })
+    const again = importSpine(spineFixture(), { unitScale: SCALE, sourceYDown: true })
     expect(asset.hash).toMatch(/^[0-9a-f]{64}$/)
     expect(asset.hash).toBe(again.hash)
     expect(canonicalHash(coreOf(asset))).toBe(asset.hash)
     // 配置变化必须改变 hash。
-    const other = importSpine(spineFixture(), { unitScale: 0.02 })
+    const other = importSpine(spineFixture(), { unitScale: 0.02, sourceYDown: true })
     expect(other.hash).not.toBe(asset.hash)
   })
 
@@ -324,14 +466,18 @@ describe('M5 importer: 10 类坏 fixture 触发对应 issue code', () => {
     expect(codes(a.report.issues)).toContain('E_DUPLICATE_NAME')
   })
 
-  it('W_WEIGHT_PRUNED：影响 >4 保留前 4', () => {
+  it('unlimited default retains more than four influences without a limit issue', () => {
     const a = spineWith((d) => {
       d.skins[0].attachments.bodySlot.bodyMesh.vertices = [
         5, 0, 0, 0, 0.2, 1, 0, 0, 0.2, 2, 0, 0, 0.2, 3, 0, 0, 0.2, 0, 0, 0, 0.2,
       ]
     })
-    expect(codes(a.report.issues)).toContain('W_WEIGHT_PRUNED')
-    expect(a.report.warnings).toBeGreaterThan(0)
+    const mesh = a.skins.get('default')!.attachments.get('bodySlot\u0000bodyMesh')!
+    expect(mesh.kind).toBe('weightedMesh')
+    if (mesh.kind !== 'weightedMesh') return
+    expect(mesh.mesh.influencesPerVertex).toBe(5)
+    for (const weight of mesh.mesh.weights.slice(0, 5)) expect(weight).toBeCloseTo(0.2)
+    expect(codes(a.report.issues)).not.toContain('W_WEIGHT_LIMIT')
   })
 
   it('W_BLEND_UNKNOWN：未知 blend 字符串降级 normal', () => {
@@ -351,14 +497,59 @@ describe('M5 importer: 10 类坏 fixture 触发对应 issue code', () => {
   })
 })
 
+describe('Spine deform import', () => {
+  it('4.3 attachments path preserves complete unweighted frames and samples absolute local vertices', () => {
+    const fixture = spineFixture()
+    const skins = fixture.skins as { attachments: Record<string, Record<string, unknown>> }[]
+    skins[0]!.attachments.bodySlot!.bodyMesh = {
+      type: 'mesh', path: 'body', uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+      triangles: [0, 1, 2, 0, 2, 3], vertices: [1, 2, 3, 4, 5, 6, 7, 8],
+    }
+    const animation = (fixture.animations as Record<string, Record<string, unknown>>).wave!
+    animation.attachments = { default: { bodySlot: { bodyMesh: { deform: [
+      { time: 0, offset: 2, vertices: [12, 14, 16, 18] },
+      { time: 1, offset: 2, vertices: [22, 24, 26, 28] },
+    ] } } } }
+    const asset = importSpine(fixture, { unitScale: SCALE, sourceYDown: true })
+    const clip = asset.animations.get('wave')!
+    const timeline = clip.timelines.find((t) => t.kind === 'deform') as DeformTimeline
+    expect(timeline.skin).toBe('default')
+    expect(timeline.slot).toBe(0)
+    expect(timeline.attachment).toBe('bodyMesh')
+    expect(timeline.keys).toMatchObject([{ offset: 2, vertices: [12, 14, 16, 18] }, { offset: 2, vertices: [22, 24, 26, 28] }])
+    const result = sampleAnimation([createTrack({ ...clip, timelines: [timeline] }, { loop: false })], createPose(asset.skeleton),
+      createSlotSet(asset.slots, asset.skins, 'default'), 0.5)
+    const offsets = result.deformOffsets.get('default:0:bodyMesh')!
+    expect(Array.from(offsets).map((v) => Number(v.toFixed(3)))).toEqual([0, 0, 0.14, -0.15, 0.16, -0.17, 0, 0])
+  })
+
+  it('legacy deform path keeps weighted component offset and runtime mesh key', () => {
+    const fixture = spineFixture()
+    const animation = (fixture.animations as Record<string, Record<string, unknown>>).wave!
+    animation.deform = { default: { bodySlot: { bodyMesh: [
+      { time: 0, offset: 2, vertices: [10, 20, 30, 40] },
+    ] } } }
+    const asset = importSpine(fixture, { unitScale: SCALE, sourceYDown: true })
+    const clip = asset.animations.get('wave')!
+    const timeline = clip.timelines.find((t) => t.kind === 'deform') as DeformTimeline
+    expect(timeline.keys).toMatchObject([{ offset: 2, vertices: [10, 20, 30, 40] }])
+    const result = sampleAnimation([createTrack({ ...clip, timelines: [timeline] }, { loop: false })], createPose(asset.skeleton),
+      createSlotSet(asset.slots, asset.skins, 'default'), 0)
+    const offsets = result.deformOffsets.get('default:0:bodyMesh')!
+    expect(offsets).toHaveLength(32)
+    expect(Array.from(offsets.subarray(0, 12)).map((v) => Number(v.toFixed(3))))
+      .toEqual([0, 0, 0.1, -0.2, 0, 0, 0, 0, 0.3, -0.4, 0, 0])
+  })
+})
+
 describe('M5 importer: validateBoneWorld', () => {
   it('原点全部吻合时返回空数组', () => {
-    const a = importSpine(spineFixture(), { unitScale: SCALE })
+    const a = importSpine(spineFixture(), { unitScale: SCALE, sourceYDown: true })
     expect(validateBoneWorld(a, expectedWorld())).toEqual([])
   })
 
   it('偏差 > 1e-3 米时报 error', () => {
-    const a = importSpine(spineFixture(), { unitScale: SCALE })
+    const a = importSpine(spineFixture(), { unitScale: SCALE, sourceYDown: true })
     const wrong = new Map(expectedWorld())
     wrong.set('hand', [0.05, 0.3])
     const issues = validateBoneWorld(a, wrong)

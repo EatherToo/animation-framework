@@ -31,6 +31,53 @@ const asset: SkeletonAsset = {
 }
 
 describe('sequence runtime', () => {
+  it('resolves each frame trim independently for positions and UVs', () => {
+    const first = atlas.regions.get('s0')!
+    const second = atlas.regions.get('s1')!
+    const trimmed: AtlasData = {
+      ...atlas,
+      regions: new Map([
+        ['s0', first],
+        ['s1', {
+          ...second, width: 0.5, height: 1,
+          trim: { offsetX: 0.5, offsetY: 0, sourceWidth: 2, sourceHeight: 1 },
+          uvMatrix: Float32Array.from([1, 0, 0, 1, 0.25, 0]),
+        }],
+      ]),
+    }
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load({ ...asset, atlas: trimmed })
+    const setup = engine.render().packets[0]!
+    expect(setup.positions[0]).toBeCloseTo(-1, 5)
+    expect(setup.uvs[0]).toBeCloseTo(0.25, 5)
+    engine.play('seq')
+    engine.update(0)
+    const frame = engine.render().packets[0]!
+    expect(frame.positions[0]).toBeCloseTo(-0.5, 5)
+    expect(frame.positions[6]).toBeCloseTo(0, 5)
+    expect(frame.uvs[0]).toBeCloseTo(0.5, 5)
+    expect(frame.uvs[4]).toBeCloseTo(0.75, 5)
+  })
+
+  it('uses setupIndex for an animated -1 sequence index', () => {
+    const setupOnSecond: Attachment = {
+      ...region,
+      region: { ...region.region, sequence: { frames: ['s0', 's1'], setupIndex: 1 } },
+    }
+    const reset: AnimationClip = { name: 'reset', duration: 1, timelines: [
+      { kind: 'sequence', slot: 0, keys: [{ time: 0, value: -1 }] },
+    ] }
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load({
+      ...asset,
+      skins: new Map([['default', { id: 'default', attachments: new Map([['s0', setupOnSecond]]) }]]),
+      animations: new Map([['reset', reset]]),
+    })
+    engine.play('reset')
+    engine.update(0)
+    expect(engine.render().packets[0]!.uvs[0]).toBeCloseTo(0.75, 5)
+  })
+
   it('switches region UV by sequence timeline without rebuilding geometry', () => {
     const engine = new Engine({ backend: 'cpu' })
     engine.load(asset)

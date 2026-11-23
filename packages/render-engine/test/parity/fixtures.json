@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "runtime": "@esotericsoftware/spine-core@4.3.13",
+  "officialSamples": {
+    "sourceBranch": "spine-runtimes/4.3",
+    "exportVersion": "4.3.75-beta",
+    "licensedInputsCommitted": false,
+    "items": ["spineboy", "raptor", "stretchyman"],
+    "generate": "node scripts/oracle/spine-core.mjs test/fixtures/spine/spineboy"
+  },
+  "synthetic": {
+    "status": "complete",
+    "fixture": "test/fixtures/synthetic/corpus-a41/corpus-a41-pro.json",
+    "atlas": "test/fixtures/synthetic/corpus-a41/corpus-a41.atlas",
+    "animation": "exercise",
+    "generate": "node scripts/oracle/spine-core.mjs test/fixtures/synthetic/corpus-a41 exercise",
+    "test": "pnpm --filter @animation-framework/render-engine exec jest --runInBand --testPathPatterns=parity/corpus-a41",
+    "coverage": [
+      { "feature": "sequence", "evidence": "official five-frame sequenceIndex and two indexed atlas regions" },
+      { "feature": "linkedmesh", "evidence": "official inherited base-mesh deform on linked slot" },
+      { "feature": "point", "evidence": "official point world position and rotation fixed numeric checkpoints" },
+      { "feature": "physics", "evidence": "official spring constraint, animated wind, six integrated frames and reset at 0.5; root-motion translation and reset-window world matrices compared" },
+      { "feature": "two-color", "evidence": "official RGBA2 light/dark pose samples; pixel output not covered" },
+      { "feature": "multiply", "evidence": "official parser accepts multiply slot; pixel blend not covered" },
+      { "feature": "screen", "evidence": "official parser accepts screen slot; pixel blend not covered" },
+      { "feature": "repeat", "evidence": "atlas repeat xy parsed as page U/V Repeat" },
+      { "feature": "multi-page", "evidence": "two independently configured atlas pages and named page regions" },
+      { "feature": "trim-region", "evidence": "official world vertices and UVs with bounds 18x12, original 40x32, and nonzero offsets" },
+      { "feature": "split", "evidence": "Spine 3.8 xy/size atlas fixture test/fixtures/synthetic/atlas38/split.atlas; asset/atlas.test.ts asserts split and pad metadata, defaults, hash and malformed tuples" }
+    ],
+    "missingCoverage": [],
+    "limitations": ["3.8 split is legacy atlas metadata, not a Spine 4.3 attachment field; ninepatch rendering is not implemented", "Blend pixels still need direct parity; full physics rotation parity outside the reset window remains blocked by a shared solver discrepancy"]
+  }
+}

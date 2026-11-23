@@ -1,4 +1,7 @@
 import { describe, expect, it } from '@jest/globals'
+import { WebGL2Backend } from '@/backend/backend'
+import { clipTriangles } from '@/render/clipping'
+import { FakeWebGL } from '../render/fake-webgl'
 import { compileSkeleton, type BoneSpec } from '@/core/skeleton'
 import { createPose, updateWorld } from '@/core/pose'
 import { createSlotSet, type SlotData, type SlotSet } from '@/slot/slot'
@@ -249,12 +252,15 @@ describe('debug overlay / stats', () => {
     )
 
     expect(stats).toEqual({
+      inputPackets: 2,
       packets: 2,
       batches: 0,
       drawCalls: 1,
       textureBinds: 0,
       programSwitches: 0,
       clippedTriangles: 0,
+      clippedIn: 0,
+      clippedOut: 0,
       uploadedBytes: 64,
       frameMs: 8.5,
     })
@@ -263,15 +269,80 @@ describe('debug overlay / stats', () => {
   it('collectStats 对缺失 stats / 非有限值回退 0', () => {
     const frame: RenderFrame = { packets: [], width: 1, height: 1 }
     expect(collectStats({}, frame, Number.NaN)).toEqual({
+      inputPackets: 0,
       packets: 0,
       batches: 0,
       drawCalls: 0,
       textureBinds: 0,
       programSwitches: 0,
       clippedTriangles: 0,
+      clippedIn: 0,
+      clippedOut: 0,
       uploadedBytes: 0,
       frameMs: 0,
     })
+  })
+
+  it('distinguishes runtime preclip input from submitted packets and geometric clip triangles', () => {
+    const frame: RenderFrame = {
+      packets: [makeQuadPacket()], width: 16, height: 16,
+      stats: { inputPackets: 3, clippedIn: 4, clippedOut: 2 },
+    }
+    const gl = new FakeWebGL()
+    const backend = new WebGL2Backend(gl)
+    backend.prepare({ pages: [{ width: 1, height: 1, data: new Uint8Array([255, 255, 255, 255]) }],
+      materials: [{ id: 0, kind: 'flat', page: -1, filter: 'nearest' }] })
+    const previousBinds = gl.count('bindTexture')
+    backend.draw(frame)
+    const stats = collectStats(backend, frame, 1)
+    expect(stats.textureBinds).toBe(gl.count('bindTexture') - previousBinds)
+    expect(stats).toMatchObject({ inputPackets: 3, packets: 1, batches: 1, clippedIn: 4, clippedOut: 2 })
+    expect(stats.inputPackets).toBeGreaterThanOrEqual(stats.packets)
+    expect(gl.count('drawElements')).toBe(1)
+    expect(stats.drawCalls).toBe(1)
+    expect(stats.programSwitches).toBe(gl.count('useProgram'))
+    expect(stats.uploadedBytes).toBe(gl.argsOf('bufferSubData').reduce((sum, args) => sum + Number(args[2]), 0))
+    backend.draw({ packets: [], width: 16, height: 16 })
+    expect(collectStats(backend, { packets: [], width: 16, height: 16 }, 0)).toMatchObject({
+      inputPackets: 0, packets: 0, clippedIn: 0, clippedOut: 0, uploadedBytes: 0,
+    })
+  })
+
+  it('tracks actual triangle expansion under a partially intersecting mask', () => {
+    const source = makeQuadPacket()
+    const clipped = clipTriangles(source.positions, source.uvs, source.indices,
+      [new Float32Array([5, -1, 12, -1, 12, 12, 5, 12])])
+    expect(clipped.indices.length).toBeGreaterThan(0)
+    const packet = buildMeshPacket({
+      id: 1, positions: clipped.positions, uvs: clipped.uvs, indices: clipped.indices,
+      color: [1, 1, 1, 1], materialId: 0, order: 0, depthKey: 0,
+    })
+    const frame: RenderFrame = {
+      packets: [packet], width: 16, height: 16,
+      stats: { inputPackets: 1, clippedIn: source.indices.length / 3, clippedOut: clipped.indices.length / 3 },
+    }
+    const backend = new WebGL2Backend(new FakeWebGL())
+    backend.draw(frame)
+    const stats = collectStats(backend, frame, 0)
+    expect(stats.inputPackets).toBeGreaterThanOrEqual(stats.batches)
+    expect(stats.clippedIn).toBe(2)
+    expect(stats.clippedOut).toBe(packet.indices.length / 3)
+    expect(stats.clippedOut).toBeGreaterThan(0)
+  })
+
+  it('keeps stencil draws separate from packet counts and counts mask uploads', () => {
+    const gl = new FakeWebGL()
+    const backend = new WebGL2Backend(gl)
+    const frame: RenderFrame = {
+      packets: [{ ...makeQuadPacket(), maskPath: 0 }], width: 16, height: 16,
+      maskPaths: [{ maskId: 0, parent: -1 }], masks: buildMaskSet([makeStencilMask(0)]),
+      stats: { inputPackets: 1, clippedIn: 2, clippedOut: 1 },
+    }
+    backend.draw(frame)
+    const stats = collectStats(backend, frame, 0)
+    expect(gl.count('drawElements')).toBe(2)
+    expect(stats).toMatchObject({ inputPackets: 1, packets: 1, batches: 1, drawCalls: 1, clippedIn: 2, clippedOut: 1 })
+    expect(stats.uploadedBytes).toBe(gl.argsOf('bufferSubData').reduce((sum, args) => sum + Number(args[2]), 0))
   })
 
   it('formatStats 输出稳定、定序的 JSON', () => {
@@ -283,8 +354,8 @@ describe('debug overlay / stats', () => {
 
     const text = formatStats(stats)
     expect(text).toBe(
-      '{"packets":2,"batches":3,"drawCalls":4,"textureBinds":5,"programSwitches":6,' +
-      '"clippedTriangles":0,"uploadedBytes":0,"frameMs":8.5}',
+      '{"inputPackets":2,"packets":2,"batches":3,"drawCalls":4,"textureBinds":5,"programSwitches":6,' +
+      '"clippedTriangles":0,"clippedIn":0,"clippedOut":0,"uploadedBytes":0,"frameMs":8.5}',
     )
     expect(formatStats(stats)).toBe(text)
     expect(JSON.parse(text)).toEqual(stats)

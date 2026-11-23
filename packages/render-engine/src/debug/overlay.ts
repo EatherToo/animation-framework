@@ -225,12 +225,17 @@ export function buildDebugLines(input: DebugOverlayInput): DebugLine[] {
 // —— 帧统计 ——
 
 export type FrameStats = {
+  /** Renderable packets before batching, including packets later clipped to zero triangles. */
+  inputPackets: number
   packets: number
   batches: number
   drawCalls: number
   textureBinds: number
   programSwitches: number
   clippedTriangles: number
+  /** Runtime geometry clipping only; stencil/scissor/alpha fragment rejection is excluded. */
+  clippedIn: number
+  clippedOut: number
   uploadedBytes: number
   frameMs: number
 }
@@ -245,23 +250,25 @@ function toStat(value: unknown): number {
 }
 
 /**
- * 汇总一帧统计。`frame` 保留为调用签名的一部分，供后续按帧兜底；
- * 当前只读取 backend.stats，缺失字段一律回退 0，避免累计脏值。
+ * Backend counters describe submissions; frame.stats carries runtime prebatch/preclip counts.
+ * Missing fields fall back to 0, except inputPackets, which defaults to submitted packets.
  */
 export function collectStats(
   backend: DebugStatsBackend | null | undefined,
   frame: RenderFrame | null | undefined,
   frameMs: number,
 ): FrameStats {
-  void frame
   const stats = backend?.stats ?? {}
   return {
+    inputPackets: toStat(frame?.stats?.inputPackets ?? stats.inputPackets ?? stats.packets),
     packets: toStat(stats.packets),
     batches: toStat(stats.batches),
     drawCalls: toStat(stats.drawCalls),
     textureBinds: toStat(stats.textureBinds),
     programSwitches: toStat(stats.programSwitches),
     clippedTriangles: toStat(stats.clippedTriangles),
+    clippedIn: toStat(frame?.stats?.clippedIn ?? stats.clippedIn),
+    clippedOut: toStat(frame?.stats?.clippedOut ?? stats.clippedOut),
     uploadedBytes: toStat(stats.uploadedBytes),
     frameMs: toStat(frameMs),
   }
@@ -270,12 +277,15 @@ export function collectStats(
 /** 稳定、定序的一行 JSON，便于 golden 与日志比对。 */
 export function formatStats(stats: FrameStats): string {
   return JSON.stringify({
+    inputPackets: toStat(stats.inputPackets),
     packets: toStat(stats.packets),
     batches: toStat(stats.batches),
     drawCalls: toStat(stats.drawCalls),
     textureBinds: toStat(stats.textureBinds),
     programSwitches: toStat(stats.programSwitches),
     clippedTriangles: toStat(stats.clippedTriangles),
+    clippedIn: toStat(stats.clippedIn),
+    clippedOut: toStat(stats.clippedOut),
     uploadedBytes: toStat(stats.uploadedBytes),
     frameMs: toStat(stats.frameMs),
   })

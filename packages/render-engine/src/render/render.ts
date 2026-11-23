@@ -29,6 +29,12 @@ export interface RenderPacket {
 
 export type RenderFrame = {
   readonly packets: readonly RenderPacket[]
+  /** Runtime counts before batching; triangle counts bracket geometric clipping only. */
+  readonly stats?: {
+    readonly inputPackets: number
+    readonly clippedIn: number
+    readonly clippedOut: number
+  }
   readonly width: number
   readonly height: number
   readonly viewProjection?: Float32Array
@@ -45,6 +51,8 @@ export type RenderFrame = {
 /** 图集页采样策略；缺省 clamp + linear + 不生成 mipmap。 */
 export type TextureWrap = 'clamp' | 'repeat'
 export type TextureFilter = 'linear' | 'nearest'
+export type TextureMinFilter = TextureFilter | 'mipmap' | 'mipmapNearestNearest' |
+  'mipmapLinearNearest' | 'mipmapNearestLinear' | 'mipmapLinearLinear'
 
 /** CPU/GPU 共用的图集页：RGBA8 字节，pma 缺省视为 true。 */
 export type TextureData = {
@@ -58,6 +66,10 @@ export type TextureData = {
   readonly wrap?: TextureWrap
   /** 页级过滤；缺省回落到引用该页的材质 filter。 */
   readonly filter?: TextureFilter
+  readonly minFilter?: TextureMinFilter
+  readonly magFilter?: TextureFilter
+  readonly uWrap?: TextureWrap
+  readonly vWrap?: TextureWrap
 }
 
 /** 材质是资产的不可变描述；id 在材质库内唯一。 */
@@ -94,7 +106,7 @@ export type RenderMask = {
   readonly invert: boolean
   readonly feather: number
   readonly positions: Float32Array
-  readonly indices: Uint32Array
+  readonly indices: Uint16Array | Uint32Array
   readonly bounds: MaskBounds
   readonly alpha?: { readonly page: number; readonly uvMatrix: Float32Array }
 }
@@ -122,6 +134,9 @@ export interface BuildPacketArgs {
   /** 直通 RGBA，0..1；pma=true 时视为已预乘 */
   readonly color: readonly [number, number, number, number]
   readonly dark?: readonly [number, number, number, number]
+  /** Spine RenderCommand PMA bytes, quantized before writing vertex arrays. */
+  readonly lightBytes?: readonly [number, number, number, number]
+  readonly darkBytes?: readonly [number, number, number, number]
   readonly twoColor?: boolean
   readonly materialId: number
   /** 可选图集页索引；缺省时后端按材质查页。 */
@@ -177,6 +192,24 @@ function fillColors(vertexCount: number, bytes: Uint8Array): Uint8Array {
   return out
 }
 
+
+type TintColor = { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
+
+/** SkeletonRendererCore 4.3.13 PMA vertex quantization (without inColor). */
+export function spinePmaTint(
+  skeleton: TintColor, slot: TintColor, attachment: TintColor, dark?: TintColor,
+): { light: [number, number, number, number]; dark?: [number, number, number, number] } {
+  const a = Math.floor(skeleton.a * slot.a * attachment.a * 255)
+  const light: [number, number, number, number] = [
+    Math.floor(a * skeleton.r * slot.r * attachment.r),
+    Math.floor(a * skeleton.g * slot.g * attachment.g),
+    Math.floor(a * skeleton.b * slot.b * attachment.b), a,
+  ]
+  return dark === undefined ? { light } : {
+    light,
+    dark: [Math.floor(dark.r * a), Math.floor(dark.g * a), Math.floor(dark.b * a), 255],
+  }
+}
 
 /** 图集 UV：四角内缩半 texel，避免双线性采到相邻 region。 */
 export function atlasRegionUv(
@@ -241,9 +274,13 @@ export function buildRegionPacket(args: BuildPacketArgs): RenderPacket {
     version: 1,
     positions: args.positions,
     uvs,
-    colors: fillColors(vertexCount, colorBytes(args.color, args.pma === true)),
-    ...(args.dark === undefined ? {} : { dark: fillColors(vertexCount, colorBytes(args.dark, false)) }),
-    ...(args.dark === undefined ? {} : { twoColor: args.twoColor ?? true }),
+    colors: fillColors(vertexCount, args.lightBytes === undefined
+      ? colorBytes(args.color, args.pma === true) : Uint8Array.from(args.lightBytes)),
+    ...(args.dark === undefined && args.darkBytes === undefined ? {} : {
+      dark: fillColors(vertexCount, args.darkBytes === undefined
+        ? colorBytes(args.dark!, true) : Uint8Array.from(args.darkBytes)),
+      twoColor: args.twoColor ?? true,
+    }),
     depth: null,
     indices: fanIndices(vertexCount),
     materialId: args.materialId,
@@ -268,9 +305,13 @@ export function buildMeshPacket(args: BuildMeshPacketArgs): RenderPacket {
     version: 1,
     positions: args.positions,
     uvs,
-    colors: fillColors(vertexCount, colorBytes(args.color, args.pma === true)),
-    ...(args.dark === undefined ? {} : { dark: fillColors(vertexCount, colorBytes(args.dark, false)) }),
-    ...(args.dark === undefined ? {} : { twoColor: args.twoColor ?? true }),
+    colors: fillColors(vertexCount, args.lightBytes === undefined
+      ? colorBytes(args.color, args.pma === true) : Uint8Array.from(args.lightBytes)),
+    ...(args.dark === undefined && args.darkBytes === undefined ? {} : {
+      dark: fillColors(vertexCount, args.darkBytes === undefined
+        ? colorBytes(args.dark!, true) : Uint8Array.from(args.darkBytes)),
+      twoColor: args.twoColor ?? true,
+    }),
     depth: args.depth ?? null,
     indices: args.indices,
     materialId: args.materialId,
@@ -305,6 +346,7 @@ export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
   let positions: number[] = []
   let uvs: number[] = []
   let colors: number[] = []
+  let darks: number[] | null = null
   let indices: number[] = []
   let depths: number[] | null = []
   let vertexCount = 0
@@ -316,11 +358,12 @@ export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
       positions: Float32Array.from(positions),
       uvs: Float32Array.from(uvs),
       colors: Uint8Array.from(colors),
+      ...(darks === null ? {} : { dark: Uint8Array.from(darks) }),
       indices: current.indices instanceof Uint32Array ? Uint32Array.from(indices) : Uint16Array.from(indices),
       depth: depths === null ? null : Float32Array.from(depths),
     })
     current = null
-    positions = []; uvs = []; colors = []; indices = []; depths = []; vertexCount = 0; key = ''
+    positions = []; uvs = []; colors = []; darks = null; indices = []; depths = []; vertexCount = 0; key = ''
   }
   for (const packet of packets) {
     const indexType = packet.indices instanceof Uint32Array ? 32 : 16
@@ -335,6 +378,7 @@ export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
       positions = [...packet.positions]
       uvs = [...packet.uvs]
       colors = [...packet.colors]
+      darks = packet.dark === undefined ? null : [...packet.dark]
       indices = [...packet.indices]
       depths = packet.depth === null ? null : [...packet.depth]
       continue
@@ -343,6 +387,7 @@ export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
     for (const value of packet.positions) positions.push(value)
     for (const value of packet.uvs) uvs.push(value)
     for (const value of packet.colors) colors.push(value)
+    if (darks !== null && packet.dark !== undefined) for (const value of packet.dark) darks.push(value)
     for (const value of packet.indices) indices.push(value + base)
     if (depths === null || packet.depth === null) depths = null
     else for (const value of packet.depth) depths.push(value)
@@ -353,10 +398,10 @@ export function batchPackets(packets: readonly RenderPacket[]): RenderPacket[] {
   return out
 }
 
-/** 合批键：材质 / 混合 / mask / 索引宽度 / packet 种类。 */
+/** 合批键：页、材质、混合、mask、索引宽度、种类及 two-color 状态。 */
 export function batchKey(p: RenderPacket): string {
   const indexType = p.indices instanceof Uint32Array ? 32 : 16
-  return `${p.materialId}|${p.blend}|${p.maskPath}|${indexType}|${p.kind}`
+  return `${p.materialId}|${p.page ?? -1}|${p.blend}|${p.maskPath}|${indexType}|${p.kind}|${p.twoColor === true ? 1 : 0}|${p.dark === undefined ? 0 : 1}`
 }
 
 /** 图集页数合法范围：1..4（flat 角色也至少有一页占位）。 */
@@ -437,7 +482,41 @@ export function buildOutlinePacket(
   seq: number = source.seq,
 ): RenderPacket {
   const edges = outlineEdges(source.indices)
+  const boundary = new Set(edges.map(([a, b]) => `${a},${b}`))
   const half = Math.max(0, Number.isFinite(width) ? width : 0) / 2
+  const outward = new Map<string, [number, number]>()
+  for (let i = 0; i + 2 < source.indices.length; i += 3) {
+    const triangle = [source.indices[i]!, source.indices[i + 1]!, source.indices[i + 2]!]
+    for (let side = 0; side < 3; side += 1) {
+      const x = triangle[side]!, y = triangle[(side + 1) % 3]!, opposite = triangle[(side + 2) % 3]!
+      const a = Math.min(x, y), b = Math.max(x, y)
+      const key = `${a},${b}`
+      if (!boundary.has(key)) continue
+      const ax = source.positions[a * 2]!, ay = source.positions[a * 2 + 1]!
+      const dx = source.positions[b * 2]! - ax, dy = source.positions[b * 2 + 1]! - ay
+      const cross = dx * (source.positions[opposite * 2 + 1]! - ay) - dy * (source.positions[opposite * 2]! - ax)
+      const length = Math.hypot(dx, dy)
+      if (length > EPS) outward.set(key, cross >= 0 ? [dy / length, -dx / length] : [-dy / length, dx / length])
+    }
+  }
+  const incident = new Map<number, [number, number][]>()
+  for (const [a, b] of edges) {
+    const normal = outward.get(`${a},${b}`)
+    if (!normal) continue
+    for (const vertex of [a, b]) {
+      const neighbors = incident.get(vertex) ?? []
+      neighbors.push(normal)
+      incident.set(vertex, neighbors)
+    }
+  }
+  const join = (vertex: number, normal: [number, number]): [number, number] => {
+    const neighbors = incident.get(vertex)
+    if (neighbors?.length !== 2) return [normal[0] * half, normal[1] * half]
+    const dot = neighbors[0]![0] * neighbors[1]![0] + neighbors[0]![1] * neighbors[1]![1]
+    const divisor = Math.max(0.25, 1 + dot)
+    return [(neighbors[0]![0] + neighbors[1]![0]) * half / divisor,
+      (neighbors[0]![1] + neighbors[1]![1]) * half / divisor]
+  }
   const positions = new Float32Array(edges.length * 8)
   const uvs = new Float32Array(edges.length * 8)
   const indices = new Uint16Array(edges.length * 6)
@@ -445,16 +524,18 @@ export function buildOutlinePacket(
   let u = 0
   let k = 0
   for (const [a, b] of edges) {
-    const ax = source.positions[a]!, ay = source.positions[a + 1]!
-    const bx = source.positions[b]!, by = source.positions[b + 1]!
-    const dx = bx - ax
-    const dy = by - ay
-    const len = Math.hypot(dx, dy)
-    const nx = len > EPS ? (-dy / len) * half : 0
-    const ny = len > EPS ? (dx / len) * half : 0
-    positions.set([ax + nx, ay + ny, ax - nx, ay - ny, bx - nx, by - ny, bx + nx, by + ny], p)
+    const ax = source.positions[a * 2]!, ay = source.positions[a * 2 + 1]!
+    const bx = source.positions[b * 2]!, by = source.positions[b * 2 + 1]!
+    const normal = outward.get(`${a},${b}`) ?? [0, 0] as [number, number]
+    const [anx, any] = join(a, normal)
+    const [bnx, bny] = join(b, normal)
+    positions.set([ax + anx, ay + any, ax - anx, ay - any,
+      bx - bnx, by - bny, bx + bnx, by + bny], p)
     p += 8
-    uvs.fill(0, u, u + 8)
+    uvs.set([source.uvs[a * 2]!, source.uvs[a * 2 + 1]!,
+      source.uvs[a * 2]!, source.uvs[a * 2 + 1]!,
+      source.uvs[b * 2]!, source.uvs[b * 2 + 1]!,
+      source.uvs[b * 2]!, source.uvs[b * 2 + 1]!], u)
     u += 8
     indices.set([k, k + 1, k + 2, k, k + 2, k + 3], (k / 4) * 6)
     k += 4
@@ -529,9 +610,13 @@ export function sampleTexture(
   const data = page.data
   const premultiply = page.pma === false
 
+  const uWrap = page.uWrap ?? page.wrap ?? 'clamp'
+  const vWrap = page.vWrap ?? page.wrap ?? 'clamp'
+  const wrapIndex = (index: number, size: number, mode: TextureWrap): number =>
+    mode === 'repeat' ? ((index % size) + size) % size : Math.min(size - 1, Math.max(0, index))
   const read = (x: number, y: number): [number, number, number, number] => {
-    const cx = x < 0 ? 0 : x >= w ? w - 1 : x
-    const cy = y < 0 ? 0 : y >= h ? h - 1 : y
+    const cx = wrapIndex(x, w, uWrap)
+    const cy = wrapIndex(y, h, vWrap)
     const o = (cy * w + cx) * 4
     const r = data[o] ?? 0
     const g = data[o + 1] ?? 0
@@ -541,8 +626,8 @@ export function sampleTexture(
     return [mulU8(r, a), mulU8(g, a), mulU8(b, a), a]
   }
 
-  const cu = clamp01(u)
-  const cv = clamp01(v)
+  const cu = Number.isFinite(u) ? (uWrap === 'repeat' ? u - Math.floor(u) : clamp01(u)) : 0
+  const cv = Number.isFinite(v) ? (vWrap === 'repeat' ? v - Math.floor(v) : clamp01(v)) : 0
 
   if (filter === 'nearest') {
     const ix = Math.min(w - 1, Math.floor(cu * w))

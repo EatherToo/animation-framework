@@ -3,11 +3,17 @@ import { compileSkeleton, type BoneSpec } from '@/core/skeleton'
 import {
   addRotation,
   createPose,
+  copyPose,
   getWorld,
   markDirty,
+  localToWorld,
+  worldToLocal,
+  localToWorldRotation,
+  worldToLocalRotation,
   POSE_STRIDE,
   resetToSetup,
   setLocal,
+  setWorldOverride,
   updateWorld,
   WORLD_STRIDE,
 } from '@/core/pose'
@@ -23,6 +29,43 @@ const chain = (inherits: Array<'normal' | 'onlyTranslation' | 'noRotationOrRefle
   })
 
 describe('core2d pose / FK', () => {
+  it('keeps world-only constraints separate from applied local and propagates to children', () => {
+    const skeleton = chain(['normal', 'normal', 'normal'])
+    const pose = createPose(skeleton)
+    updateWorld(pose)
+    const appliedX = pose.local[0]!
+    setWorldOverride(pose, 0, [1, 0, 0, 1, 4, 5])
+    updateWorld(pose)
+    expect(getWorld(pose, 0)[4]).toBe(4)
+    expect(getWorld(pose, 1)[4]).toBe(5)
+    expect(pose.local[0]).toBe(appliedX)
+    const copy = createPose(skeleton)
+    copyPose(copy, pose)
+    updateWorld(copy)
+    expect(getWorld(copy, 1)[4]).toBe(5)
+    setLocal(pose, 0, 0, 2)
+    updateWorld(pose)
+    expect(getWorld(pose, 0)[4]).toBe(2)
+    resetToSetup(copy)
+    updateWorld(copy)
+    expect(getWorld(copy, 0)[4]).toBe(0)
+  })
+  it('inverts bone-space points and rotations with nonuniform scale', () => {
+    const pose = createPose(chain(['normal', 'normal', 'normal']))
+    for (const bone of [0, 1, 2]) {
+      const point = [0.35, -0.8] as const
+      const world = localToWorld(pose, bone, ...point)
+      const local = worldToLocal(pose, bone, ...world)
+      expect(local[0]).toBeCloseTo(point[0], 6)
+      expect(local[1]).toBeCloseTo(point[1], 6)
+      const angle = 0.43
+      const recovered = worldToLocalRotation(pose, bone, localToWorldRotation(pose, bone, angle))
+      expect(recovered).toBeCloseTo(angle, 6)
+    }
+    setLocal(pose, 1, 3, 0)
+    expect(() => worldToLocal(pose, 1, 0, 0)).toThrow('pose.worldToLocal: singular')
+  })
+
   it('allocates spec-sized buffers and evaluates a chain in topological order', () => {
     const sk = chain(['normal', 'normal', 'normal'])
     const pose = createPose(sk)
@@ -75,14 +118,47 @@ describe('core2d pose / FK', () => {
       const world = getWorld(pose, 2)
       const expectedLinear = (() => {
         if (mode === 'onlyTranslation') return [1, 0, 0, 1] as const
-        if (mode === 'noRotationOrReflection') return [0, 2, -3, 0] as const
+        if (mode === 'noRotationOrReflection') return [3, 0, 0, 2] as const
         if (mode === 'noScale') return [0, 1, -1, 0] as const
-        return [0, 1, -1, 0] as const // reflected Y basis already has positive det
+        return [0, 1, -1, 0] as const // parent determinant is positive
       })()
-      // grandchild local is identity, so world linear part == parent basis linear part
+      // An identity local transform exposes the mode's resulting world basis.
       expect(parent[0]).not.toBeNaN()
       expect(Math.abs(world[0]! - expectedLinear[0])).toBeLessThan(1e-6)
       expect(Math.abs(world[2]! - expectedLinear[2])).toBeLessThan(1e-6)
+    }
+  })
+
+  it('uses the full parent matrix for translation in every inherit mode', () => {
+    const modes = ['onlyTranslation', 'noRotationOrReflection', 'noScale', 'noScaleOrReflection'] as const
+    for (const mode of modes) {
+      const sk = compileSkeleton({ name: mode, profile: 'full2d', bones: [
+        { name: 'parent', parent: -1, length: 0, rest: { x: 5, y: -4, rotation: 0, scaleX: 2, scaleY: 3, shearX: 0, shearY: 0 } },
+        { name: 'child', parent: 0, length: 0, inherit: mode, rest: { x: 1, y: 2, rotation: Math.PI / 4, scaleX: 1, scaleY: 1, shearX: 0, shearY: 0 } },
+      ] })
+      const pose = createPose(sk)
+      updateWorld(pose)
+      const child = getWorld(pose, 1)
+      expect(child[4]).toBeCloseTo(7, 6)
+      expect(child[5]).toBeCloseTo(2, 6)
+      if (mode === 'noScale' || mode === 'noScaleOrReflection') {
+        expect(child[0]).toBeCloseTo(2 / Math.sqrt(13), 6)
+        expect(child[1]).toBeCloseTo(3 / Math.sqrt(13), 6)
+        expect(child[2]).toBeCloseTo(-3 / Math.sqrt(13), 6)
+        expect(child[3]).toBeCloseTo(2 / Math.sqrt(13), 6)
+      }
+    }
+  })
+
+  it('preserves reflection only for noScale', () => {
+    for (const mode of ['noScale', 'noScaleOrReflection'] as const) {
+      const sk = compileSkeleton({ name: mode, profile: 'full2d', bones: [
+        { name: 'parent', parent: -1, length: 0, rest: { x: 0, y: 0, rotation: 0, scaleX: -2, scaleY: 3, shearX: 0, shearY: 0 } },
+        { name: 'child', parent: 0, length: 0, inherit: mode },
+      ] })
+      const pose = createPose(sk)
+      updateWorld(pose)
+      expect(Math.sign(detAffine(getWorld(pose, 1)))).toBe(mode === 'noScale' ? -1 : 1)
     }
   })
 

@@ -208,7 +208,7 @@ describe('M11 DragonBones: 动画 / zOrder / ffd / 约束', () => {
     const body = withAtlas.skins.get('default')!.attachments.get('bodyB')!
     if (body.kind === 'region') {
       expect(body.region.atlasKey).toBe('body-b')
-      expect(body.region.uvs).toEqual(new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]))
+      expect(body.region.uvs).toEqual(new Float32Array([0, 1, 0, 0, 1, 0, 1, 1]))
     }
     expect(withAtlas.report.issues.some((i) => i.code === 'W_ATLAS_MISSING')).toBe(false)
   })

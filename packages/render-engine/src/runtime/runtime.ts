@@ -9,11 +9,14 @@ import {
   type RenderBackend,
   type WebGL2Like,
 } from '../backend/backend'
-import { createConstraintSolver, type ConstraintData, type ConstraintSolver } from '../constraint/constraint'
+import { createConstraintSolver, type ConstraintData, type ConstraintSolver, type PhysicsConstraint } from '../constraint/constraint'
 import { AnimationState, createTrack, sampleAnimation, type SampleResult, type Track } from '../animation/animation'
 import { buildInverseBind, skinMesh2D, type MeshData, type WeightedMeshData } from '../mesh/mesh'
-import { createPose, markAllDirty, setLocal, updateWorld, type Pose } from '../core/pose'
-import { CH_SX, CH_SY, POSE_STRIDE, WORLD_STRIDE } from '../core/math'
+import {
+  createPose, markAllDirty, setLocal, setSkeletonTransform, updateWorld, localToWorld, worldToLocal,
+  localToWorldRotation, worldToLocalRotation, type Pose,
+} from '../core/pose'
+import { CH_X, CH_Y, POSE_STRIDE, WORLD_STRIDE } from '../core/math'
 import {
   buildMaskSet,
   maskChain,
@@ -22,6 +25,7 @@ import {
   buildOutlinePacket,
   buildRegionPacket,
   sortPackets,
+  spinePmaTint,
   triangulatePolygon,
   type MaterialDef,
   type MaskPathNode,
@@ -37,13 +41,14 @@ import {
   resolveAttachment,
   setSkin,
   setSlotAttachment,
+  whiteSkeletonColor,
   type Attachment,
   type SkinData,
   type SlotSet,
 } from '../slot/slot'
 import { DEFAULT_CAMERA, viewProjection2D, type Camera } from '../render/camera'
 import type { SkeletonAsset, MaskLibrary } from '../asset/importer'
-import type { AtlasData } from '../asset/atlas'
+import type { AtlasData, AtlasFilter } from '../asset/atlas'
 import { resolveViewRule, type ViewRule } from '../volume/volume'
 import { clipTriangles } from '../render/clipping'
 import { buildDebugLines, type DebugFlags, type DebugLine } from '../debug/overlay'
@@ -63,6 +68,8 @@ export type EngineConfig = {
   /** CPU 参考后端超采样倍数；用于边缘 AA 对齐。 */
   supersample?: number
   fixedDt?: number
+  /** Consume sampled root translation into the instance position. Default keeps it on the bone. */
+  rootMotion?: 'bone' | 'entity'
   /** 可选描边：world 宽度 + straight RGBA。 */
   outline?: { readonly width: number; readonly color: readonly [number, number, number, number] }
 }
@@ -112,7 +119,7 @@ function defaultBackendFactory(
   }
   if (typeof document === 'undefined') throw new Error('E_BACKEND: WebGL2 上下文不可用')
   const canvas = document.createElement('canvas')
-  const gl = canvas.getContext('webgl2')
+  const gl = canvas.getContext('webgl2', { stencil: true })
   if (gl === null) throw new Error('E_BACKEND: WebGL2 上下文不可用')
   return new WebGL2Backend(gl as unknown as WebGL2Like)
 }
@@ -263,6 +270,18 @@ export class PluginHost {
 // 资产 → 后端资源 / mask 路径
 // ---------------------------------------------------------------------------
 
+const pageFilter = (filter: AtlasFilter | undefined): NonNullable<TextureData['minFilter']> => {
+  switch (filter) {
+    case 'Nearest': return 'nearest'
+    case 'MipMap': return 'mipmap'
+    case 'MipMapNearestNearest': return 'mipmapNearestNearest'
+    case 'MipMapLinearNearest': return 'mipmapLinearNearest'
+    case 'MipMapNearestLinear': return 'mipmapNearestLinear'
+    case 'MipMapLinearLinear': return 'mipmapLinearLinear'
+    default: return 'linear'
+  }
+}
+
 /** 图集页 → 后端纹理；缺图的页补 1x1 白纹理，材质 id = page + 1。 */
 export function buildRenderAssets(asset: SkeletonAsset): RenderAssets | undefined {
   const atlas: AtlasData | undefined = asset.atlas
@@ -276,7 +295,12 @@ export function buildRenderAssets(asset: SkeletonAsset): RenderAssets | undefine
       width: image?.data !== undefined ? page.width : 1,
       height: image?.data !== undefined ? page.height : 1,
       data,
-      pma: atlas.pma,
+      pma: page.pma ?? atlas.pma,
+      minFilter: pageFilter(page.minFilter),
+      magFilter: page.magFilter === 'Nearest' ? 'nearest' : 'linear',
+      uWrap: page.uWrap === 'Repeat' ? 'repeat' : 'clamp',
+      vWrap: page.vWrap === 'Repeat' ? 'repeat' : 'clamp',
+      mipmap: page.minFilter?.startsWith('MipMap') ?? false,
     }
   })
   const materials: MaterialDef[] = [{ id: 0, kind: 'flat', page: -1, filter: 'linear' }]
@@ -293,12 +317,12 @@ export type ResolvedMasks = {
 }
 
 /**
- * 把 MaskLibrary 的 clip scope 展开成每个 slot 的 maskPath。
- * 结束槽位本身不受该 mask 影响（半开区间）；clipping 槽不产生绘制。
+ * 从当前附件展开 clip scope；maskLibrary 只提供附件的缓存元数据。
+ * 结束槽位也被裁剪，clipping 槽不产生绘制。
  */
 export function resolveMaskPaths(
   slotSet: SlotSet,
-  library: MaskLibrary,
+  library: MaskLibrary = { version: 1, masks: [] },
   pose?: Pose,
   atlas?: AtlasData,
 ): ResolvedMasks {
@@ -307,29 +331,38 @@ export function resolveMaskPaths(
   const paths = new Array<number>(slotSet.slots.length).fill(-1)
   const nodes: MaskPathNode[] = []
   const masks: (RenderMask | null)[] = new Array(library.masks.length).fill(null)
-  const open: Array<{ maskId: number; path: number; endSlotId: string }> = []
+  let open: { path: number; endSlotId: string } | null = null
   for (const slotIndex of slotSet.drawOrder) {
     const slot = slotSet.slots[slotIndex]
     if (slot === undefined) continue
-    while (open.length > 0 && open[open.length - 1]!.endSlotId === slot.data.id) open.pop()
     const attachment = resolveAttachment(slotSet, slotIndex)
     if (attachment !== null && attachment.kind === 'clipping') {
-      const maskIndex = byId.get(attachment.id) ?? byId.get(slot.data.id)
-      if (maskIndex !== undefined) {
-        const def = library.masks[maskIndex]!
-        const parent = open.length > 0 ? open[open.length - 1]!.path : -1
-        nodes.push({ maskId: maskIndex, parent })
-        open.push({ maskId: maskIndex, path: nodes.length - 1, endSlotId: def.endSlotId })
-        if (masks[maskIndex] == null) masks[maskIndex] = buildRuntimeMask(def, slotSet, pose, atlas)
+      if (open === null) {
+        const canonical = `${slotIndex}:${attachment.id}`
+        const cachedIndex = byId.get(canonical) ?? byId.get(`${slot.data.id}.${attachment.id}`)
+          ?? library.masks.findIndex((mask) => mask.startSlotId === slot.data.id && mask.id === attachment.id)
+        const cached = cachedIndex >= 0 ? library.masks[cachedIndex] : undefined
+        const def: MaskLibrary['masks'][number] = {
+          id: canonical, mode: cached?.mode ?? 'clip', invert: cached?.invert ?? false,
+          feather: cached?.feather ?? 0, polygon: attachment.polygon,
+          startSlotId: slot.data.id, endSlotId: attachment.endSlotId ?? cached?.endSlotId ?? slot.data.id,
+          ...(cached?.alphaRegion === undefined ? {} : { alphaRegion: cached.alphaRegion }),
+        }
+        const id = cached === undefined ? masks.length : cachedIndex
+        masks[id] = buildRuntimeMask(def, slotSet, pose, atlas)
+        nodes.push({ maskId: id, parent: -1 })
+        open = { path: nodes.length - 1, endSlotId: def.endSlotId }
       }
       paths[slotIndex] = -1
+      if (open !== null && open.endSlotId === slot.data.id) open = null
       continue
     }
-    let path = open.length > 0 ? open[open.length - 1]!.path : -1
+    let path = open?.path ?? -1
     // 显式 slot mask：在 clip scope 之外再追加一个内层 mask，仅作用于该 slot。
     if (slot.data.mask !== null) {
       const explicit = byId.get(slot.data.mask)
-      if (explicit !== undefined) {
+      if (explicit !== undefined && !(library.masks[explicit]!.mode === 'clip' &&
+        library.masks[explicit]!.startSlotId === slot.data.id)) {
         const def = library.masks[explicit]!
         nodes.push({ maskId: explicit, parent: path })
         path = nodes.length - 1
@@ -337,6 +370,7 @@ export function resolveMaskPaths(
       }
     }
     paths[slotIndex] = path
+    if (open !== null && open.endSlotId === slot.data.id) open = null
   }
   return { paths, maskPaths: nodes, masks }
 }
@@ -392,11 +426,33 @@ function atlasUvOf(asset: SkeletonAsset, attachment: RenderableAttachment, keyOv
   const key = keyOverride ?? attachment.region.atlasKey
   const region = atlas.regions.get(key)
   if (region === undefined) return null
-  // region 是附件局部 0..1 UV，需要 region.uvMatrix；
+  // Region 的几何顶点只覆盖 trim 后的可见图像；UV 必须对应同一可见矩形。
   // mesh/weighted mesh 的 JSON uvs 已经是最终 page UV，不能再变换。
-  const source = attachment.kind === 'region'
-    ? (attachment.region.uvs ?? new Float32Array([0, 1, 1, 1, 1, 0, 0, 0]))
-    : attachment.mesh.uvs
+  if (attachment.kind === 'region' && attachment.region.uvs === null) {
+    const page = atlas.pages[region.page]!
+    const rotated = region.uvMatrix[1]! < 0 && region.uvMatrix[2]! > 0
+    const uv = region.uvMatrix
+    const { offsetX, offsetY, sourceWidth, sourceHeight } = region.trim
+    const lowU = sourceWidth > 0 ? offsetX / sourceWidth : 0
+    const highU = sourceWidth > 0 ? (offsetX + region.width) / sourceWidth : 1
+    const lowV = sourceHeight > 0 ? (sourceHeight - offsetY - region.height) / sourceHeight : 0
+    const highV = sourceHeight > 0 ? (sourceHeight - offsetY) / sourceHeight : 1
+    const u = region.x / page.width
+    const v = region.y / page.height
+    const u2 = (region.x + region.height) / page.width
+    const v2 = (region.y + region.width) / page.height
+    const points = [lowU, highV, lowU, lowV, highU, lowV, highU, highV]
+    const uvs = new Float32Array(8)
+    for (let i = 0; i < 8; i += 2) {
+      uvs[i] = rotated ? (i < 4 ? u2 : u) : uv[0]! * points[i]! + uv[2]! * points[i + 1]! + uv[4]!
+      uvs[i + 1] = rotated ? (i === 0 || i === 6 ? v2 : v) : uv[1]! * points[i]! + uv[3]! * points[i + 1]! + uv[5]!
+    }
+    return {
+      uvs,
+      page: region.page, materialId: region.page + 1,
+    }
+  }
+  const source = attachment.kind === 'region' ? attachment.region.uvs! : attachment.mesh.uvs
   const uv = region.uvMatrix
   const uvs = new Float32Array(source.length)
   for (let i = 0; i + 1 < source.length; i += 2) {
@@ -420,7 +476,205 @@ function viewportOf(pixelRatio: number): { width: number; height: number } {
   }
 }
 
+export type FacadeColor = { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
+
+const facadeBindings = new WeakMap<Skeleton, { engine: Engine; pose: Pose; slots: SlotSet }>()
+function facadePose(skeleton: Skeleton): Pose {
+  const bound = facadeBindings.get(skeleton)!
+  if (bound.engine.pose !== bound.pose) throw new Error('E_STATE: stale skeleton')
+  return bound.pose
+}
+function facadeSlots(skeleton: Skeleton): SlotSet {
+  const bound = facadeBindings.get(skeleton)!
+  if (bound.engine.slotSet !== bound.slots) throw new Error('E_STATE: stale skeleton')
+  return bound.slots
+}
+
+/** Instance-bound bone API. Numeric channels are the only path to changing pose through this facade. */
+export class SpineBone {
+  readonly #owner: Skeleton
+  constructor(owner: Skeleton, readonly index: number) { this.#owner = owner }
+  get name(): string { return facadePose(this.#owner).skeleton.bones[this.index]!.name }
+  get length(): number { return facadePose(this.#owner).skeleton.bones[this.index]!.length }
+  get data(): Readonly<{ name: string; length: number; parent: number; setup: Readonly<{
+    x: number; y: number; rotation: number; scaleX: number; scaleY: number; shearX: number; shearY: number
+  }> }> {
+    const bone = facadePose(this.#owner).skeleton.bones[this.index]!
+    return Object.freeze({ name: bone.name, length: bone.length, parent: bone.parent,
+      setup: Object.freeze({ ...bone.setup }) })
+  }
+  get parent(): SpineBone | null {
+    const id = facadePose(this.#owner).skeleton.parent[this.index]!
+    return id < 0 ? null : this.#owner.bones[id]!
+  }
+  private value(channel: number): number { return facadePose(this.#owner).local[this.index * POSE_STRIDE + channel]! }
+  private change(channel: number, value: number): void { setLocal(facadePose(this.#owner), this.index, channel, value) }
+  get x(): number { return this.value(0) }
+  set x(value: number) { this.change(0, value) }
+  get y(): number { return this.value(1) }
+  set y(value: number) { this.change(1, value) }
+  get rotation(): number { return this.value(2) }
+  set rotation(value: number) { this.change(2, value) }
+  get scaleX(): number { return this.value(3) }
+  set scaleX(value: number) { this.change(3, value) }
+  get scaleY(): number { return this.value(4) }
+  set scaleY(value: number) { this.change(4, value) }
+  get shearX(): number { return this.value(5) }
+  set shearX(value: number) { this.change(5, value) }
+  get shearY(): number { return this.value(6) }
+  set shearY(value: number) { this.change(6, value) }
+  get worldX(): number { updateWorld(facadePose(this.#owner)); return facadePose(this.#owner).world[this.index * WORLD_STRIDE + 4]! }
+  get worldY(): number { updateWorld(facadePose(this.#owner)); return facadePose(this.#owner).world[this.index * WORLD_STRIDE + 5]! }
+  get worldTransform(): readonly number[] {
+    updateWorld(facadePose(this.#owner))
+    return Object.freeze(Array.from(facadePose(this.#owner).world.slice(this.index * WORLD_STRIDE, (this.index + 1) * WORLD_STRIDE)))
+  }
+  localToWorld(point: Readonly<{ x: number; y: number }>): { x: number; y: number } {
+    const [x, y] = localToWorld(facadePose(this.#owner), this.index, point.x, point.y)
+    return { x, y }
+  }
+  worldToLocal(point: Readonly<{ x: number; y: number }>): { x: number; y: number } {
+    const [x, y] = worldToLocal(facadePose(this.#owner), this.index, point.x, point.y)
+    return { x, y }
+  }
+  localToWorldRotation(angle: number): number { return localToWorldRotation(facadePose(this.#owner), this.index, angle) }
+  worldToLocalRotation(angle: number): number { return worldToLocalRotation(facadePose(this.#owner), this.index, angle) }
+  /** Spine 4.3 BonePose-compatible rotation, in degrees (including its shearX offset). */
+  localToWorldRotationDegrees(degrees: number): number {
+    const pose = facadePose(this.#owner)
+    updateWorld(pose)
+    const i = this.index * WORLD_STRIDE
+    const m = pose.world
+    const offset = this.index * POSE_STRIDE
+    const angle = degrees * Math.PI / 180 - pose.local[offset + 2]! - pose.local[offset + 5]!
+    return Math.atan2(Math.cos(angle) * m[i + 1]! + Math.sin(angle) * m[i + 3]!,
+      Math.cos(angle) * m[i]! + Math.sin(angle) * m[i + 2]!) * 180 / Math.PI
+  }
+  /** Spine 4.3 BonePose-compatible world-to-local rotation, in degrees. */
+  worldToLocalRotationDegrees(degrees: number): number {
+    const pose = facadePose(this.#owner)
+    updateWorld(pose)
+    const i = this.index * WORLD_STRIDE
+    const m = pose.world
+    const a = m[i]!, b = m[i + 2]!, c = m[i + 1]!, d = m[i + 3]!
+    if (Math.abs(a * d - b * c) < 1e-12) throw new Error('pose.worldToLocal: singular')
+    const offset = this.index * POSE_STRIDE
+    const angle = degrees * Math.PI / 180
+    return Math.atan2(a * Math.sin(angle) - c * Math.cos(angle),
+      d * Math.cos(angle) - b * Math.sin(angle)) * 180 / Math.PI
+      + (pose.local[offset + 2]! - pose.local[offset + 5]!) * 180 / Math.PI
+  }
+}
+
+export class Skin {
+  readonly #owner: Skeleton
+  constructor(owner: Skeleton, readonly name: string) { this.#owner = owner }
+  get attachmentNames(): readonly string[] {
+    return Object.freeze([...facadeSlots(this.#owner).skins.get(this.name)!.attachments.keys()])
+  }
+  hasAttachment(name: string): boolean { return facadeSlots(this.#owner).skins.get(this.name)!.attachments.has(name) }
+}
+
+export class Slot {
+  readonly #owner: Skeleton
+  constructor(owner: Skeleton, readonly index: number) { this.#owner = owner }
+  private get state(): SlotSet['slots'][number] { return facadeSlots(this.#owner).slots[this.index]! }
+  get name(): string { return this.state.data.id }
+  get data(): Readonly<{ name: string; bone: number; attachment: string | null; color: FacadeColor }> {
+    const slot = this.state.data
+    return Object.freeze({ name: slot.id, bone: slot.bone, attachment: slot.attachment,
+      color: Object.freeze({ ...slot.color }) })
+  }
+  get bone(): SpineBone { return this.#owner.bones[this.state.data.bone]! }
+  get attachmentName(): string | null { return this.state.attachmentId }
+  get skin(): Skin { return this.#owner.findSkin(this.state.skinId)! }
+  get color(): FacadeColor { return Object.freeze({ ...this.state.color }) }
+  set color(value: FacadeColor) {
+    if (![value.r, value.g, value.b, value.a].every(Number.isFinite)) throw new Error('slot.color')
+    this.state.color = { ...value }
+  }
+  setAttachment(name: string | null): void { this.#owner.setAttachment(this.name, name) }
+}
+
+/** Facade views never expose the internal pose, slot set, or mutable attachment data. */
+export class Skeleton {
+  readonly bones: readonly SpineBone[]
+  readonly slots: readonly Slot[]
+  readonly skins: readonly Skin[]
+  private elapsed = 0
+  readonly #engine: Engine
+  constructor(engine: Engine, pose: Pose, slots: SlotSet) {
+    this.#engine = engine
+    facadeBindings.set(this, { engine, pose, slots })
+    this.bones = Object.freeze(pose.skeleton.bones.map((_, i) => new SpineBone(this, i)))
+    this.slots = Object.freeze(slots.slots.map((_, i) => new Slot(this, i)))
+    this.skins = Object.freeze([...slots.skins.keys()].map((name) => new Skin(this, name)))
+  }
+  get name(): string { return facadePose(this).skeleton.name }
+  get color(): FacadeColor { facadePose(this); return Object.freeze({ ...this.#engine.color }) }
+  set color(value: FacadeColor) {
+    facadePose(this)
+    if (![value.r, value.g, value.b, value.a].every(Number.isFinite)) throw new Error('E_CONFIG')
+    Object.assign(this.#engine.color, value)
+  }
+  get windX(): number { facadePose(this); return this.#engine.windX }
+  set windX(value: number) { facadePose(this); this.#engine.windX = value }
+  get windY(): number { facadePose(this); return this.#engine.windY }
+  set windY(value: number) { facadePose(this); this.#engine.windY = value }
+  get gravityX(): number { facadePose(this); return this.#engine.gravityX }
+  set gravityX(value: number) { facadePose(this); this.#engine.gravityX = value }
+  get gravityY(): number { facadePose(this); return this.#engine.gravityY }
+  set gravityY(value: number) { facadePose(this); this.#engine.gravityY = value }
+  get x(): number { facadePose(this); return this.#engine.x }
+  set x(value: number) { facadePose(this); this.#engine.x = value }
+  get y(): number { facadePose(this); return this.#engine.y }
+  set y(value: number) { facadePose(this); this.#engine.y = value }
+  get scaleX(): number { facadePose(this); return this.#engine.scaleX }
+  set scaleX(value: number) { facadePose(this); this.#engine.scaleX = value }
+  get scaleY(): number { facadePose(this); return this.#engine.scaleY }
+  set scaleY(value: number) { facadePose(this); this.#engine.scaleY = value }
+  get time(): number { facadePose(this); return this.elapsed }
+  set time(value: number) {
+    facadePose(this)
+    if (!Number.isFinite(value) || value < 0) throw new Error('E_CONFIG')
+    this.elapsed = value
+  }
+  advanceTime(dt: number): void { this.elapsed += dt }
+  get drawOrder(): readonly Slot[] { return Object.freeze(facadeSlots(this).drawOrder.map((index) => this.slots[index]!)) }
+  get skin(): Skin | null {
+    const id = facadeSlots(this).slots[0]?.skinId
+    return id === undefined ? null : this.findSkin(id)
+  }
+  findBone(name: string): SpineBone | null {
+    const id = facadePose(this).skeleton.boneIdByName.get(name)
+    return id === undefined ? null : this.bones[id]!
+  }
+  findSlot(name: string): Slot | null {
+    const index = facadeSlots(this).slots.findIndex((slot) => slot.data.id === name)
+    return index < 0 ? null : this.slots[index]!
+  }
+  findSkin(name: string): Skin | null {
+    facadeSlots(this)
+    return this.skins.find((skin) => skin.name === name) ?? null
+  }
+  setSkinByName(name: string): void { facadeSlots(this); this.#engine.setSkinByName(name) }
+  setAttachment(slotName: string, name: string | null): void { facadeSlots(this); this.#engine.setAttachment(slotName, name) }
+  getBounds(): { x: number; y: number; width: number; height: number } {
+    facadePose(this)
+    return this.#engine.getBounds()
+  }
+  setupPose(): void { facadePose(this); this.#engine.setupPose() }
+  setupPoseBones(): void { facadePose(this); this.#engine.setupPoseBones() }
+  setupPoseSlots(): void { facadeSlots(this); this.#engine.setupPoseSlots() }
+  setToSetupPose(): void { this.setupPose() }
+  setBonesToSetupPose(): void { this.setupPoseBones() }
+  setSlotsToSetupPose(): void { this.setupPoseSlots() }
+  updateWorldTransform(): void { updateWorld(facadePose(this)) }
+}
+
 export class Engine {
+  /** Per-instance skeleton tint; mutable channels affect the next rendered frame. */
+  readonly color: { r: number; g: number; b: number; a: number } = whiteSkeletonColor()
   private _phase: EnginePhase = 'created'
   private readonly backend: RenderBackend
   private readonly stats: Record<string, number> = { pluginErrors: 0 }
@@ -432,6 +686,7 @@ export class Engine {
   private asset: SkeletonAsset | null = null
   private ownedPose: Pose | null = null
   private ownedSlotSet: SlotSet | null = null
+  private ownedSkeleton: Skeleton | null = null
   private readonly ownedTracks: Track[] = []
   private inverseBind: Float32Array | null = null
   private solver: ConstraintSolver | null = null
@@ -442,6 +697,13 @@ export class Engine {
   private flipY = false
   private instanceScaleX = 1
   private instanceScaleY = 1
+  private instanceX = 0
+  private instanceY = 0
+  private readonly physicsEnvironments: NonNullable<PhysicsConstraint['environment']>[] = []
+  private forceWindX = 1
+  private forceWindY = 0
+  private forceGravityX = 0
+  private forceGravityY = 1
   private renderAssets: RenderAssets | undefined
   private preparedAssets: RenderAssets | undefined
   private maskLibrary: MaskLibrary | undefined
@@ -452,6 +714,12 @@ export class Engine {
   private readonly fixedDt: number | undefined
   private readonly outline: { readonly width: number; readonly color: readonly [number, number, number, number] } | undefined
   private accumulator = 0
+  private readonly rootMotionMode: 'bone' | 'entity'
+  private rootSampleX = 0
+  private rootSampleY = 0
+  private rootDisplacementX = 0
+  private rootDisplacementY = 0
+  private hasUpdatedSinceLoad = false
 
   constructor(
     config: EngineConfig = {},
@@ -467,12 +735,14 @@ export class Engine {
 
     this.maxBones = config.maxBones ?? 512
     this.maxTexturePages = config.maxTexturePages ?? 4
-    this.maxInfluences = config.maxInfluences ?? 4
+    this.maxInfluences = config.maxInfluences ?? 0
     this.fixedDt = config.fixedDt
+    if (config.rootMotion !== undefined && config.rootMotion !== 'bone' && config.rootMotion !== 'entity') throw new Error('E_CONFIG')
+    this.rootMotionMode = config.rootMotion ?? 'bone'
     this.outline = config.outline
     if (!Number.isInteger(this.maxBones) || this.maxBones < 1 ||
         !Number.isInteger(this.maxTexturePages) || this.maxTexturePages < 1 || this.maxTexturePages > 4 ||
-        !Number.isInteger(this.maxInfluences) || this.maxInfluences < 1 || this.maxInfluences > 4) {
+        !Number.isInteger(this.maxInfluences) || this.maxInfluences < 0) {
       throw new Error('E_CONFIG')
     }
     const rawSupersample = config.supersample ?? 1
@@ -506,6 +776,38 @@ export class Engine {
     return this._phase
   }
 
+  get windX(): number { this.assertLive(); return this.forceWindX }
+  set windX(value: number) { this.setPhysicsForce('windX', value) }
+  get windY(): number { this.assertLive(); return this.forceWindY }
+  set windY(value: number) { this.setPhysicsForce('windY', value) }
+  get gravityX(): number { this.assertLive(); return this.forceGravityX }
+  set gravityX(value: number) { this.setPhysicsForce('gravityX', value) }
+  get gravityY(): number { this.assertLive(); return this.forceGravityY }
+  set gravityY(value: number) { this.setPhysicsForce('gravityY', value) }
+  get x(): number { this.assertLive(); return this.instanceX }
+  set x(value: number) { this.setPosition(value, this.instanceY) }
+  get y(): number { this.assertLive(); return this.instanceY }
+  set y(value: number) { this.setPosition(this.instanceX, value) }
+  /** World displacement extracted from the root in the most recent update. */
+  get rootMotionDelta(): Readonly<{ x: number; y: number }> {
+    this.assertLive()
+    return { x: this.rootDisplacementX, y: this.rootDisplacementY }
+  }
+  get scaleX(): number { this.assertLive(); return this.instanceScaleX }
+  set scaleX(value: number) { this.setScale(value, this.instanceScaleY) }
+  get scaleY(): number { this.assertLive(); return this.instanceScaleY }
+  set scaleY(value: number) { this.setScale(this.instanceScaleX, value) }
+
+  private setPhysicsForce(field: 'windX' | 'windY' | 'gravityX' | 'gravityY', value: number): void {
+    this.assertLive()
+    if (!Number.isFinite(value)) throw new Error('E_CONFIG')
+    if (field === 'windX') this.forceWindX = value
+    else if (field === 'windY') this.forceWindY = value
+    else if (field === 'gravityX') this.forceGravityX = value
+    else this.forceGravityY = value
+    for (const env of this.physicsEnvironments) env[field] = value
+  }
+
   get pose(): Pose {
     this.assertLive()
     if (this.ownedPose === null) throw new Error('E_NO_ASSET')
@@ -516,6 +818,12 @@ export class Engine {
     this.assertLive()
     if (this.ownedSlotSet === null) throw new Error('E_NO_ASSET')
     return this.ownedSlotSet
+  }
+
+  get skeleton(): Skeleton {
+    this.assertLive()
+    if (this.ownedSkeleton === null) throw new Error('E_NO_ASSET')
+    return this.ownedSkeleton
   }
 
   get tracks(): Track[] {
@@ -551,12 +859,13 @@ export class Engine {
         for (const attachment of skin.attachments.values()) {
           if (attachment.kind === 'weightedMesh') {
             let max = 0
-            for (let i = 0; i < attachment.mesh.weights.length; i += 4) {
+            const stride = attachment.mesh.influencesPerVertex ?? 4
+            for (let i = 0; i < attachment.mesh.weights.length; i += stride) {
               let count = 0
-              for (let j = 0; j < 4; j += 1) if ((attachment.mesh.weights[i + j] ?? 0) > 0) count += 1
+              for (let j = 0; j < stride; j += 1) if ((attachment.mesh.weights[i + j] ?? 0) > 0) count += 1
               if (count > max) max = count
             }
-            if (max > this.maxInfluences) throw new Error('E_CONFIG: maxInfluences')
+            if (this.maxInfluences > 0 && max > this.maxInfluences) throw new Error('E_CONFIG: maxInfluences')
           }
         }
       }
@@ -567,20 +876,44 @@ export class Engine {
         ? 'default'
         : (skins.keys().next().value as string)
       const pose = createPose(asset.skeleton)
+      const root = asset.skeleton.roots[0]
+      this.rootSampleX = root === undefined ? 0 : pose.local[root * POSE_STRIDE + CH_X]!
+      this.rootSampleY = root === undefined ? 0 : pose.local[root * POSE_STRIDE + CH_Y]!
+      this.rootDisplacementX = 0
+      this.rootDisplacementY = 0
+      this.hasUpdatedSinceLoad = false
+      setSkeletonTransform(pose, this.instanceX, this.instanceY,
+        this.instanceScaleX * (this.flipX ? -1 : 1), this.instanceScaleY * (this.flipY ? -1 : 1))
       updateWorld(pose)
       const slotSet = createSlotSet(asset.slots, skins, defaultSkinId)
 
       this.asset = asset
       this.ownedPose = pose
       this.ownedSlotSet = slotSet
+      this.ownedSkeleton = new Skeleton(this, pose, slotSet)
       this.animationState?.dispose()
       this.animationState = new AnimationState(asset.animations, pose, slotSet)
       this.lastAnimation = null
-    this.lastFrame = null
+      this.lastFrame = null
       this.inverseBind = buildInverseBind(pose)
-      this.solver = asset.constraints !== undefined && asset.constraints.length > 0
-        ? createConstraintSolver(asset.constraints)
+      this.physicsEnvironments.length = 0
+      const constraints = asset.constraints?.map(c => {
+        if (c.kind !== 'physics') return c
+        const environment = {
+          referenceScale: c.environment?.referenceScale ?? 1,
+          windX: this.forceWindX, windY: this.forceWindY,
+          gravityX: this.forceGravityX, gravityY: this.forceGravityY,
+          scaleX: pose.skeletonScaleX, scaleY: pose.skeletonScaleY,
+        }
+        this.physicsEnvironments.push(environment)
+        return { ...c, environment }
+      })
+      this.solver = constraints !== undefined && constraints.length > 0
+        ? createConstraintSolver(constraints)
         : null
+      // Setup constraints run at load, but physics must initialize on the first update.
+      const initialWeights = new Map(constraints?.filter(c => c.kind === 'physics').map(c => [c.id, 0] as const))
+      this.solver?.solve(pose, 0, initialWeights, slotSet)
       this.maskLibrary = asset.maskLibrary
       this.renderAssets = buildRenderAssets(asset)
       this.preparedAssets = undefined
@@ -593,8 +926,14 @@ export class Engine {
     }
   }
 
+  get state(): AnimationState {
+    this.assertLive()
+    if (this.animationState === null) throw new Error('E_NO_ASSET')
+    return this.animationState
+  }
+
   /** 播放指定动画；省略名字时取资产首条动画。空资产只切到 running。 */
-  play(name?: string): void {
+  play(name?: string): Track | null {
     this.assertLive()
     if (this.asset === null) throw new Error('E_NO_ASSET')
     const animations = this.asset.animations
@@ -607,13 +946,16 @@ export class Engine {
       if (clip === undefined) throw new Error('E_STATE: 动画不存在')
     }
     this.ownedTracks.length = 0
+    let track: Track | null = null
     if (this.animationState !== null) {
       const target = name ?? this.asset.animations.keys().next().value
-      if (target !== undefined) this.animationState.play(target)
+      if (target !== undefined) track = this.animationState.play(target)
     } else if (clip !== undefined) {
-      this.ownedTracks.push(createTrack(clip))
+      track = createTrack(clip)
+      this.ownedTracks.push(track)
     }
     this._phase = 'running'
+    return track
   }
 
   pause(): void {
@@ -641,6 +983,8 @@ export class Engine {
     if (!Number.isFinite(dt) || dt < 0) throw new Error('E_CONFIG')
 
     this.host.beforeUpdate(dt)
+    this.rootDisplacementX = 0
+    this.rootDisplacementY = 0
     const step = (h: number): void => {
       if (this.animationState !== null) {
         this.lastAnimation = this.animationState.update(h)
@@ -651,15 +995,8 @@ export class Engine {
       } else {
         this.lastAnimation = sampleAnimation(this.ownedTracks, pose, slotSet, h)
       }
-      const root = pose.skeleton.roots[0]
-      if (root !== undefined && (this.flipX || this.flipY || this.instanceScaleX !== 1 || this.instanceScaleY !== 1)) {
-        const base = root * POSE_STRIDE
-        const sx = pose.skeleton.setupLocal[base + CH_SX] ?? 1
-        const sy = pose.skeleton.setupLocal[base + CH_SY] ?? 1
-        setLocal(pose, root, CH_SX, sx * (this.flipX ? -1 : 1) * this.instanceScaleX)
-        setLocal(pose, root, CH_SY, sy * (this.flipY ? -1 : 1) * this.instanceScaleY)
-      }
-      if (this.solver !== null) this.solver.solve(pose, h, this.lastAnimation?.constraintMixByName)
+      if (this.rootMotionMode === 'entity') this.consumeRootMotion(pose)
+      if (this.solver !== null) this.solver.solve(pose, h, this.lastAnimation?.constraintMixByName, slotSet, true)
       updateWorld(pose)
     }
     if (this.fixedDt === undefined) {
@@ -674,6 +1011,27 @@ export class Engine {
       for (let i = 0; i < steps; i += 1) step(this.fixedDt)
     }
     this.host.afterUpdate(dt)
+    this.ownedSkeleton?.advanceTime(dt)
+    this.hasUpdatedSinceLoad = true
+  }
+
+  private consumeRootMotion(pose: Pose): void {
+    const root = pose.skeleton.roots[0]
+    if (root === undefined) return
+    const offset = root * POSE_STRIDE
+    const x = pose.local[offset + CH_X]!, y = pose.local[offset + CH_Y]!
+    const dx = x - this.rootSampleX, dy = y - this.rootSampleY
+    this.rootSampleX = x
+    this.rootSampleY = y
+    if (dx !== 0 || dy !== 0) {
+      const sx = pose.skeletonScaleX, sy = pose.skeletonScaleY
+      this.setPosition(this.instanceX + dx * sx, this.instanceY + dy * sy)
+      this.rootDisplacementX += dx * sx
+      this.rootDisplacementY += dy * sy
+    }
+    const setup = pose.skeleton.setupLocal
+    setLocal(pose, root, CH_X, setup[offset + CH_X]!)
+    setLocal(pose, root, CH_Y, setup[offset + CH_Y]!)
   }
 
   /** 模拟 WebGL 上下文丢失：暂停绘制，保留实例状态。 */
@@ -703,28 +1061,50 @@ export class Engine {
       throw new Error('E_STATE')
     }
 
-    const resolved = this.maskLibrary !== undefined
-      ? resolveMaskPaths(slotSet, this.maskLibrary, pose, this.asset.atlas)
-      : undefined
     const rules = this.host.viewRules()
-    const packets: RenderPacket[] = []
-    const drawOrder = slotSet.drawOrder
-    for (let seq = 0; seq < drawOrder.length; seq += 1) {
-      const slotIndex = drawOrder[seq]!
-      const slot = slotSet.slots[slotIndex]
-      if (slot === undefined) continue
-      if (rules.length > 0) {
+    // View rules can switch clipping attachments, so resolve them before this frame's scopes.
+    if (rules.length > 0) {
+      for (const slotIndex of slotSet.drawOrder) {
+        const slot = slotSet.slots[slotIndex]
+        if (slot === undefined) continue
         const current = slot.attachmentId
         const picked = resolveViewRule(rules, this.camera, slotIndex, current, 0)
         if (picked.attachment !== null && picked.attachment !== current) {
           setSlotAttachment(slotSet, slotIndex, picked.attachment)
         }
       }
+    }
+    const resolved = resolveMaskPaths(slotSet, this.maskLibrary, pose, this.asset.atlas)
+    const packetMaskPaths: MaskPathNode[] = [...resolved.maskPaths]
+    const residualPaths = new Map<number, number>()
+    const residualMaskPath = (path: number): number => {
+      if (path < 0) return -1
+      const cached = residualPaths.get(path)
+      if (cached !== undefined) return cached
+      const chain = maskChain(path, resolved.maskPaths)
+      if (chain.error) return path
+      let remaining = -1
+      for (const id of chain.ids) {
+        const mask = resolved.masks[id]
+        if (mask === null || mask === undefined || (mask.mode === 'stencil' && !mask.invert)) continue
+        packetMaskPaths.push({ maskId: id, parent: remaining })
+        remaining = packetMaskPaths.length - 1
+      }
+      residualPaths.set(path, remaining)
+      return remaining
+    }
+    const packets: RenderPacket[] = []
+    const clipStats = { clippedIn: 0, clippedOut: 0 }
+    const drawOrder = slotSet.drawOrder
+    for (let seq = 0; seq < drawOrder.length; seq += 1) {
+      const slotIndex = drawOrder[seq]!
+      const slot = slotSet.slots[slotIndex]
+      if (slot === undefined) continue
       const attachment = resolveAttachment(slotSet, slotIndex)
       if (!asRenderable(attachment)) continue
       const maskPath = resolved?.paths[slotIndex] ?? -1
-      const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath, resolved)
-      if (packet !== null) packets.push(packet)
+      const packet = this.buildPacket(attachment, slotIndex, seq, pose, maskPath, resolved, clipStats)
+      if (packet !== null) packets.push({ ...packet, maskPath: residualMaskPath(maskPath) })
     }
 
     const outlined = this.outline === undefined
@@ -735,11 +1115,12 @@ export class Engine {
         ])
     const frame: RenderFrame = {
       packets: batchPackets(sortPackets(outlined)),
+      stats: { inputPackets: outlined.length, ...clipStats },
       width: this.viewport.width,
       height: this.viewport.height,
       viewProjection: this.viewProjection,
       ...(this.renderAssets === undefined ? {} : { assets: this.renderAssets }),
-      ...(resolved === undefined ? {} : { maskPaths: resolved.maskPaths, masks: { version: this.maskLibrary!.version, masks: resolved.masks } }),
+      maskPaths: packetMaskPaths, masks: { version: 1, masks: resolved.masks },
       depthMode: 'none',
     }
     if (this.renderAssets !== undefined && this.preparedAssets !== this.renderAssets && this.backend.prepare !== undefined) {
@@ -763,7 +1144,7 @@ export class Engine {
     const out: Float32Array[] = []
     for (const id of chain.ids) {
       const mask = resolved.masks[id]
-      if (mask !== null && mask !== undefined && mask.mode === 'stencil') out.push(mask.positions)
+      if (mask !== null && mask !== undefined && mask.mode === 'stencil' && !mask.invert) out.push(mask.positions)
     }
     return out
   }
@@ -776,21 +1157,28 @@ export class Engine {
     pose: Pose,
     maskPath: number,
     resolved: { readonly maskPaths: readonly { readonly maskId: number; readonly parent: number }[]; readonly masks: readonly (RenderMask | null)[] } | undefined,
+    clipStats?: { clippedIn: number; clippedOut: number },
   ): RenderPacket | null {
     const slot = this.ownedSlotSet!.slots[slotIndex]!
     const sequence = attachment.kind === 'region' ? attachment.region.sequence : undefined
+    const animatedIndex = this.lastAnimation?.sequence.get(slotIndex)
     const sequenceIndex = sequence !== undefined
-      ? Math.max(0, Math.min(sequence.frames.length - 1, this.lastAnimation?.sequence.get(slotIndex) ?? sequence.setupIndex))
+      ? Math.max(0, Math.min(sequence.frames.length - 1,
+        animatedIndex === undefined || animatedIndex === -1 ? sequence.setupIndex : animatedIndex))
       : 0
     const sequenceKey = sequence !== undefined ? sequence.frames[sequenceIndex] : undefined
     const atlas = atlasUvOf(this.asset!, attachment, sequenceKey)
-    const dark = slot.data.dark ?? attachment.dark
-    const hasDark = dark !== undefined && (dark.r > 0 || dark.g > 0 || dark.b > 0 || dark.a > 0)
+    const dark = this.lastAnimation?.colorDark.get(slotIndex) ?? slot.data.dark ?? attachment.dark
+    const light = attachment.color
+    const alpha = slot.color.a * light.a
+    const tint = spinePmaTint(this.color, slot.color, light, dark)
     const base = {
       id: slotIndex,
-      color: [slot.color.r, slot.color.g, slot.color.b, slot.color.a] as [number, number, number, number],
-      ...(hasDark && dark !== undefined
-        ? { dark: [dark.r, dark.g, dark.b, dark.a] as [number, number, number, number], twoColor: true }
+      color: [slot.color.r * light.r, slot.color.g * light.g,
+        slot.color.b * light.b, alpha] as [number, number, number, number],
+      lightBytes: tint.light,
+      ...(dark !== undefined
+        ? { dark: [dark.r * alpha, dark.g * alpha, dark.b * alpha, 1] as [number, number, number, number], darkBytes: tint.dark!, twoColor: true }
         : {}),
       materialId: atlas?.materialId ?? 0,
       order: seq,
@@ -806,43 +1194,45 @@ export class Engine {
       const off = slot.data.bone * WORLD_STRIDE
       const m = pose.world
       const region = attachment.region
-      const atlasRegion = this.asset!.atlas?.regions.get(region.atlasKey)
+      const atlasRegion = this.asset!.atlas?.regions.get(sequenceKey ?? region.atlasKey)
       const unitScale = this.asset!.unitScale
-      const sourceW = region.width ?? (atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
-        ? atlasRegion.trim.sourceWidth * unitScale
-        : 1)
-      const sourceH = region.height ?? (atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
-        ? atlasRegion.trim.sourceHeight * unitScale
-        : 1)
-      const w = region.width ?? (atlasRegion !== undefined ? atlasRegion.width * unitScale : sourceW)
-      const h = region.height ?? (atlasRegion !== undefined ? atlasRegion.height * unitScale : sourceH)
-      const ox = (atlasRegion !== undefined ? atlasRegion.trim.offsetX : 0) * unitScale
-      const oy = (atlasRegion !== undefined ? atlasRegion.trim.offsetY : 0) * unitScale
-      const x0 = -sourceW / 2 + ox
-      const y0 = -sourceH / 2 + oy
-      const x1 = x0 + w
-      const y1 = y0 + h
+      const width = region.width ?? (atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
+        ? atlasRegion.trim.sourceWidth * unitScale : 1)
+      const height = region.height ?? (atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
+        ? atlasRegion.trim.sourceHeight * unitScale : 1)
       const sx = region.scaleX ?? 1
       const sy = region.scaleY ?? 1
+      const scaleX = atlasRegion !== undefined && atlasRegion.trim.sourceWidth > 0
+        ? width / atlasRegion.trim.sourceWidth * sx : width * sx
+      const scaleY = atlasRegion !== undefined && atlasRegion.trim.sourceHeight > 0
+        ? height / atlasRegion.trim.sourceHeight * sy : height * sy
+      const x0 = -width / 2 * sx + (atlasRegion?.trim.offsetX ?? 0) * scaleX
+      const y0 = -height / 2 * sy + (atlasRegion?.trim.offsetY ?? 0) * scaleY
+      const x1 = x0 + (atlasRegion?.width ?? 1) * scaleX
+      const y1 = y0 + (atlasRegion?.height ?? 1) * scaleY
       const rot = region.rotation ?? 0
       const cos = Math.cos(rot)
       const sin = Math.sin(rot)
       const px = region.x ?? 0
       const py = region.y ?? 0
-      const corners = [x0, y0, x1, y0, x1, y1, x0, y1]
+      const corners = [x0, y0, x0, y1, x1, y1, x1, y0]
       const positions = new Float32Array(8)
       for (let v = 0; v < 4; v += 1) {
-        const lx = corners[v * 2]! * sx
-        const ly = corners[v * 2 + 1]! * sy
+        const lx = corners[v * 2]!
+        const ly = corners[v * 2 + 1]!
         const x = lx * cos - ly * sin + px
         const y = lx * sin + ly * cos + py
         positions[v * 2] = m[off]! * x + m[off + 2]! * y + m[off + 4]!
         positions[v * 2 + 1] = m[off + 1]! * x + m[off + 3]! * y + m[off + 5]!
       }
-      const uvs = atlas?.uvs ?? attachment.region.uvs ?? new Float32Array([0, 0, 1, 0, 1, 1, 0, 1])
+      const uvs = atlas?.uvs ?? attachment.region.uvs ?? new Float32Array([0, 1, 0, 0, 1, 0, 1, 1])
       const polygons = this.clipPolygonsFor(resolved, maskPath)
       if (polygons.length > 0) {
         const clipped = clipTriangles(positions, uvs, new Uint16Array([0, 1, 2, 0, 2, 3]), polygons)
+        if (clipStats !== undefined) {
+          clipStats.clippedIn += 2
+          clipStats.clippedOut += clipped.indices.length / 3
+        }
         return buildMeshPacket({
           ...base, kind: 'region', positions: clipped.positions, uvs: clipped.uvs,
           indices: clipped.indices, depth: null,
@@ -855,7 +1245,7 @@ export class Engine {
     const meshKey = `${slot.skinId}:${slotIndex}:${attachment.id}`
     const offsets = this.lastAnimation?.deformOffsets.get(meshKey)
     let mesh: MeshData | WeightedMeshData = baseMesh
-    if (offsets !== undefined && offsets.length > 0) {
+    if (offsets !== undefined && offsets.length > 0 && attachment.kind !== 'weightedMesh') {
       const deformed = new Float32Array(baseMesh.positions.length)
       deformed.set(baseMesh.positions)
       const n = Math.min(deformed.length, offsets.length)
@@ -864,11 +1254,16 @@ export class Engine {
     }
     try {
       const inverseBind = this.inverseBind!
-      const positions = skinMesh2D(mesh, pose, inverseBind)
+      const positions = skinMesh2D(mesh, pose, inverseBind, undefined,
+        attachment.kind === 'weightedMesh' ? offsets : undefined)
       const uvs = atlas?.uvs ?? mesh.uvs
       const polygons = this.clipPolygonsFor(resolved, maskPath)
       if (polygons.length > 0) {
         const clipped = clipTriangles(positions, uvs, mesh.indices, polygons)
+        if (clipStats !== undefined) {
+          clipStats.clippedIn += mesh.indices.length / 3
+          clipStats.clippedOut += clipped.indices.length / 3
+        }
         return buildMeshPacket({
           ...base, positions: clipped.positions, uvs: clipped.uvs,
           indices: clipped.indices, depth: null, kind: 'mesh',
@@ -901,14 +1296,43 @@ export class Engine {
     this.viewProjection = viewProjection2D(camera)
   }
 
-  /** 实例级翻转；只影响渲染，不写资产/setup。 */
+  /** Instance reflection participates in skeleton world transforms and physics. */
   setFlip(flipX: boolean, flipY: boolean): void {
     this.assertLive()
     this.flipX = flipX
     this.flipY = flipY
+    this.syncSkeletonTransform()
   }
 
-  /** 实例级缩放；作用在根骨，不改变其他骨 local。 */
+  setPosition(x: number, y: number): void {
+    this.assertLive()
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('E_CONFIG')
+    if (this.rootMotionMode === 'entity') {
+      const sx = this.instanceScaleX * (this.flipX ? -1 : 1)
+      const sy = this.instanceScaleY * (this.flipY ? -1 : 1)
+      this.solver?.physicsTranslate((x - this.instanceX) / sx, (y - this.instanceY) / sy)
+    }
+    this.instanceX = x
+    this.instanceY = y
+    this.syncSkeletonTransform()
+  }
+
+  private syncSkeletonTransform(): void {
+    const sx = this.instanceScaleX * (this.flipX ? -1 : 1)
+    const sy = this.instanceScaleY * (this.flipY ? -1 : 1)
+    if (this.ownedPose !== null) {
+      // Load initializes physics at its current scale; pre-update reflection needs a fresh baseline.
+      if (!this.hasUpdatedSinceLoad &&
+          (sx !== this.ownedPose.skeletonScaleX || sy !== this.ownedPose.skeletonScaleY)) this.solver?.reset()
+      setSkeletonTransform(this.ownedPose, this.instanceX, this.instanceY, sx, sy)
+    }
+    for (const env of this.physicsEnvironments) {
+      env.scaleX = sx
+      env.scaleY = sy
+    }
+  }
+
+  /** Instance scale is a skeleton transform, never a bone local rewrite. */
   setScale(scaleX: number, scaleY: number): void {
     this.assertLive()
     if (!Number.isFinite(scaleX) || !Number.isFinite(scaleY) || scaleX === 0 || scaleY === 0) {
@@ -916,6 +1340,7 @@ export class Engine {
     }
     this.instanceScaleX = scaleX
     this.instanceScaleY = scaleY
+    this.syncSkeletonTransform()
   }
 
   /** 换肤：只换附件集合，不改 pose/drawOrder。 */
@@ -935,21 +1360,50 @@ export class Engine {
     setSlotAttachment(set, index, attachmentName)
   }
 
-  /** 恢复 setup pose / slot 颜色 / 附件 / draw order；停止播放。 */
-  setToSetupPose(): void {
+  /** Restores bone locals without updating world transforms or animation state. */
+  setupPoseBones(): void {
     this.assertLive()
     const pose = this.ownedPose
-    const set = this.ownedSlotSet
-    if (pose === null || set === null) throw new Error('E_NO_ASSET')
+    if (pose === null) throw new Error('E_NO_ASSET')
     pose.local.set(pose.skeleton.setupLocal)
+    const root = pose.skeleton.roots[0]
+    if (root !== undefined) {
+      this.rootSampleX = pose.local[root * POSE_STRIDE + CH_X]!
+      this.rootSampleY = pose.local[root * POSE_STRIDE + CH_Y]!
+    }
     markAllDirty(pose)
+  }
+
+  /** Restores setup attachments, colors, and draw order without changing bones. */
+  setupPoseSlots(): void {
+    this.assertLive()
+    const set = this.ownedSlotSet
+    if (set === null) throw new Error('E_NO_ASSET')
     for (const slot of set.slots) {
       slot.attachmentId = slot.data.attachment
       slot.color = slot.data.color
     }
     set.drawOrder.length = 0
     set.drawOrder.push(...set.slots.map((_, i) => i).sort((a, b) => set.slots[a]!.data.order - set.slots[b]!.data.order))
-    this.animationState?.stop()
+  }
+
+  setBonesToSetupPose(): void {
+    this.setupPoseBones()
+  }
+
+  setSlotsToSetupPose(): void {
+    this.setupPoseSlots()
+  }
+
+  setupPose(options: { stopOnSetupPose?: boolean } = {}): void {
+    this.setupPoseBones()
+    this.setupPoseSlots()
+    if (options.stopOnSetupPose) this.animationState?.stop()
+  }
+
+  /** Legacy alias; stopping playback requires explicit opt-in. */
+  setToSetupPose(options: { stopOnSetupPose?: boolean } = {}): void {
+    this.setupPose(options)
   }
 
   /** 当前渲染包围盒（裁剪前、不含描边）；用于取景/调试。 */
@@ -1004,6 +1458,7 @@ export class Engine {
     this.asset = null
     this.ownedPose = null
     this.ownedSlotSet = null
+    this.ownedSkeleton = null
     this.inverseBind = null
     this.solver = null
     this.ownedTracks.length = 0

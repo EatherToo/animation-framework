@@ -51,6 +51,24 @@ const asset: SkeletonAsset = {
 }
 
 describe('runtime asset integration', () => {
+  it('combines slot and attachment light, and premultiplies animated dark only once', () => {
+    const tinted: SkeletonAsset = {
+      ...asset,
+      slots: [{ ...slots[1]!, color: { r: 0.5, g: 0.4, b: 0.3, a: 0.6 },
+        dark: { r: 0.7, g: 0.4, b: 0.2, a: 0 } }],
+      skins: new Map([['default', { id: 'default', attachments: new Map([['body', {
+        ...region('body'), color: { r: 0.8, g: 0.6, b: 0.4, a: 0.5 },
+      } as Attachment]]) }]]),
+      maskLibrary: { version: 1, masks: [] },
+    }
+    const engine = new Engine({ backend: 'cpu', pixelRatio: 1 })
+    engine.load(tinted)
+    const packet = engine.render().packets[0]!
+    expect(Array.from(packet.colors.subarray(0, 4))).toEqual([30, 18, 9, 76])
+    expect(Array.from(packet.dark!.subarray(0, 4))).toEqual([53, 30, 15, 255])
+    engine.dispose()
+  })
+
   it('builds texture pages and sprite materials from the atlas', () => {
     const assets = buildRenderAssets(asset)!
     expect(assets.pages).toHaveLength(1)
@@ -82,12 +100,12 @@ describe('runtime asset integration', () => {
     expect(paths.paths).toHaveLength(3)
     expect(paths.paths[0]).toBe(-1) // clipping slot 本身不画
     expect(paths.paths[1]).toBeGreaterThanOrEqual(0) // body 在 scope 内
-    expect(paths.paths[2]).toBe(-1) // end 槽位自身不被裁
+    expect(paths.paths[2]).toBeGreaterThanOrEqual(0) // end 槽位自身也被裁
     expect(paths.maskPaths).toHaveLength(1)
     expect(paths.masks[0]!.positions.length).toBeGreaterThanOrEqual(6)
   })
 
-  it('keeps packets sorted and applies the frame mask set', () => {
+  it('keeps packets sorted and consumes CPU stencil masks', () => {
     const engine = new Engine({ backend: 'cpu' })
     engine.load(asset)
     const frame = engine.render()
@@ -95,7 +113,7 @@ describe('runtime asset integration', () => {
     expect(frame.masks?.masks.length).toBe(1)
     expect(frame.maskPaths?.length).toBe(1)
     const body = frame.packets.find((p) => p.id === 1)!
-    expect(body.maskPath).toBeGreaterThanOrEqual(0)
+    expect(body.maskPath).toBe(-1)
     expect(frame.packets.find((p) => p.id === 0)).toBeUndefined() // clipping 槽不绘制
   })
 })

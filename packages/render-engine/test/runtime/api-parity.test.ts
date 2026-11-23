@@ -1,8 +1,10 @@
 import { describe, expect, it } from '@jest/globals'
 import { compileSkeleton } from '@/core/skeleton'
+import { markAllDirty, updateWorld } from '@/core/pose'
 import type { SkeletonAsset } from '@/asset/importer'
 import type { Attachment, SlotData } from '@/slot/slot'
 import { Engine } from '@/runtime/runtime'
+import type { AnimationClip } from '@/animation/animation'
 
 const sk = compileSkeleton({ name: 'api', profile: 'simple2d', bones: [{ name: 'root', parent: -1, length: 1 }] })
 const rgba = { r: 1, g: 1, b: 1, a: 1 }
@@ -20,6 +22,21 @@ const asset: SkeletonAsset = {
 }
 
 describe('runtime API parity', () => {
+  it('exposes animation mixing data and the played track', () => {
+    const engine = new Engine({ backend: 'cpu' })
+    expect(() => engine.state).toThrow('E_NO_ASSET')
+    const animations = new Map<string, AnimationClip>([
+      ['walk', { name: 'walk', duration: 1, timelines: [] }],
+      ['run', { name: 'run', duration: 1, timelines: [] }],
+    ])
+    engine.load({ ...asset, animations })
+    engine.state.data.setMix('walk', 'run', 0.4)
+    expect(engine.play('walk')?.clip.name).toBe('walk')
+    const next = engine.play('run')
+    expect(next?.clip.name).toBe('run')
+    expect(next?.mixDuration).toBe(0.4)
+  })
+
   it('switches skins and attachments without touching pose', () => {
     const engine = new Engine({ backend: 'cpu' })
     engine.load(asset)
@@ -29,6 +46,29 @@ describe('runtime API parity', () => {
     engine.setAttachment('body', 'b')
     expect(engine.slotSet.slots[0]!.attachmentId).toBe('b')
     expect(engine.pose.local).toEqual(before)
+  })
+
+  it('restores setup bones and slots without updating world or stopping tracks', () => {
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load({ ...asset, animations: new Map([['walk', { name: 'walk', duration: 1, timelines: [] }]]) })
+    const track = engine.play('walk')!
+    engine.pose.local[0] = 4
+    markAllDirty(engine.pose)
+    updateWorld(engine.pose)
+    const beforeWorld = engine.pose.world.slice()
+    engine.setAttachment('body', 'b')
+    engine.setupPoseBones()
+    expect(engine.pose.local[0]).toBe(sk.setupLocal[0])
+    expect(engine.pose.world).toEqual(beforeWorld)
+    expect(engine.slotSet.slots[0]!.attachmentId).toBe('b')
+    engine.setupPoseSlots()
+    expect(engine.slotSet.slots[0]!.attachmentId).toBe('a')
+    expect(engine.state.tracks).toContain(track)
+    engine.setToSetupPose()
+    expect(engine.state.tracks).toContain(track)
+    engine.setupPose({ stopOnSetupPose: true })
+    expect(engine.state.tracks).toHaveLength(0)
+    engine.dispose()
   })
 
   it('resets to setup pose and computes bounds from actual geometry', () => {

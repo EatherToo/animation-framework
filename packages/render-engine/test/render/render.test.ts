@@ -88,18 +88,20 @@ describe('M4 render: 排序与合批键', () => {
     expect(sortPackets(packets).map((p) => p.id)).toEqual([7, 8, 9])
   })
 
-  it('batchKey 由 materialId|blend|maskPath|indexType|kind 组成', () => {
+  it('batchKey includes page and two-color state alongside material and geometry', () => {
     const base = mkPacket(1, { materialId: 3, blend: 'add', maskPath: 2, kind: 'region' })
-    expect(batchKey(base)).toBe('3|add|2|16|region')
+    expect(batchKey(base)).toBe('3|-1|add|2|16|region|0|0')
     expect(
       batchKey(mkPacket(1, {
         materialId: 3, blend: 'add', maskPath: 2, kind: 'region', indices: new Uint32Array([0, 1, 2]),
       })),
-    ).toBe('3|add|2|32|region')
+    ).toBe('3|-1|add|2|32|region|0|0')
     expect(batchKey(mkPacket(1, { materialId: 3, blend: 'add', maskPath: 2, kind: 'outline' }))).not.toBe(batchKey(base))
     expect(batchKey(mkPacket(1, { materialId: 4, blend: 'add', maskPath: 2, kind: 'region' }))).not.toBe(batchKey(base))
     expect(batchKey(mkPacket(1, { materialId: 3, blend: 'normal', maskPath: 2, kind: 'region' }))).not.toBe(batchKey(base))
     expect(batchKey(mkPacket(1, { materialId: 3, blend: 'add', maskPath: 3, kind: 'region' }))).not.toBe(batchKey(base))
+    expect(batchKey(mkPacket(1, { ...base, page: 1 }))).not.toBe(batchKey(base))
+    expect(batchKey(mkPacket(1, { ...base, twoColor: true, dark: new Uint8Array(16) }))).not.toBe(batchKey(base))
   })
 })
 

@@ -48,11 +48,19 @@ export class FakeWebGL implements WebGL2Like {
 
   getAttribLocation(_program: unknown, name: string): number {
     this.push('getAttribLocation', name)
-    return name === 'aPosition' ? 0 : name === 'aUv' ? 1 : 2
+    return name === 'aPosition' ? 0 : name === 'aUv' ? 1 : name === 'aColor' ? 2 : 3
   }
 
   enableVertexAttribArray(index: number): void {
     this.push('enableVertexAttribArray', index)
+  }
+
+  disableVertexAttribArray(index: number): void {
+    this.push('disableVertexAttribArray', index)
+  }
+
+  vertexAttrib4f(index: number, x: number, y: number, z: number, w: number): void {
+    this.push('vertexAttrib4f', index, x, y, z, w)
   }
 
   vertexAttribPointer(
@@ -196,6 +204,10 @@ export class FakeWebGL implements WebGL2Like {
 
   stencilOp(fail: number, zfail: number, zpass: number): void {
     this.push('stencilOp', fail, zfail, zpass)
+  }
+
+  stencilMask(mask: number): void {
+    this.push('stencilMask', mask)
   }
 
   clearStencil(s: number): void {

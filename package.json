@@ -24,6 +24,7 @@
   },
   "devDependencies": {
     "@esotericsoftware/spine-canvas": "4.3.13",
+    "@esotericsoftware/spine-core": "4.3.13",
     "@napi-rs/canvas": "1.2.0",
     "@types/pngjs": "^6.0.5",
     "pngjs": "^7.0.0",

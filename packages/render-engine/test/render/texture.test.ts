@@ -189,7 +189,7 @@ describe('M10 texture: WebGL2 页纹理上传与绑定', () => {
     // 页纹理创建顺序：p0=1、p1=2、白=3；sprite 材质应绑定 p1。
     const bindTextures = gl.argsOf('bindTexture').map((a) => a[1])
     expect(bindTextures).toContain(2)
-    expect(gl.argsOf('uniform1i').some((a) => a[0] === 'uUseTexture' && a[1] === 1)).toBe(true)
+    expect(gl.argsOf('uniform1f').some((a) => a[0] === 'uUseTexture' && a[1] === 1)).toBe(true)
     expect(backend.stats.drawCalls).toBe(1)
     expect(backend.stats.uploadedVertices).toBe(4)
   })
@@ -214,6 +214,6 @@ describe('M10 texture: WebGL2 页纹理上传与绑定', () => {
     backend.draw({ packets: [packet], width: 4, height: 4, assets })
     // 白纹理是第三个创建（id=2：页 id=1、白 id=2）。
     expect(gl.argsOf('bindTexture').map((a) => a[1])).toContain(2)
-    expect(gl.argsOf('uniform1i').some((a) => a[0] === 'uUseTexture' && a[1] === 0)).toBe(true)
+    expect(gl.argsOf('uniform1f').some((a) => a[0] === 'uUseTexture' && a[1] === 0)).toBe(true)
   })
 })

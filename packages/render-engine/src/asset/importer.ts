@@ -9,14 +9,14 @@
 import { compileSkeleton, type BoneSpec, type CompiledSkeleton } from '../core/skeleton'
 import { createPose, updateWorld } from '../core/pose'
 import { decomposeAffine, normalizeAngle, WORLD_STRIDE, type InheritMode, type LocalTransform } from '../core/math'
-import type { Attachment, BlendMode, RegionRef, RGBA, SkinData, SlotData } from '../slot/slot'
-import type { AnimationClip, ScalarKey, Timeline } from '../animation/animation'
-import type { ConstraintData } from '../constraint/constraint'
+import type { Attachment, BlendMode, RegionRef, RGBA, SkinData, SlotData, SpinePathData } from '../slot/slot'
+import type { AnimationClip, ConstraintFrame, DeformKey, ScalarKey, Timeline } from '../animation/animation'
+import type { ConstraintData, TransformFrom, TransformProperty } from '../constraint/constraint'
 import type { AtlasData } from './atlas'
 
 const DEG = Math.PI / 180
 // Spine region：bl=(u,v2)、br=(u2,v2)、tr=(u2,v)、tl=(u,v)；v=0 是图集顶部。
-const DEFAULT_REGION_UVS = new Float32Array([0, 1, 1, 1, 1, 0, 0, 0])
+const DEFAULT_REGION_UVS = new Float32Array([0, 1, 0, 0, 1, 0, 1, 1])
 
 /** 单条导入记录：带 code / path / 原值 / 处置。 */
 export type ImportIssue = {
@@ -78,6 +78,7 @@ type Ctx = {
   source: 'spine' | 'dragonbones'
   sourceYDown: boolean
   unitScale: number
+  maxInfluences: number
   issues: ImportIssue[]
   atlas: ReadonlySet<string> | null
   atlasData: AtlasData | null
@@ -120,6 +121,7 @@ function clamp01(v: number): number {
 const WHITE: RGBA = { r: 1, g: 1, b: 1, a: 1 }
 
 function parseHexColor(v: unknown, ctx: Ctx, path: string): RGBA {
+  if (v === undefined || v === null) return WHITE
   if (typeof v === 'string' && /^[0-9a-fA-F]{8}$/.test(v)) {
     return {
       r: Number.parseInt(v.slice(0, 2), 16) / 255,
@@ -328,6 +330,17 @@ function flippedMatrix(b: RawBone, unitScale: number, sourceYDown: boolean): Flo
 }
 
 function convertBone(b: RawBone, ctx: Ctx, path: string): LocalTransform {
+  if (b.kind === 'spine' && !ctx.sourceYDown) {
+    return {
+      x: b.x * ctx.unitScale,
+      y: b.y * ctx.unitScale,
+      rotation: b.rotationDeg * DEG,
+      scaleX: b.scaleX,
+      scaleY: b.scaleY,
+      shearX: b.shearXDeg * DEG,
+      shearY: b.shearYDeg * DEG,
+    }
+  }
   const m = flippedMatrix(b, ctx.unitScale, ctx.sourceYDown)
   try {
     return decomposeAffine(m)
@@ -445,6 +458,63 @@ function flatPositions(points: unknown[], ctx: Ctx, scale: number): Float32Array
   return out
 }
 
+function readSpinePath(
+  raw: Record<string, unknown>, slotBone: number, srcToId: Int32Array, ctx: Ctx, path: string,
+): { polygon: Float32Array; pathData: SpinePathData } {
+  const values = arr(raw.vertices).map((value) => num(value))
+  const lengths = Float32Array.from(arr(raw.lengths).map((value) => num(value) * ctx.unitScale))
+  const closed = raw.closed === true
+  const expected = Number.isInteger(raw.vertexCount) && (raw.vertexCount as number) > 0
+    ? raw.vertexCount as number
+    : lengths.length > 0 ? (lengths.length + (closed ? 0 : 2)) * 3 : 0
+  const ySign = ctx.sourceYDown ? -1 : 1
+  const rigid = expected === 0 ? values.length % 2 === 0 : values.length === expected * 2
+  const vertices: { bone: number; x: number; y: number; weight: number }[][] = []
+  if (rigid) {
+    for (let i = 0; i + 1 < values.length; i += 2) {
+      vertices.push([{ bone: slotBone, x: values[i]! * ctx.unitScale, y: values[i + 1]! * ctx.unitScale * ySign, weight: 1 }])
+    }
+  } else {
+    let cursor = 0
+    while (cursor < values.length && (expected === 0 || vertices.length < expected)) {
+      const count = values[cursor++]!
+      if (!Number.isInteger(count) || count < 1 || cursor + count * 4 > values.length) break
+      const influences: { bone: number; x: number; y: number; weight: number }[] = []
+      for (let j = 0; j < count; j += 1) {
+        const sourceBone = values[cursor++]!
+        const x = values[cursor++]! * ctx.unitScale
+        const y = values[cursor++]! * ctx.unitScale * ySign
+        const weight = values[cursor++]!
+        if (!Number.isInteger(sourceBone) || sourceBone < 0 || sourceBone >= srcToId.length) {
+          add(ctx, 'error', 'E_INDEX_RANGE', `${path}.vertices[${vertices.length}][${j}].bone`, '路径权重骨索引越界，已跳过', 'skip', sourceBone)
+          continue
+        }
+        influences.push({ bone: srcToId[sourceBone]!, x, y, weight })
+      }
+      const sum = influences.reduce((total, influence) => total + influence.weight, 0)
+      if (sum <= 0 || !Number.isFinite(sum)) {
+        add(ctx, 'error', 'E_WEIGHT_SUM', `${path}.vertices[${vertices.length}]`, '路径顶点权重无效，回退到 slot 骨', 'fallback')
+        influences.splice(0, influences.length, { bone: slotBone, x: 0, y: 0, weight: 1 })
+      } else {
+        for (const influence of influences) influence.weight /= sum
+      }
+      if (ctx.maxInfluences > 0 && influences.length > ctx.maxInfluences) {
+        add(ctx, 'warning', 'W_WEIGHT_LIMIT', `${path}.vertices[${vertices.length}]`, '路径顶点影响数超过配置上限，保留全部影响', 'keep', influences.length)
+      }
+      vertices.push(influences)
+    }
+    if (cursor !== values.length || (expected > 0 && vertices.length !== expected)) {
+      add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, '路径权重布局无效，保留旧坐标回退', 'fallback', raw.vertices)
+      return {
+        polygon: flatPositions(values, ctx, ctx.unitScale),
+        pathData: { vertices: [], lengths, closed, constantSpeed: raw.constantSpeed !== false },
+      }
+    }
+  }
+  const polygon = Float32Array.from(vertices.flatMap((influences) => [influences[0]!.x, influences[0]!.y]))
+  return { polygon, pathData: { vertices, lengths, closed, constantSpeed: raw.constantSpeed !== false } }
+}
+
 function validateIndices(raw: unknown, vertexCount: number, ctx: Ctx, path: string): Uint16Array {
   const kept: number[] = []
   const values = arr(raw)
@@ -459,7 +529,7 @@ function validateIndices(raw: unknown, vertexCount: number, ctx: Ctx, path: stri
   return Uint16Array.from(kept)
 }
 
-/** 权重：读 count → (boneIndex,x,y,w)；映射稳定 BoneId，超 4 裁剪并归一化。 */
+/** 权重：读 count → (boneIndex,x,y,w)；映射稳定 BoneId 并保留全部影响。 */
 function readWeightedMesh(
   raw: Record<string, unknown>,
   name: string,
@@ -470,13 +540,14 @@ function readWeightedMesh(
 ): Attachment {
   const vertices = arr(raw.vertices).map((v) => num(v))
   const uvs = arr(raw.uvs).map((v) => num(v))
-  const perVertex = 4
+  let perVertex = 4
   // 先按源布局数一遍顶点：每个顶点 = count + count×4 个分量。
   let vertexCount = 0
   let scan = 0
   while (scan < vertices.length) {
     const count = Math.floor(vertices[scan] ?? 0)
-    if (!Number.isInteger(count) || count < 0 || count > 64) break
+    if (!Number.isInteger(count) || count < 0 || scan + 1 + count * 4 > vertices.length) break
+    perVertex = Math.max(perVertex, count)
     scan += 1 + count * 4
     vertexCount += 1
   }
@@ -484,11 +555,14 @@ function readWeightedMesh(
   const positions = new Float32Array(vertexCount * 2)
   const boneIndices = new Uint16Array(vertexCount * perVertex)
   const weights = new Float32Array(vertexCount * perVertex)
+  const influencePositions = new Float32Array(vertexCount * perVertex * 2)
+  const influenceSourceIndices = new Int32Array(vertexCount * perVertex).fill(-1)
+  let sourceComponent = 0
   let p = 0
   let v = 0
   while (p < vertices.length && v < vertexCount) {
     const count = Math.max(0, Math.floor(vertices[p++]!))
-    const influences: { bone: number; x: number; y: number; w: number }[] = []
+    const influences: { bone: number; x: number; y: number; w: number; source: number }[] = []
     for (let j = 0; j < count; j += 1) {
       const srcIndex = Math.floor(vertices[p++]!)
       const x = vertices[p++] ?? 0
@@ -498,27 +572,31 @@ function readWeightedMesh(
         add(ctx, 'error', 'E_INDEX_RANGE', `${path}.vertices[${v}][${j}].bone`, '权重骨索引越界，已跳过', 'skip', srcIndex)
         continue
       }
-      influences.push({ bone: srcToId[srcIndex]!, x, y, w })
+      influences.push({ bone: srcToId[srcIndex]!, x, y, w, source: j })
     }
     let sum = influences.reduce((acc, inf) => acc + inf.w, 0)
     if (!Number.isFinite(sum) || sum <= 0) {
       add(ctx, 'error', 'E_WEIGHT_SUM', `${path}.vertices[${v}]`, '权重和 ≤0 或非有限，回退单骨刚性', 'fallback', influences.map((i) => i.w))
       influences.length = 0
-      influences.push({ bone: slotBone, x: 0, y: 0, w: 1 })
+      influences.push({ bone: slotBone, x: 0, y: 0, w: 1, source: -1 })
       sum = 1
     }
-    if (influences.length > 4) {
-      add(ctx, 'warning', 'W_WEIGHT_PRUNED', `${path}.vertices[${v}]`, '影响数 >4，保留前 4 并归一化', 'normalize', influences.length)
-      influences.length = 4
-      sum = influences.reduce((acc, inf) => acc + inf.w, 0)
+    if (ctx.maxInfluences > 0 && influences.length > ctx.maxInfluences) {
+      add(ctx, 'warning', 'W_WEIGHT_LIMIT', `${path}.vertices[${v}]`, '顶点影响数超过配置上限，保留全部影响', 'keep', influences.length)
     }
     positions[v * 2] = influences[0]!.x * ctx.unitScale
     positions[v * 2 + 1] = (ctx.sourceYDown ? -1 : 1) * influences[0]!.y * ctx.unitScale
-    for (let j = 0; j < 4; j += 1) {
+    for (let j = 0; j < perVertex; j += 1) {
       const inf = influences[j]
       boneIndices[v * perVertex + j] = inf?.bone ?? slotBone
       weights[v * perVertex + j] = inf && sum > 0 ? clamp01(inf.w / sum) : 0
+      if (inf !== undefined) {
+        influenceSourceIndices[v * perVertex + j] = inf.source < 0 ? -1 : sourceComponent + inf.source * 2
+        influencePositions[(v * perVertex + j) * 2] = inf.x * ctx.unitScale
+        influencePositions[(v * perVertex + j) * 2 + 1] = (ctx.sourceYDown ? -1 : 1) * inf.y * ctx.unitScale
+      }
     }
+    sourceComponent += count * 2
     v += 1
   }
   const mesh = {
@@ -530,6 +608,9 @@ function readWeightedMesh(
     vertexSpace: 'boneLocal' as const,
     boneIndices,
     weights,
+    influencePositions,
+    influenceSourceIndices,
+    influencesPerVertex: perVertex,
     // 调试/描边扩展字段；不进入核心 MeshData 契约，故用结构附加。
     ...(Number.isFinite(num(raw.hull, NaN)) ? { hull: num(raw.hull) } : {}),
     ...(arr(raw.edges).length > 0 ? { edges: Uint16Array.from(arr(raw.edges).map((v) => num(v))) } : {}),
@@ -611,6 +692,9 @@ function buildAttachment(
   if (type === 'point') {
     return { kind: 'point', id: name, point: [num(rawObj.x) * ctx.unitScale, (ctx.sourceYDown ? -1 : 1) * num(rawObj.y) * ctx.unitScale] }
   }
+  if (type === 'path' && kindHint === 'spine') {
+    return { kind: 'path', id: name, ...readSpinePath(rawObj, slotBone, srcToId, ctx, path) }
+  }
   if (type === 'clipping' || type === 'path' || type === 'boundingbox') {
     const kind = type === 'boundingbox' ? 'boundingBox' : type
     return { kind, id: name, polygon: flatPositions(arr(rawObj.vertices).map((x) => num(x)), ctx, ctx.unitScale) }
@@ -684,6 +768,13 @@ function buildLinkedMesh(
       vertexSpace: parentMesh.vertexSpace,
       boneIndices: new Uint16Array(parent.mesh.boneIndices),
       weights: new Float32Array(parent.mesh.weights),
+      ...(parent.mesh.influencesPerVertex === undefined ? {} : { influencesPerVertex: parent.mesh.influencesPerVertex }),
+      ...(parent.mesh.influencePositions === undefined ? {} : {
+        influencePositions: new Float32Array(parent.mesh.influencePositions),
+      }),
+      ...(parent.mesh.influenceSourceIndices === undefined ? {} : {
+        influenceSourceIndices: new Int32Array(parent.mesh.influenceSourceIndices),
+      }),
     }
     return {
       kind: 'weightedMesh',
@@ -738,12 +829,6 @@ function parseSequence(
   return { frames, setupIndex }
 }
 
-/** 设置 slot.mask；SlotData 对外只读，导入阶段允许一次性写入。 */
-function setSlotMask(slots: readonly SlotData[], slotName: string, maskId: string): void {
-  const slot = slots.find((s) => s.id === slotName)
-  if (slot !== undefined) (slot as { mask: string | null }).mask = maskId
-}
-
 /** 设置 slot.attachment（DragonBones displayIndex 用）。 */
 function setSlotAttachment(slots: readonly SlotData[], slotName: string, attachment: string | null): void {
   const slot = slots.find((s) => s.id === slotName)
@@ -762,7 +847,7 @@ function addClippingMask(
   raw: Record<string, unknown>,
   polygon: Float32Array,
 ): void {
-  const id = `${slotName}.${attachmentName}`
+  const id = `${slots.findIndex((slot) => slot.id === slotName)}:${attachmentName}`
   if (ctx.masks.some((mask) => mask.id === id)) return
   const requestedEnd = typeof raw.end === 'string' ? raw.end : ''
   const endSlotId = slots.some((slot) => slot.id === requestedEnd) ? requestedEnd : slotName
@@ -779,10 +864,9 @@ function addClippingMask(
     endSlotId,
   }
   ctx.masks.push(Object.freeze(mask))
-  setSlotMask(slots, slotName, id)
 }
 
-/** DragonBones 紧凑权重 [boneCount,(boneIndex,weight)*] → 每顶点 4 影响。 */
+/** DragonBones 紧凑权重 [boneCount,(boneIndex,weight)*] → 每顶点保留全部影响。 */
 function readDbWeights(
   raw: readonly number[],
   vertexCount: number,
@@ -791,9 +875,18 @@ function readDbWeights(
   slotBone: number,
   ctx: Ctx,
   path: string,
-): { boneIndices: Uint16Array; weights: Float32Array } | null {
-  const boneIndices = new Uint16Array(Math.max(1, vertexCount) * 4)
-  const weights = new Float32Array(Math.max(1, vertexCount) * 4)
+): { boneIndices: Uint16Array; weights: Float32Array; influencesPerVertex: number } | null {
+  let perVertex = 4
+  let scan = 0
+  for (let v = 0; v < vertexCount; v += 1) {
+    if (scan >= raw.length) return null
+    const count = Math.floor(raw[scan]!)
+    if (count < 0 || scan + 1 + count * 2 > raw.length) return null
+    perVertex = Math.max(perVertex, count)
+    scan += 1 + count * 2
+  }
+  const boneIndices = new Uint16Array(Math.max(1, vertexCount) * perVertex)
+  const weights = new Float32Array(Math.max(1, vertexCount) * perVertex)
   let cursor = 0
   for (let v = 0; v < vertexCount; v += 1) {
     if (cursor >= raw.length) return null
@@ -817,18 +910,16 @@ function readDbWeights(
       influences.push({ bone: slotBone, weight: 1 })
       sum = 1
     }
-    if (influences.length > 4) {
-      add(ctx, 'warning', 'W_WEIGHT_PRUNED', `${path}.weights[${v}]`, '影响数 >4，保留前 4 并归一化', 'normalize', influences.length)
-      influences.length = 4
-      sum = influences.reduce((acc, item) => acc + item.weight, 0)
+    if (ctx.maxInfluences > 0 && influences.length > ctx.maxInfluences) {
+      add(ctx, 'warning', 'W_WEIGHT_LIMIT', `${path}.weights[${v}]`, '顶点影响数超过配置上限，保留全部影响', 'keep', influences.length)
     }
-    for (let j = 0; j < 4; j += 1) {
+    for (let j = 0; j < perVertex; j += 1) {
       const influence = influences[j]
-      boneIndices[v * 4 + j] = influence?.bone ?? slotBone
-      weights[v * 4 + j] = influence !== undefined && sum > 0 ? clamp01(influence.weight / sum) : 0
+      boneIndices[v * perVertex + j] = influence?.bone ?? slotBone
+      weights[v * perVertex + j] = influence !== undefined && sum > 0 ? clamp01(influence.weight / sum) : 0
     }
   }
-  return cursor > raw.length ? null : { boneIndices, weights }
+  return cursor > raw.length ? null : { boneIndices, weights, influencesPerVertex: perVertex }
 }
 
 /** DragonBones mesh display：image/mesh/armature 的分派与权重展开。 */
@@ -879,7 +970,7 @@ function buildDragonBonesDisplay(
       return {
         kind: 'weightedMesh',
         id: name,
-        mesh: { ...base, boneIndices: weights.boneIndices, weights: weights.weights },
+        mesh: { ...base, boneIndices: weights.boneIndices, weights: weights.weights, influencesPerVertex: weights.influencesPerVertex },
         region,
         color,
       }
@@ -903,15 +994,33 @@ function buildDragonBonesDisplay(
   }
 }
 
-/** 收集 path 附件多边形，供 path 约束引用。 */
-function pathPolygons(skins: ReadonlyMap<string, SkinData>): Map<string, Float32Array> {
-  const out = new Map<string, Float32Array>()
+/** Spine 约束 target 是 slot 名；旧资产也允许直接用 path 附件名。 */
+function pathAttachment(skins: ReadonlyMap<string, SkinData>, slots: readonly SlotData[], target: string): Extract<Attachment, { kind: 'boundingBox' | 'path' }> | undefined {
+  const slot = slots.find((item) => item.id === target)
+  for (const skin of skins.values()) {
+    const attachment = slot?.attachment === null ? undefined : skin.attachments.get(`${target}\u0000${slot?.attachment ?? ''}`)
+    if (attachment?.kind === 'path') return attachment
+  }
   for (const skin of skins.values()) {
     for (const attachment of skin.attachments.values()) {
-      if (attachment.kind === 'path' && !out.has(attachment.id)) out.set(attachment.id, attachment.polygon)
+      if (attachment.kind === 'path' && attachment.id === target) return attachment
     }
   }
-  return out
+  return undefined
+}
+
+function spinePhysicsData(o: Record<string, unknown>, ctx: Ctx) {
+  const mass = num(o.mass, 1)
+  return {
+    x: num(o.x), y: num(o.y), rotate: num(o.rotate), scaleX: num(o.scaleX), shearX: num(o.shearX),
+    limit: num(o.limit, 5000) * ctx.unitScale, step: 1 / num(o.fps, 60),
+    scaleYMode: o.scaleY === 'Uniform' ? 'Uniform' as const : o.scaleY === 'Volume' ? 'Volume' as const : 'None' as const,
+    inertia: num(o.inertia, 0.5), strength: num(o.strength, 100), damping: num(o.damping, 0.85),
+    massInverse: 1 / mass, mass, wind: num(o.wind), gravity: num(o.gravity), mix: num(o.mix, 1),
+    inertiaGlobal: o.inertiaGlobal === true, strengthGlobal: o.strengthGlobal === true,
+    dampingGlobal: o.dampingGlobal === true, massGlobal: o.massGlobal === true,
+    windGlobal: o.windGlobal === true, gravityGlobal: o.gravityGlobal === true, mixGlobal: o.mixGlobal === true,
+  }
 }
 
 /** Spine 顶层 ik/transform/path/physics → ConstraintData[]；不可恢复项记 W 跳过。 */
@@ -919,29 +1028,24 @@ function readSpineConstraints(
   doc: Record<string, unknown>,
   skeleton: CompiledSkeleton,
   skins: ReadonlyMap<string, SkinData>,
+  slots: readonly SlotData[],
   ctx: Ctx,
 ): ConstraintData[] {
   // Spine 4.3 把约束放进 constraints[]；旧格式仍支持顶层 ik/transform/path/physics。
   if (arr(doc.constraints).length > 0) {
-    return readSpineConstraintArray(arr(doc.constraints), skeleton, skins, ctx)
+    return readSpineConstraintArray(arr(doc.constraints), skeleton, skins, slots, ctx)
   }
-  return readLegacySpineConstraints(doc, skeleton, skins, ctx)
+  return readLegacySpineConstraints(doc, skeleton, skins, slots, ctx)
 }
 
 function readSpineConstraintArray(
   rawConstraints: readonly unknown[],
   skeleton: CompiledSkeleton,
   skins: ReadonlyMap<string, SkinData>,
+  slots: readonly SlotData[],
   ctx: Ctx,
 ): ConstraintData[] {
   const out: ConstraintData[] = []
-  const paths = pathPolygons(skins)
-  const slotToPath = new Map<string, Float32Array>()
-  for (const skin of skins.values()) {
-    for (const attachment of skin.attachments.values()) {
-      if (attachment.kind === 'path' && !slotToPath.has(attachment.id)) slotToPath.set(attachment.id, attachment.polygon)
-    }
-  }
   const idOf = (v: unknown): number | undefined => {
     if (typeof v !== 'string') return undefined
     return skeleton.boneIdByName.get(v)
@@ -960,23 +1064,65 @@ function readSpineConstraintArray(
         add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, 'transform 缺 bones/source，已跳过', 'skip', raw)
         continue
       }
+      const properties = obj(o.properties)
+      const enabled = new Set<string>()
+      if (properties !== null) {
+        for (const entry of Object.values(properties)) {
+          for (const channel of Object.keys(obj(obj(entry)?.to) ?? {})) enabled.add(channel)
+        }
+      }
+      const channelNames: readonly TransformProperty[] = ['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY']
+      const propertyScale = (kind: TransformProperty): number => kind === 'rotate' || kind === 'shearY'
+        ? DEG : kind === 'x' || kind === 'y'
+          ? ctx.unitScale * (kind === 'y' && ctx.sourceYDown ? -1 : 1) : 1
+      const mappings: TransformFrom[] = properties === null ? [] : Object.entries(properties).flatMap(([kind, entry]) => {
+        if (!channelNames.includes(kind as TransformProperty)) return []
+        const fromKind = kind as TransformProperty
+        const from = obj(entry) ?? {}
+        const to = Object.entries(obj(from.to) ?? {}).flatMap(([target, rawTo]) => {
+          if (!channelNames.includes(target as TransformProperty)) return []
+          const toKind = target as TransformProperty
+          const raw = obj(rawTo) ?? {}
+          const toScale = propertyScale(toKind)
+          return [{ kind: toKind, offset: num(raw.offset) * toScale,
+            max: num(raw.max, 1) * toScale,
+            scale: num(raw.scale, 1) * toScale / propertyScale(fromKind) }]
+        })
+        return to.length === 0 ? [] : [{ kind: fromKind, offset: num(from.offset) * propertyScale(fromKind), to }]
+      })
+      const active = (channel: string) => properties === null || enabled.has(channel)
+      const mixRotate = active('rotate') ? num(o.mixRotate, num(o.rotateMix, 1)) : 0
+      const mixX = active('x') ? num(o.mixX, num(o.translateMix, 1)) : 0
+      const mixY = active('y') ? num(o.mixY, mixX) : 0
+      const mixScaleX = active('scaleX') ? num(o.mixScaleX, 1) : 0
+      const mixScaleY = active('scaleY') ? num(o.mixScaleY, mixScaleX) : 0
+      const mixShearY = active('shearY') ? num(o.mixShearY, 1) : 0
       out.push({
         kind: 'transform',
         id,
         bone: chain[0]!,
-        weight: clamp01(num(o.mix, 1)),
+        weight: num(o.mix, 1),
         enabled: true,
         order,
         sourceBone: source,
-        mixRotation: clamp01(num(o.mixRotate, num(o.rotateMix, 1))),
-        mixTranslation: (clamp01(num(o.mixX, num(o.translateMix, 1))) + clamp01(num(o.mixY, num(o.translateMix, 1)))) / 2,
-        ...(o.mixRotate !== undefined ? { mixRotate: num(o.mixRotate) } : {}),
-        ...(o.mixX !== undefined ? { mixX: num(o.mixX) } : {}),
-        ...(o.mixY !== undefined ? { mixY: num(o.mixY) } : {}),
-        ...(o.mixScaleX !== undefined ? { mixScaleX: num(o.mixScaleX) } : {}),
-        ...(o.mixScaleY !== undefined ? { mixScaleY: num(o.mixScaleY) } : {}),
-        ...(o.mixShearY !== undefined ? { mixShearY: num(o.mixShearY) } : {}),
-        ...(o.rotation !== undefined ? { offsetRotation: num(o.rotation) } : {}),
+        bones: chain,
+        localSource: o.localSource === true,
+        localTarget: o.localTarget === true,
+        additive: o.additive === true,
+        clamp: o.clamp === true,
+        offsets: [num(o.rotation) * DEG, num(o.x) * ctx.unitScale,
+          num(o.y) * ctx.unitScale * (ctx.sourceYDown ? -1 : 1),
+          num(o.scaleX), num(o.scaleY), num(o.shearY) * DEG],
+        ...(properties === null ? {} : { properties: mappings }),
+        mixRotation: mixRotate,
+        mixTranslation: (mixX + mixY) / 2,
+        mixRotate,
+        mixX,
+        mixY,
+        mixScaleX,
+        mixScaleY,
+        mixShearY,
+        ...(o.rotation !== undefined ? { offsetRotation: num(o.rotation) * DEG } : {}),
         ...(o.x !== undefined ? { offsetX: num(o.x) * ctx.unitScale } : {}),
         ...(o.y !== undefined ? { offsetY: (ctx.sourceYDown ? -1 : 1) * num(o.y) * ctx.unitScale } : {}),
         ...(o.scaleX !== undefined ? { offsetScaleX: num(o.scaleX) } : {}),
@@ -994,6 +1140,7 @@ function readSpineConstraintArray(
       }
       out.push({
         kind: 'ik',
+        spine: true,
         id,
         bone: chain[chain.length - 1]!,
         weight: clamp01(num(o.mix, 1)),
@@ -1005,17 +1152,18 @@ function readSpineConstraintArray(
         maxIterations: Math.max(1, Math.floor(num(o.iterations, 8))),
         tolerance: 1e-3,
         bendSign: o.bendPositive === false ? -1 : 1,
-        ...(o.softness !== undefined ? { softness: clamp01(num(o.softness, 0)) } : {}),
-        ...(o.compress !== undefined ? { compress: clamp01(num(o.compress, 0)) } : {}),
-        ...(o.stretch !== undefined ? { stretch: clamp01(num(o.stretch, 0)) } : {}),
+        ...(o.softness !== undefined ? { softness: num(o.softness, 0) * ctx.unitScale } : {}),
+        ...(o.compress !== undefined ? { compress: o.compress === true ? 1 : 0 } : {}),
+        ...(o.stretch !== undefined ? { stretch: o.stretch === true ? 1 : 0 } : {}),
         ...(o.uniform !== undefined ? { uniform: o.uniform === true } : {}),
       })
       continue
     }
     if (type === 'path') {
       const chain = idsOf(o.bones)
-      const points = paths.get(typeof o.slot === 'string' ? o.slot : typeof o.target === 'string' ? o.target : id)
-        ?? slotToPath.get(typeof o.slot === 'string' ? o.slot : typeof o.target === 'string' ? o.target : id)
+      const target = typeof o.slot === 'string' ? o.slot : typeof o.target === 'string' ? o.target : id
+      const attachment = pathAttachment(skins, slots, target)
+      const points = attachment?.polygon
       const usablePath = points !== undefined && points.length >= 4 && points.length % 2 === 0
         && Array.from(points).every((v) => Number.isFinite(v))
       if (chain.length === 0 || !usablePath) {
@@ -1032,13 +1180,37 @@ function readSpineConstraintArray(
         points,
         mix: clamp01(num(o.mix, 1)),
         bones: chain,
-        spacing: clamp01(num(o.spacing, 0)),
-        ...(o.position !== undefined ? { position: clamp01(num(o.position, 0)) } : {}),
-        ...(o.mixRotate !== undefined || o.rotateMix !== undefined ? { mixRotate: clamp01(num(o.mixRotate, num(o.rotateMix, 0))) } : {}),
-        ...(o.mixX !== undefined || o.translateMix !== undefined ? { mixX: clamp01(num(o.mixX, num(o.translateMix, 0))) } : {}),
-        ...(o.mixY !== undefined || o.translateMix !== undefined ? { mixY: clamp01(num(o.mixY, num(o.translateMix, 0))) } : {}),
-        ...(o.closed !== undefined ? { closed: o.closed === true } : {}),
+        ...(attachment?.pathData !== undefined && attachment.pathData.lengths.length > 0 && attachment.pathData.vertices.length > 0 ? { spinePath: attachment.pathData } : {}),
+        ...(slots.find((slot) => slot.id === target) !== undefined ? { targetBone: slots.find((slot) => slot.id === target)!.bone } : {}),
+        spacingMode: o.spacingMode === 'fixed' || o.spacingMode === 'percent' || o.spacingMode === 'proportional' ? o.spacingMode : 'length',
+        positionMode: o.positionMode === 'fixed' ? 'fixed' : 'percent',
+        rotateMode: o.rotateMode === 'tangent' || o.rotateMode === 'chainScale' ? o.rotateMode : 'chain',
+        offsetRotation: num(o.rotation, num(o.offsetRotation)) * DEG,
+        spacing: num(o.spacing) * (o.spacingMode === 'fixed' || o.spacingMode === 'length' || o.spacingMode === undefined ? ctx.unitScale : 1),
+        position: num(o.position) * (o.positionMode === 'fixed' ? ctx.unitScale : 1),
+        mixRotate: clamp01(num(o.mixRotate, num(o.rotateMix, 1))),
+        mixX: clamp01(num(o.mixX, num(o.translateMix, 1))),
+        mixY: clamp01(num(o.mixY, num(o.translateMix, 1))),
+        ...(attachment?.pathData !== undefined ? { closed: attachment.pathData.closed } : o.closed !== undefined ? { closed: o.closed === true } : {}),
       })
+      continue
+    }
+    if (type === 'slider') {
+      const sourceBone = idOf(o.bone)
+      const property = typeof o.property === 'string' ? o.property : undefined
+      const validProperties: readonly string[] = ['rotate', 'x', 'y', 'scaleX', 'scaleY', 'shearY']
+      if (o.bone !== undefined && (sourceBone === undefined || property === undefined || !validProperties.includes(property))) {
+        add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, 'slider source/property invalid', 'skip', raw)
+        continue
+      }
+      const animation = typeof o.animation === 'string' ? o.animation : ''
+      const unit = property === 'x' || property === 'y'
+        ? ctx.unitScale * (property === 'y' && ctx.sourceYDown ? -1 : 1) : 1
+      out.push({ kind: 'slider', id, bone: sourceBone ?? 0, weight: 1, enabled: true, order,
+        animation, ...(sourceBone === undefined ? {} : { sourceBone, property: property as TransformProperty }),
+        from: num(o.from) * unit, to: num(o.to), scale: num(o.scale, 1) / unit,
+        time: num(o.time), mix: num(o.mix, 1), local: o.local === true,
+        loop: o.loop === true, additive: o.additive === true })
       continue
     }
     if (type === 'physics') {
@@ -1051,17 +1223,14 @@ function readSpineConstraintArray(
         kind: 'physics',
         id,
         bone,
-        weight: clamp01(num(o.mix, 1)),
+        weight: 1,
         enabled: true,
         order,
+        ...spinePhysicsData(o, ctx),
         ...(typeof o.target === 'string' && idOf(o.target) !== undefined ? { target: idOf(o.target)! } : {}),
-        ...(o.inertia !== undefined ? { inertia: num(o.inertia, 0) } : {}),
-        ...(o.strength !== undefined ? { strength: clamp01(num(o.strength, 0)) } : {}),
-        ...(o.damping !== undefined ? { damping: num(o.damping, 0) } : {}),
-        ...(o.mass !== undefined ? { mass: Math.max(0, num(o.mass, 1)) } : {}),
-        ...(o.wind !== undefined ? { wind: num(o.wind, 0) } : {}),
-        ...(o.gravity !== undefined ? { gravity: num(o.gravity, 0) } : {}),
       })
+      add(ctx, 'warning', 'W_PHYSICS_APPROX', `constraints[${index}]`,
+        'physics 数据和 timeline 已读入；世界空间积分及 scale/shear 通道尚未对标官方', 'keep')
       continue
     }
     add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints[${index}]`, '未知约束类型，已跳过', 'skip', type)
@@ -1073,10 +1242,10 @@ function readLegacySpineConstraints(
   doc: Record<string, unknown>,
   skeleton: CompiledSkeleton,
   skins: ReadonlyMap<string, SkinData>,
+  slots: readonly SlotData[],
   ctx: Ctx,
 ): ConstraintData[] {
   const out: ConstraintData[] = []
-  const paths = pathPolygons(skins)
   const idOf = (v: unknown): number | undefined => {
     if (typeof v !== 'string') return undefined
     return skeleton.boneIdByName.get(v)
@@ -1097,6 +1266,7 @@ function readLegacySpineConstraints(
     }
     out.push({
       kind: 'ik',
+      spine: true,
       id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `ik_${index}`,
       bone: chain[chain.length - 1]!,
       weight: clamp01(num(o.mix, 1)),
@@ -1123,8 +1293,12 @@ function readLegacySpineConstraints(
     if (o.mixRotate === undefined && o.mixX === undefined && o.mixY === undefined) {
       add(ctx, 'warning', 'W_CONSTRAINT_DEFAULT', `transform[${index}]`, 'transform 缺 mix，使用默认 1', 'fallback', raw)
     }
-    const mixX = clamp01(num(o.mixX, num(o.mixY, 1)))
-    const mixY = clamp01(num(o.mixY, mixX))
+    const mixRotate = num(o.mixRotate, 1)
+    const mixX = num(o.mixX, 1)
+    const mixY = num(o.mixY, mixX)
+    const mixScaleX = num(o.mixScaleX, 1)
+    const mixScaleY = num(o.mixScaleY, mixScaleX)
+    const mixShearY = num(o.mixShearY, 1)
     out.push({
       kind: 'transform',
       id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `transform_${index}`,
@@ -1133,8 +1307,18 @@ function readLegacySpineConstraints(
       enabled: true,
       order: Math.floor(num(o.order, index)),
       sourceBone: source,
-      mixRotation: clamp01(num(o.mixRotate, 1)),
+      bones: chain,
+      local: o.local === true,
+      relative: o.relative === true,
+      mixRotation: mixRotate,
       mixTranslation: (mixX + mixY) / 2,
+      mixRotate, mixX, mixY, mixScaleX, mixScaleY, mixShearY,
+      ...(o.rotation !== undefined ? { offsetRotation: num(o.rotation) * DEG } : {}),
+      ...(o.x !== undefined ? { offsetX: num(o.x) * ctx.unitScale } : {}),
+      ...(o.y !== undefined ? { offsetY: num(o.y) * ctx.unitScale * (ctx.sourceYDown ? -1 : 1) } : {}),
+      ...(o.scaleX !== undefined ? { offsetScaleX: num(o.scaleX) } : {}),
+      ...(o.scaleY !== undefined ? { offsetScaleY: num(o.scaleY) } : {}),
+      ...(o.shearY !== undefined ? { offsetShearY: num(o.shearY) * DEG } : {}),
     })
   }
 
@@ -1143,7 +1327,8 @@ function readLegacySpineConstraints(
     if (o === null) continue
     const chain = idsOf(o.bones)
     const target = typeof o.target === 'string' ? o.target : ''
-    const points = paths.get(target)
+    const attachment = pathAttachment(skins, slots, target)
+    const points = attachment?.polygon
     if (chain.length === 0 || points === undefined) {
       add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `path[${index}]`, 'path 约束缺 bones/path 附件，已跳过', 'skip', raw)
       continue
@@ -1160,6 +1345,18 @@ function readLegacySpineConstraints(
       order: Math.floor(num(o.order, index)),
       points,
       mix: clamp01(num(o.mixX, num(o.mixRotate, 1))),
+      bones: chain,
+      ...(attachment?.pathData !== undefined && attachment.pathData.lengths.length > 0 && attachment.pathData.vertices.length > 0 ? { spinePath: attachment.pathData } : {}),
+      ...(slots.find((slot) => slot.id === target) !== undefined ? { targetBone: slots.find((slot) => slot.id === target)!.bone } : {}),
+      spacingMode: o.spacingMode === 'fixed' || o.spacingMode === 'percent' || o.spacingMode === 'proportional' ? o.spacingMode : 'length',
+      positionMode: o.positionMode === 'fixed' ? 'fixed' : 'percent',
+      rotateMode: o.rotateMode === 'tangent' || o.rotateMode === 'chainScale' ? o.rotateMode : 'chain',
+      offsetRotation: num(o.rotation, num(o.offsetRotation)) * DEG,
+      spacing: num(o.spacing) * (o.spacingMode === 'percent' || o.spacingMode === 'proportional' ? 1 : ctx.unitScale),
+      position: num(o.position) * (o.positionMode === 'fixed' ? ctx.unitScale : 1),
+      mixRotate: clamp01(num(o.mixRotate, num(o.rotateMix, 1))),
+      mixX: clamp01(num(o.mixX, num(o.translateMix, 1))),
+      mixY: clamp01(num(o.mixY, num(o.translateMix, 1))),
     })
   }
 
@@ -1176,21 +1373,13 @@ function readLegacySpineConstraints(
       kind: 'physics',
       id: typeof o.name === 'string' && o.name.length > 0 ? o.name : `physics_${index}`,
       order: Math.floor(num(o.order, index)),
-      // 文档：读入但默认不求解；enabled=false 仍保留数据。
       enabled: false,
       weight: clamp01(num(o.mix, 1)),
       bone,
       ...(target === undefined ? {} : { target }),
-      inertia: clamp01(num(o.inertia, 1)),
-      strength: clamp01(num(o.strength, 1)),
-      damping: clamp01(num(o.damping, 1)),
-      mass: Math.max(0.01, num(o.mass, 1)),
-      wind: num(o.wind, 0),
-      gravity: num(o.gravity, 0),
-      mix: clamp01(num(o.mix, 1)),
-      reset: o.reset === true,
+      ...spinePhysicsData(o, ctx),
     })
-    add(ctx, 'warning', 'W_PHYSICS_SKIPPED', `physics[${index}]`, 'physics 约束已读入但默认不求解', 'keep', raw)
+    add(ctx, 'warning', 'W_PHYSICS_SKIPPED', `physics[${index}]`, '旧版 physics 约束保留数据但默认不求解', 'keep', raw)
   }
   return out
 }
@@ -1290,23 +1479,46 @@ function completeOrder(order: number[], slotCount: number): number[] {
 }
 
 function fromOffsets(offsets: unknown, slotNames: readonly string[], ctx: Ctx, path: string): number[] {
-  const order = slotNames.map((_, i) => i)
+  const count = slotNames.length
+  const order = new Array<number>(count).fill(-1)
+  const unchanged: number[] = []
+  let original = 0
   for (const raw of arr(offsets)) {
     const o = obj(raw)
     if (o === null) continue
     const slot = typeof o.slot === 'string' ? slotNames.indexOf(o.slot) : num(o.slot, -1)
     const offset = num(o.offset)
-    if (slot < 0 || slot >= slotNames.length || !Number.isInteger(offset)) {
+    if (slot < original || slot >= count || !Number.isInteger(offset) || slot + offset < 0 || slot + offset >= count || order[slot + offset] !== -1) {
       add(ctx, 'warning', 'W_DRAWORDER_DUP', path, 'drawOrder 偏移非法，已忽略', 'skip', raw)
       continue
     }
-    const idx = order.indexOf(slot)
-    if (idx < 0) continue
-    order.splice(idx, 1)
-    const target = Math.max(0, Math.min(order.length, idx + offset))
-    order.splice(target, 0, slot)
+    while (original < slot) unchanged.push(original++)
+    order[slot + offset] = original++
   }
-  return completeOrder(order, slotNames.length)
+  while (original < count) unchanged.push(original++)
+  for (let i = count - 1; i >= 0; i -= 1) {
+    if (order[i] === -1) order[i] = unchanged.pop()!
+  }
+  return order
+}
+
+function spineBoneCurve(
+  key: Record<string, unknown>, next: Record<string, unknown> | null,
+  component: number, value: number, nextValue: number, controlScale: number,
+): ScalarKey['curve'] | undefined {
+  if (key.curve === 'stepped') return 'stepped'
+  const curve = key.curve
+  const offset = component * 4
+  if (!Array.isArray(curve) || curve.length < offset + 4 || next === null) return undefined
+  const span = num(next.time) - num(key.time)
+  const delta = nextValue - value
+  if (span <= 0 || Math.abs(delta) < 1e-12) return undefined
+  return [
+    (num(curve[offset]) - num(key.time)) / span,
+    (num(curve[offset + 1]) * controlScale - value) / delta,
+    (num(curve[offset + 2]) - num(key.time)) / span,
+    (num(curve[offset + 3]) * controlScale - value) / delta,
+  ]
 }
 
 function packedColor(v: unknown, ctx: Ctx, path: string): number {
@@ -1324,6 +1536,10 @@ function readSpineAnimations(
   sk: CompiledSkeleton,
   slotNames: readonly string[],
   attIndex: ReadonlyMap<string, number>,
+  skins: ReadonlyMap<string, SkinData>,
+  rawSkins: unknown,
+  constraints: readonly ConstraintData[],
+  legacyConstraints: boolean,
   ctx: Ctx,
 ): { animations: Map<string, AnimationClip>; events: { time: number; name: string }[] } {
   const animations = new Map<string, AnimationClip>()
@@ -1344,7 +1560,7 @@ function readSpineAnimations(
       if (ch === null) continue
       const base = id * 7
       if (arr(ch.rotate).length > 0) {
-        const keys: ScalarKey[] = arr(ch.rotate).map((raw) => {
+        const keys: ScalarKey[] = arr(ch.rotate).map((raw, index, sourceKeys) => {
           const k = obj(raw) ?? {}
           const time = num(k.time)
           duration = Math.max(duration, time)
@@ -1353,33 +1569,67 @@ function readSpineAnimations(
             ? num(k.angle) * DEG
             : sk.setupLocal[base + 2]! + num(k.value) * DEG
           const value = absolute - sk.setupLocal[base + 2]!
-          return { time, value }
+          const next = obj(sourceKeys[index + 1])
+          const nextValue = next === null ? value : (next.angle !== undefined
+            ? num(next.angle) * DEG - sk.setupLocal[base + 2]!
+            : num(next.value) * DEG)
+          const curve = spineBoneCurve(k, next, 0, value, nextValue, DEG)
+          return { time, value, ...(curve === undefined ? {} : { curve }) }
         })
         timelines.push({ kind: 'rotate', path: boneName, keys })
       }
       if (arr(ch.translate).length > 0) {
         for (const axis of ['x', 'y'] as const) {
-          const keys: ScalarKey[] = arr(ch.translate).map((raw) => {
+          const keys: ScalarKey[] = arr(ch.translate).map((raw, index, sourceKeys) => {
             const k = obj(raw) ?? {}
             const time = num(k.time)
             duration = Math.max(duration, time)
-            const channel = axis === 'x' ? base + 0 : base + 1
-            const absolute = axis === 'x' ? num(k.x) * ctx.unitScale : (ctx.sourceYDown ? -1 : 1) * num(k.y) * ctx.unitScale
-            return { time, value: absolute - sk.setupLocal[channel]! }
+            const scale = ctx.unitScale * (axis === 'y' && ctx.sourceYDown ? -1 : 1)
+            const value = num(k[axis]) * scale
+            const next = obj(sourceKeys[index + 1])
+            const curve = spineBoneCurve(k, next, axis === 'x' ? 0 : 1, value, num(next?.[axis]) * scale, scale)
+            return { time, value, ...(curve === undefined ? {} : { curve }) }
           })
           timelines.push({ kind: 'translate', path: `${boneName}.${axis}`, keys })
         }
       }
       if (arr(ch.scale).length > 0) {
-        for (const [axis, channel] of [['sx', base + 3], ['sy', base + 4]] as const) {
-          const keys: ScalarKey[] = arr(ch.scale).map((raw) => {
+        for (const axis of ['sx', 'sy'] as const) {
+          const keys: ScalarKey[] = arr(ch.scale).map((raw, index, sourceKeys) => {
             const k = obj(raw) ?? {}
             const time = num(k.time)
             duration = Math.max(duration, time)
-            const absolute = num(k[axis === 'sx' ? 'x' : 'y'], 1)
-            return { time, value: absolute / sk.setupLocal[channel]! }
+            const component = axis === 'sx' ? 'x' : 'y'
+            const value = num(k[component], 1)
+            const next = obj(sourceKeys[index + 1])
+            const curve = spineBoneCurve(k, next, component === 'x' ? 0 : 1, value, num(next?.[component], 1), 1)
+            return { time, value, ...(curve === undefined ? {} : { curve }) }
           })
           timelines.push({ kind: 'scale', path: `${boneName}.${axis}`, keys })
+        }
+      }
+      for (const kind of ['translate', 'scale', 'shear'] as const) {
+        const combined = kind === 'shear' ? ch.shear : undefined
+        for (const axis of ['x', 'y'] as const) {
+          const keysRaw = arr(ch[`${kind}${axis}`]).length > 0 ? arr(ch[`${kind}${axis}`]) : arr(combined)
+          if (keysRaw.length === 0) continue
+          const suffix = kind === 'translate' ? axis : kind === 'scale' ? `s${axis}` : `sh${axis}`
+          const keys: ScalarKey[] = keysRaw.map((raw, index) => {
+            const k = obj(raw) ?? {}
+            const time = num(k.time)
+            duration = Math.max(duration, time)
+            const paired = kind === 'shear' && arr(ch[`${kind}${axis}`]).length === 0
+            const property = paired ? axis : 'value'
+            const scale = kind === 'translate' ? ctx.unitScale * (axis === 'y' && ctx.sourceYDown ? -1 : 1)
+              : kind === 'shear' ? DEG : 1
+            const defaultValue = kind === 'scale' ? 1 : 0
+            const value = num(k[property], defaultValue) * scale
+            const next = obj(keysRaw[index + 1])
+            const nextValue = num(next?.[property], defaultValue) * scale
+            const curve = spineBoneCurve(k, next, paired && axis === 'y' ? 1 : 0, value, nextValue, scale)
+            return { time, value, ...(curve === undefined ? {} : { curve }) }
+          })
+          timelines.push({ kind, path: `${boneName}.${suffix}`, keys })
         }
       }
     }
@@ -1408,6 +1658,44 @@ function readSpineAnimations(
         })
         timelines.push({ kind: 'color', path: String(slotIndex), keys })
       }
+      for (const channel of ['rgba', 'rgb', 'alpha', 'rgba2', 'rgb2'] as const) {
+        if (arr(ch[channel]).length === 0) continue
+        const keys = arr(ch[channel]).map((raw, index, sourceKeys) => {
+          const k = obj(raw) ?? {}
+          const time = num(k.time)
+          duration = Math.max(duration, time)
+          const parse = (value: unknown, field: string): RGBA => {
+            const hex = typeof value === 'string' && /^[\da-fA-F]{6}$/.test(value) ? `${value}ff` : value
+            return parseHexColor(hex, ctx, `animations.${name}.slots.${slotName}.${channel}.${field}`)
+          }
+          const readColors = (key: Record<string, unknown>) => ({
+            light: channel === 'alpha'
+              ? { ...WHITE, a: num(key.value) }
+              : parse(channel.endsWith('2') ? key.light : key.color, 'light'),
+            dark: channel.endsWith('2') ? parse(key.dark, 'dark') : WHITE,
+          })
+          const { light, dark } = readColors(k)
+          const next = obj(sourceKeys[index + 1])
+          const future = next === null ? null : readColors(next)
+          const values = channel === 'alpha' ? [light.a] : channel === 'rgb' ? [light.r, light.g, light.b]
+            : channel === 'rgba' ? [light.r, light.g, light.b, light.a]
+              : channel === 'rgb2' ? [light.r, light.g, light.b, dark.r, dark.g, dark.b]
+                : [light.r, light.g, light.b, light.a, dark.r, dark.g, dark.b]
+          const nextValues = future === null ? values : channel === 'alpha' ? [future.light.a]
+            : channel === 'rgb' ? [future.light.r, future.light.g, future.light.b]
+              : channel === 'rgba' ? [future.light.r, future.light.g, future.light.b, future.light.a]
+                : channel === 'rgb2' ? [future.light.r, future.light.g, future.light.b, future.dark.r, future.dark.g, future.dark.b]
+                  : [future.light.r, future.light.g, future.light.b, future.light.a, future.dark.r, future.dark.g, future.dark.b]
+          const curves = values.map((value, component) => spineBoneCurve(k, next, component, value, nextValues[component]!, 1))
+          return {
+            time, light,
+            ...(channel.endsWith('2') ? { dark } : {}),
+            ...(k.curve === 'stepped' ? { curve: 'stepped' as const } : {}),
+            ...(k.curve === undefined ? {} : { curves }),
+          }
+        })
+        timelines.push({ kind: 'color', path: String(slotIndex), channel, keys })
+      }
     }
     // drawOrder：Spine 存相对 offset，先展开为完整顺序再落盘。
     if (arr(a.drawOrder).length > 0) {
@@ -1419,39 +1707,157 @@ function readSpineAnimations(
       })
       timelines.push(...drawOrderTimelines(drawKeys, slotNames.length))
     }
-    // deform：vertices 是顶点偏移；目标 Timeline 以标量通道承载，保留首分量作确定性采样值。
-    for (const skinDeform of Object.values(obj(a.deform) ?? {})) {
-      for (const [slotName, rawSlotDeform] of Object.entries(obj(skinDeform) ?? {})) {
-        const slotIndex = slotNames.indexOf(slotName)
-        if (slotIndex < 0) continue
-        for (const [attName, rawKeys] of Object.entries(obj(rawSlotDeform) ?? {})) {
-          const keys: ScalarKey[] = arr(rawKeys).map((raw) => {
-            const k = obj(raw) ?? {}
-            const time = num(k.time)
-            duration = Math.max(duration, time)
-            const offsets = arr(k.vertices)
-            return { time, value: offsets.length > 0 ? num(offsets[0]) : 0 }
-          })
-          if (keys.length > 0) timelines.push({ kind: 'deform', path: `${slotIndex}.${attName}`, keys })
+    // 4.3 attachments 与旧 deform 都按 skin/slot/attachment 索引；保留原始 key 分量与 offset。
+    for (const [rootName, rawRoot] of [['deform', a.deform], ['attachments', a.attachments]] as const) {
+      for (const [skinName, rawSkin] of Object.entries(obj(rawRoot) ?? {})) {
+        for (const [slotName, rawSlot] of Object.entries(obj(rawSkin) ?? {})) {
+          const slotIndex = slotNames.indexOf(slotName)
+          for (const [attName, rawEntry] of Object.entries(obj(rawSlot) ?? {})) {
+            const rawKeys = rootName === 'attachments' ? obj(rawEntry)?.deform : rawEntry
+            if (arr(rawKeys).length === 0) continue
+            const path = `animations.${name}.${rootName}.${skinName}.${slotName}.${attName}`
+            const attachment = skins.get(skinName)?.attachments.get(`${slotName}\u0000${attName}`)
+            if (slotIndex < 0 || (attachment?.kind !== 'mesh' && attachment?.kind !== 'weightedMesh')) {
+              add(ctx, 'warning', 'W_ANIM_TARGET_MISSING', path, 'deform mesh 不存在，已跳过', 'skip')
+              continue
+            }
+            const rawSkinData = arr(rawSkins).find((skin) => obj(skin)?.name === skinName)
+            const rawAttachment = obj(obj(obj(rawSkinData)?.attachments)?.[slotName])?.[attName]
+            const sourceAttachment = obj(rawAttachment)?.type === 'linkedmesh'
+              ? obj(obj(obj(rawSkinData)?.attachments)?.[slotName])?.[String(obj(rawAttachment)?.parent)]
+              : rawAttachment
+            const rawVertices = arr(obj(sourceAttachment)?.vertices)
+            const weighted = attachment.kind === 'weightedMesh'
+            const base = attachment.mesh.positions
+            const vertexIndices: readonly number[] = weighted && attachment.mesh.influenceSourceIndices !== undefined
+              ? Array.from(attachment.mesh.influenceSourceIndices)
+              : (() => {
+                const indices: number[] = []
+                if (!weighted) return indices
+                let cursor = 0
+                let source = 0
+                const stride = attachment.mesh.influencesPerVertex ?? 4
+                for (let vertex = 0; vertex < base.length / 2; vertex += 1) {
+                  const count = Math.max(0, Math.floor(num(rawVertices[cursor])))
+                  for (let influence = 0; influence < stride; influence += 1) {
+                    indices.push(influence < count ? source + influence * 2 : -1)
+                  }
+                  cursor += 1 + count * 4
+                  source += count * 2
+                }
+                return indices
+              })()
+            const keys: DeformKey[] = arr(rawKeys).map((raw) => {
+              const k = obj(raw) ?? {}
+              const time = num(k.time)
+              duration = Math.max(duration, time)
+              return { time, offset: num(k.offset), vertices: arr(k.vertices).map((v) => num(v)),
+                ...(k.curve === 'stepped' ? { curve: 'stepped' as const } : {}) }
+            })
+            timelines.push({ kind: 'deform', skin: skinName, slot: slotIndex, attachment: attName,
+              keys, ...(weighted ? { vertexIndices } : { baseVertices: base }), weighted,
+              unitScale: ctx.unitScale, flipY: ctx.sourceYDown })
+          }
         }
       }
     }
-    // ik timeline：按约束名索引，mix 作为标量通道。
+    const constraintFrames = (
+      rawKeys: unknown, fields: readonly string[], defaults: readonly number[], scales: readonly number[],
+    ): ConstraintFrame[] => arr(rawKeys).map((raw, index, source) => {
+      const key = obj(raw) ?? {}
+      const next = obj(source[index + 1])
+      const time = num(key.time)
+      duration = Math.max(duration, time)
+      const fieldValue = (sourceKey: Record<string, unknown> | null, field: string, component: number): number => {
+        const fallback = field === 'mixY' ? sourceKey?.mixX : field === 'mixScaleY' ? sourceKey?.mixScaleX : undefined
+        return num(sourceKey?.[field], num(fallback, defaults[component])) * scales[component]!
+      }
+      const values = fields.map((field, component) => fieldValue(key, field, component))
+      const curves = values.map((value, component) => spineBoneCurve(key, next, component, value,
+        fieldValue(next, fields[component]!, component), scales[component]!))
+      return { time, values, curves,
+        ...(fields[0] === 'mix' ? {
+          bendDirection: key.bendPositive === false ? -1 as const : 1 as const,
+          compress: key.compress === true, stretch: key.stretch === true,
+        } : {}),
+      }
+    })
+    const validConstraint = (kind: ConstraintData['kind'], constraintName: string, path: string): boolean => {
+      if (constraints.some(c => c.id === constraintName && c.kind === kind)) return true
+      add(ctx, 'warning', 'W_ANIM_TARGET_MISSING', path, '约束 timeline 目标不存在，已跳过', 'skip', constraintName)
+      return false
+    }
     for (const [constraintName, rawKeys] of Object.entries(obj(a.ik) ?? {})) {
-      const keys: ScalarKey[] = arr(rawKeys).map((raw) => {
-        const k = obj(raw) ?? {}
-        const time = num(k.time)
-        duration = Math.max(duration, time)
-        return { time, value: clamp01(num(k.mix, 1)) }
-      })
-      if (keys.length > 0) timelines.push({ kind: 'ik', path: constraintName, keys })
+      const path = `animations.${name}.ik.${constraintName}`
+      if (!validConstraint('ik', constraintName, path)) continue
+      const frames = constraintFrames(rawKeys, ['mix', 'softness'], [1, 0], [1, ctx.unitScale])
+      if (frames.length > 0) {
+        if (legacyConstraints) timelines.push({ kind: 'ik', path: constraintName,
+          keys: frames.map(frame => ({ time: frame.time, value: frame.values[0]! })) })
+        else timelines.push({ kind: 'ik', path: constraintName, frames })
+      }
+    }
+    for (const [constraintName, rawKeys] of Object.entries(obj(a.transform) ?? {})) {
+      const path = `animations.${name}.transform.${constraintName}`
+      if (!validConstraint('transform', constraintName, path)) continue
+      const frames = constraintFrames(rawKeys,
+        ['mixRotate', 'mixX', 'mixY', 'mixScaleX', 'mixScaleY', 'mixShearY'],
+        [1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1])
+      if (frames.length > 0) timelines.push({ kind: 'transform', path: constraintName, frames })
+    }
+    for (const [constraintName, rawChannels] of Object.entries(obj(a.path) ?? {})) {
+      const path = `animations.${name}.path.${constraintName}`
+      if (!validConstraint('path', constraintName, path)) continue
+      const constraint = constraints.find((c): c is Extract<ConstraintData, { kind: 'path' }> => c.id === constraintName && c.kind === 'path')!
+      for (const [channel, rawKeys] of Object.entries(obj(rawChannels) ?? {})) {
+        if (channel !== 'position' && channel !== 'spacing' && channel !== 'mix') {
+          add(ctx, 'warning', 'W_ANIM_UNSUPPORTED', `${path}.${channel}`, '未知 path timeline，已跳过', 'skip', rawKeys)
+          continue
+        }
+        const scale = channel === 'position' ? constraint.positionMode === 'fixed' ? ctx.unitScale : 1
+          : channel === 'spacing' ? constraint.spacingMode === 'length' || constraint.spacingMode === 'fixed' ? ctx.unitScale : 1 : 1
+        const fields = channel === 'mix' ? ['mixRotate', 'mixX', 'mixY'] : ['value']
+        const frames = constraintFrames(rawKeys, fields, fields.map(() => channel === 'mix' ? 1 : 0), fields.map(() => scale))
+        if (frames.length > 0) timelines.push({ kind: 'path', path: constraintName, channel, frames })
+      }
+    }
+    for (const [constraintName, rawChannels] of Object.entries(obj(a.slider) ?? {})) {
+      const path = `animations.${name}.slider.${constraintName}`
+      if (!validConstraint('slider', constraintName, path)) continue
+      for (const [channel, rawKeys] of Object.entries(obj(rawChannels) ?? {})) {
+        if (channel !== 'time' && channel !== 'mix') {
+          add(ctx, 'warning', 'W_ANIM_UNSUPPORTED', `${path}.${channel}`, 'unknown slider timeline', 'skip', rawKeys)
+          continue
+        }
+        const frames = constraintFrames(rawKeys, ['value'], [channel === 'mix' ? 1 : 0], [1])
+        if (frames.length > 0) timelines.push({ kind: 'slider', path: constraintName, channel, frames })
+      }
+    }
+    for (const [constraintName, rawChannels] of Object.entries(obj(a.physics) ?? {})) {
+      const path = `animations.${name}.physics.${constraintName}`
+      if (constraintName !== '' && !validConstraint('physics', constraintName, path)) continue
+      for (const [channel, rawKeys] of Object.entries(obj(rawChannels) ?? {})) {
+        if (!['reset', 'inertia', 'strength', 'damping', 'mass', 'wind', 'gravity', 'mix'].includes(channel)) {
+          add(ctx, 'warning', 'W_ANIM_UNSUPPORTED', `${path}.${channel}`, '未知 physics timeline，已跳过', 'skip', rawKeys)
+          continue
+        }
+        const frames = constraintFrames(rawKeys, ['value'], [channel === 'mix' ? 1 : 0], [1])
+        if (frames.length > 0) timelines.push({ kind: 'physics', path: constraintName || '-1',
+          channel: channel as 'reset' | 'inertia' | 'strength' | 'damping' | 'mass' | 'wind' | 'gravity' | 'mix', frames })
+      }
     }
     // 事件。
     const eventKeys = arr(a.events).map((raw) => {
       const k = obj(raw) ?? {}
       const time = num(k.time)
       duration = Math.max(duration, time)
-      return { time, name: typeof k.name === 'string' ? k.name : '' }
+      return {
+        time,
+        name: typeof k.name === 'string' ? k.name : '',
+        ...(k.int !== undefined ? { int: num(k.int) } : {}),
+        ...(k.float !== undefined ? { float: num(k.float) } : {}),
+        ...(typeof k.string === 'string' ? { string: k.string } : {}),
+      }
     })
     if (eventKeys.length > 0) {
       timelines.push({ kind: 'event', path: name, events: eventKeys })
@@ -1778,7 +2184,7 @@ function freezeAsset(
 /** 导入 Spine 4.x JSON。主版本 ≠4 / 结构非法抛错，其余进 report。 */
 export function importSpine(
   json: unknown,
-  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean },
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean; maxInfluences?: number },
 ): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: spine JSON 必须是对象')
@@ -1789,13 +2195,15 @@ export function importSpine(
 
   const ctx: Ctx = {
     source: 'spine',
-    sourceYDown: options?.sourceYDown ?? true,
+    sourceYDown: options?.sourceYDown ?? false,
     unitScale: 0.01,
+    maxInfluences: options?.maxInfluences ?? 0,
     issues: [],
     atlas: collectAtlas(doc, 'spine'),
     atlasData: options?.atlas ?? null,
     masks: [],
   }
+  if (!Number.isInteger(ctx.maxInfluences) || ctx.maxInfluences < 0) throw new Error('E_CONFIG: maxInfluences')
   ctx.unitScale = unitScaleOf(options, ctx)
 
   const rawBones = arr(doc.bones).map((raw, i) => rawBoneFrom(raw, i, 'spine', ctx, `bones[${i}]`))
@@ -1881,11 +2289,13 @@ export function importSpine(
             built = buildAttachment(rawAtt, attName, 'spine', bone, srcToId, ctx, path)
           }
           if (built === null) continue
-          attachments.set(attachmentKey, built)
-          if (!attachments.has(attName)) attachments.set(attName, built)
           if (built.kind === 'clipping' && attObj !== null) {
             addClippingMask(ctx, slots, slot.name, attName, attObj, built.polygon)
+            const mask = ctx.masks.find((item) => item.id === `${slots.findIndex((s) => s.id === slot.name)}:${attName}`)
+            if (mask !== undefined) built = { ...built, endSlotId: mask.endSlotId }
           }
+          attachments.set(attachmentKey, built)
+          if (!attachments.has(attName)) attachments.set(attName, built)
         }
       }
     }
@@ -1894,13 +2304,29 @@ export function importSpine(
   // 只负责校验/报告默认皮肤；运行时由 createSlotSet 选用。
   pickDefaultSkin(skins, options?.defaultSkin, ctx)
 
-  const constraints = readSpineConstraints(doc, skeleton, skins, ctx)
+  const referenceScale = num(skeletonMeta.referenceScale, 100) * ctx.unitScale
+  let constraints = readSpineConstraints(doc, skeleton, skins, slots, ctx).map(c => c.kind === 'physics'
+    ? { ...c, environment: { referenceScale, windX: 1, windY: 0, gravityX: 0, gravityY: 1 } }
+    : c)
   const maskLibrary: MaskLibrary | undefined = ctx.masks.length > 0
     ? Object.freeze({ version: 1 as const, masks: Object.freeze(ctx.masks.slice()) })
     : undefined
 
   const attIndex = attachmentIndex(skins)
-  const { animations, events } = readSpineAnimations(doc.animations, skeleton, slotNames, attIndex, ctx)
+  const { animations, events } = readSpineAnimations(doc.animations, skeleton, slotNames, attIndex, skins, doc.skins, constraints, constraints.length === 0, ctx)
+  constraints = constraints.map(c => {
+    if (c.kind !== 'slider') return c
+    const clip = animations.get(c.animation)
+    if (clip === undefined) {
+      add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints.${c.id}`, 'slider animation missing', 'skip', c.animation)
+      return { ...c, enabled: false }
+    }
+    // Slider.update passes null for fired events: nested event timelines are intentionally silent.
+    const unsupported = clip.timelines.some(t => !['rotate', 'translate', 'scale', 'shear', 'attachment', 'drawOrder', 'event'].includes(t.kind))
+    if (unsupported) add(ctx, 'warning', 'W_CONSTRAINT_UNSUPPORTED', `constraints.${c.id}`,
+      'slider nested animation has unsupported channels', 'keep', c.animation)
+    return { ...c, clip }
+  })
   return freezeAsset(
     'spine', version, ctx.unitScale, skeleton, slots, skins, animations, events, ctx,
     ctx.atlasData ?? undefined, constraints, maskLibrary,
@@ -1915,7 +2341,7 @@ function slotBoneId(slots: readonly SlotData[], slot: BuiltSlot): number {
 /** 导入 DragonBones 4.5 JSON（5.x 走 compatibleVersion 兼容子集）。 */
 export function importDragonBones(
   json: unknown,
-  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean },
+  options?: { unitScale?: number; defaultSkin?: string; atlas?: AtlasData; sourceYDown?: boolean; maxInfluences?: number },
 ): SkeletonAsset {
   const doc = obj(json)
   if (doc === null) throw new Error('E_SCHEMA: dragonbones JSON 必须是对象')
@@ -1928,11 +2354,13 @@ export function importDragonBones(
     source: 'dragonbones',
     sourceYDown: options?.sourceYDown ?? true,
     unitScale: 0.01,
+    maxInfluences: options?.maxInfluences ?? 0,
     issues: [],
     atlas: collectAtlas(doc, 'dragonbones'),
     atlasData: options?.atlas ?? null,
     masks: [],
   }
+  if (!Number.isInteger(ctx.maxInfluences) || ctx.maxInfluences < 0) throw new Error('E_CONFIG: maxInfluences')
   ctx.unitScale = unitScaleOf(options, ctx)
 
   const armatures = arr(doc.armature)

@@ -6,6 +6,10 @@ import type { BoneId } from '../core/skeleton'
 import type { MeshData, WeightedMeshData } from '../mesh/mesh'
 
 export type RGBA = { readonly r: number; readonly g: number; readonly b: number; readonly a: number }
+/** Fresh instance tint; slot/attachment colors remain independent. */
+export function whiteSkeletonColor(): { r: number; g: number; b: number; a: number } {
+  return { r: 1, g: 1, b: 1, a: 1 }
+}
 export type BlendMode = 'normal' | 'add' | 'multiply' | 'screen'
 export type RegionRef = {
   readonly atlasKey: string
@@ -22,11 +26,19 @@ export type RegionRef = {
   readonly sequence?: { readonly frames: readonly string[]; readonly setupIndex: number }
 }
 
+export type SpinePathData = {
+  readonly vertices: readonly (readonly { readonly bone: number; readonly x: number; readonly y: number; readonly weight: number }[])[]
+  readonly lengths: Float32Array
+  readonly closed: boolean
+  readonly constantSpeed: boolean
+}
+
 export type Attachment =
   | { kind: 'region'; id: string; region: RegionRef; color: RGBA; dark?: RGBA }
   | { kind: 'mesh'; id: string; mesh: MeshData; region: RegionRef; color: RGBA; dark?: RGBA }
   | { kind: 'weightedMesh'; id: string; mesh: WeightedMeshData; region: RegionRef; color: RGBA; dark?: RGBA }
-  | { kind: 'boundingBox' | 'path' | 'clipping'; id: string; polygon: Float32Array }
+  | { kind: 'boundingBox' | 'path'; id: string; polygon: Float32Array; pathData?: SpinePathData }
+  | { kind: 'clipping'; id: string; polygon: Float32Array; endSlotId?: string }
   | { kind: 'point'; id: string; point: readonly [number, number] }
 
 export type SlotData = {

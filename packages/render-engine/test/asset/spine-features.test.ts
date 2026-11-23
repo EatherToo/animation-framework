@@ -147,6 +147,7 @@ link
 function importWith(options?: { atlas?: boolean }): SkeletonAsset {
   return importSpine(spineFeaturesFixture(), {
     unitScale: SCALE,
+    sourceYDown: true,
     ...(options?.atlas === true ? { atlas: atlasForFixture() } : {}),
   })
 }
@@ -253,7 +254,7 @@ describe('M11 Spine: 约束与 maskLibrary', () => {
     }
   })
 
-  it('clipping 生成 maskLibrary 并给 slot 打 mask', () => {
+  it('clipping 保存范围元数据但不固定绑定 slot mask', () => {
     expect(asset.maskLibrary).toBeDefined()
     expect(asset.maskLibrary!.version).toBe(1)
     expect(asset.maskLibrary!.masks).toHaveLength(1)
@@ -263,7 +264,10 @@ describe('M11 Spine: 约束与 maskLibrary', () => {
     expect(mask.invert).toBe(true)
     expect(mask.mode).toBe('clip')
     expect(mask.polygon).toHaveLength(8)
-    expect(asset.slots.find((s) => s.id === 'clipSlot')!.mask).toBe(mask.id)
+    expect(asset.slots.find((s) => s.id === 'clipSlot')!.mask).toBeNull()
+    const clip = asset.skins.get('default')!.attachments.get('clip')
+    expect(clip?.kind).toBe('clipping')
+    if (clip?.kind === 'clipping') expect(clip.endSlotId).toBe('clipEndSlot')
   })
 })
 
@@ -273,8 +277,9 @@ describe('M11 Spine: 动画与 atlas 注入', () => {
     expect(clip.timelines.some((t) => t.kind === 'attachment')).toBe(true)
     expect(clip.timelines.some((t) => t.kind === 'color')).toBe(true)
     expect(clip.timelines.some((t) => t.kind === 'deform')).toBe(true)
-    const ik = keyTimeline(clip, (t) => t.kind === 'ik' && t.path === 'legIk')
-    expect(ik.keys[1]!.value).toBeCloseTo(0.2, 6)
+    const ik = clip.timelines.find(t => t.kind === 'ik' && t.path === 'legIk')
+    expect(ik && 'frames' in ik).toBe(true)
+    if (ik && 'frames' in ik) expect(ik.frames[1]!.values[0]).toBeCloseTo(0.2, 6)
     const order = keyTimeline(clip, (t) => t.path === 'drawOrder[0]')
     expect(order.keys[0]!.value).not.toBe(0)
     expect(new Set(clip.timelines.filter((t) => 'keys' in t && t.kind === 'drawOrder').map((t) => t.path)).size)
@@ -313,7 +318,7 @@ body
     const doc = clone(spineFeaturesFixture()) as Record<string, any>
     doc.skins[0].attachments.clipSlot.clip.end = 'ghostEndSlot'
     doc.skins[0].attachments.linkSlot.link.parent = 'missingParent'
-    const asset = importSpine(doc, { unitScale: SCALE })
+    const asset = importSpine(doc, { unitScale: SCALE, sourceYDown: true })
     expect(asset.report.issues.some((i) => i.code === 'W_CLIP_END')).toBe(true)
     expect(asset.report.issues.some((i) => i.code === 'W_ATTACHMENT_UNSUPPORTED')).toBe(true)
   })

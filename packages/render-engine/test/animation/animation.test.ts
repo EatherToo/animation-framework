@@ -58,20 +58,23 @@ function slotSetArg() {
   return makeSlotSet()
 }
 
-/** 独立的 Bézier 参考求解器，用于反解精度交叉验证。 */
+/** 官方九点 Float32 折线的独立参考：直接求每个 u 的三次多项式。 */
 function referenceBezier(t: number, c1x: number, c1y: number, c2x: number, c2y: number): number {
-  const bx = (u: number) => 3 * (1 - u) ** 2 * u * c1x + 3 * (1 - u) * u ** 2 * c2x + u ** 3
-  let lo = 0
-  let hi = 1
-  let u = t
-  for (let i = 0; i < 60; i += 1) {
-    const x = bx(u)
-    if (Math.abs(x - t) < 1e-12) break
-    if (x < t) lo = u
-    else hi = u
-    u = (lo + hi) / 2
+  const points = new Float32Array(18)
+  for (let i = 1; i <= 9; i += 1) {
+    const u = i / 10
+    const m = 1 - u
+    points[(i - 1) * 2] = 3 * m * m * u * c1x + 3 * m * u * u * c2x + u * u * u
+    points[(i - 1) * 2 + 1] = 3 * m * m * u * c1y + 3 * m * u * u * c2y + u * u * u
   }
-  return 3 * (1 - u) ** 2 * u * c1y + 3 * (1 - u) * u ** 2 * c2y + u ** 3
+  let px = 0, py = 0
+  for (let i = 0; i <= 9; i += 1) {
+    const x = i === 9 ? 1 : points[2 * i]!
+    const y = i === 9 ? 1 : points[2 * i + 1]!
+    if (t <= x || i === 9) return py + (t - px) / (x - px) * (y - py)
+    px = x; py = y
+  }
+  return 1
 }
 
 describe('sampleScalar 曲线求值', () => {
@@ -107,7 +110,7 @@ describe('sampleScalar 曲线求值', () => {
     expect(sampleScalar(keys, 0.25) + sampleScalar(keys, 0.75)).toBeCloseTo(1, 6)
   })
 
-  it('bezier 恒等控制点近似线性，反解精度优于 1e-4', () => {
+  it('bezier 恒等控制点近似线性，九点采样与官方折线相符', () => {
     const identity: Bezier = [1 / 3, 1 / 3, 2 / 3, 2 / 3]
     const keys = [key(0, 0, 'bezier', identity), key(1, 1)]
     for (let i = 0; i <= 10; i += 1) {
@@ -129,7 +132,7 @@ describe('sampleScalar 曲线求值', () => {
       const bezier: Bezier = [c1x, c1y, c2x, c2y]
       const got = sampleScalar([key(0, 0, 'bezier', bezier), key(1, 1)], t)
       expect(Number.isFinite(got)).toBe(true)
-      expect(Math.abs(got - referenceBezier(t, c1x, c1y, c2x, c2y))).toBeLessThan(1e-4)
+      expect(Math.abs(got - referenceBezier(t, c1x, c1y, c2x, c2y))).toBeLessThan(1e-6)
     }
   })
 

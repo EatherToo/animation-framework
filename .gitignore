@@ -10,6 +10,7 @@ preview/.generate-textures.build.mjs
 .tmp/
 # Spine official sample assets are license-gated; download locally with scripts/fetch-spine-samples.mjs
 test/fixtures/spine/spineboy/
+test/fixtures/spine/spineboy-4.2/
 test/fixtures/spine/raptor/
 test/fixtures/spine/stretchyman/
 preview/golden/spine-reference/

@@ -31,29 +31,49 @@ export function variantKey(v: ShaderVariant): string {
   return `pma=${v.pma ? 1 : 0};two=${v.twoColor ? 1 : 0};black=${v.tintBlack ? 1 : 0};alpha=${v.alphaMask ? 1 : 0};stencil=${v.stencil ? 1 : 0}`
 }
 
-const VERTEX = `#version 300 es
+export const VERTEX = `#version 300 es
 in vec2 aPosition; in vec2 aUv; in vec4 aColor; in vec4 aDark;
 uniform mat3 viewProjection; uniform vec2 uResolution;
-out vec2 vUv; out vec4 vColor; out vec4 vDark;
+out vec2 vUv; out vec4 vColor; out vec4 vDark; out vec2 vScreen;
 void main() {
   vec3 p = viewProjection * vec3(aPosition, 1.0);
   gl_Position = vec4(p.x / uResolution.x * 2.0 - 1.0, 1.0 - p.y / uResolution.y * 2.0, 0.0, 1.0);
-  vUv = aUv; vColor = aColor; vDark = aDark;
+  vUv = aUv; vColor = aColor; vDark = aDark; vScreen = p.xy;
 }`
 
-const FRAGMENT = `#version 300 es
+export const FRAGMENT = `#version 300 es
 precision mediump float;
-in vec2 vUv; in vec4 vColor; in vec4 vDark;
-uniform sampler2D uTexture; uniform float uUseTexture; uniform float uTwoColor;
+in vec2 vUv; in vec4 vColor; in vec4 vDark; in vec2 vScreen;
+uniform sampler2D uTexture; uniform float uUseTexture; uniform float uTwoColor; uniform float uTintBlack;
+#ifdef ALPHA_MASK
+uniform sampler2D uMask;
+uniform float uAlphaMask;
+uniform vec4 uMaskBounds;
+uniform mat3 uMaskUvMatrix;
+uniform float uMaskInvert;
+uniform float uMaskFeather;
+#endif
 out vec4 outColor;
 void main() {
   vec4 texel = uUseTexture > 0.5 ? texture(uTexture, vUv) : vec4(1.0);
   vec4 c = vColor * texel;
 #ifdef TWO_COLOR
-  c.rgb += vDark.rgb * (1.0 - texel.a);
+  if (uTwoColor > 0.5) {
+    vec4 dark = uTintBlack > 0.5 ? vec4(0.0, 0.0, 0.0, 1.0) : vDark;
+    c.rgb = ((texel.a - 1.0) * dark.a + 1.0 - texel.rgb) * dark.rgb + texel.rgb * vColor.rgb;
+  }
 #endif
-#ifdef TINT_BLACK
-  c.rgb = mix(c.rgb, vDark.rgb, 1.0 - texel.a);
+#ifdef ALPHA_MASK
+  if (uAlphaMask > 0.5) {
+    vec2 local = (vScreen - uMaskBounds.xy) / uMaskBounds.zw;
+    float coverage = 0.0;
+    if (all(greaterThanEqual(local, vec2(0.0))) && all(lessThanEqual(local, vec2(1.0)))) {
+      vec2 uv = (uMaskUvMatrix * vec3(local, 1.0)).xy;
+      float alpha = texture(uMask, uv).a;
+      coverage = uMaskFeather > 0.0 ? alpha : step(0.5, alpha);
+    }
+    c *= uMaskInvert > 0.5 ? 1.0 - coverage : coverage;
+  }
 #endif
   outColor = c;
 }`

@@ -1,13 +1,14 @@
 import { describe, expect, it } from '@jest/globals'
 import { compileSkeleton, type BoneSpec, type CompiledSkeleton, type JointSpec } from '@/core/skeleton'
 import { createPose, getRotation, setLocal, updateWorld, type Pose } from '@/core/pose'
-import { CH_ROT, CH_X, CH_Y, POSE_STRIDE } from '@/core/math'
+import { CH_ROT, CH_SHX, CH_SHY, CH_X, CH_Y, POSE_STRIDE } from '@/core/math'
 import {
   createConstraintSolver,
   createPhysicsState,
   solveIk,
   stepPhysics,
   type IkConstraint,
+  type PathConstraint,
   type PhysicsChain,
   type TransformConstraint,
 } from '@/constraint/constraint'
@@ -182,6 +183,210 @@ describe('core2d constraint solver', () => {
     }
   })
 
+  it('4.3 local transform 属性从源 X 映射到目标 Y 并按区间裁剪', () => {
+    const sk = armSkeleton()
+    const [upper, lower] = ids(sk, 'upper', 'lower')
+    const pose = createPose(sk)
+    setLocal(pose, upper!, CH_X, 0.7)
+    createConstraintSolver([{
+      id: 'mapped', kind: 'transform', bone: lower!, sourceBone: upper!,
+      weight: 1, enabled: true, order: 0, localSource: true, localTarget: true,
+      clamp: true, mixRotate: 0, mixX: 0, mixY: 0.5,
+      offsets: [0, 0.1, 0, 0, 0, 0],
+      properties: [{ kind: 'x', offset: 0.2, to: [
+        { kind: 'y', offset: 0.4, max: 1, scale: 2 },
+      ] }],
+    }]).solve(pose, 1 / 60)
+    // (0.7 + 0.1 - 0.2) * 2 + 0.4 = 1.6; clamp to 1 then mix by 0.5.
+    expect(pose.local[lower! * POSE_STRIDE + CH_Y]).toBeCloseTo(0.5, 6)
+  })
+
+  it('4.3 From X -> To Y matches official world/local source and target formulas for two bones', () => {
+    const sk = compileSkeleton({ name: 'mapping', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0),
+      mkBone('source', 0, 2, 3, 0),
+      mkBone('a', 0, -1, 2, 0),
+      mkBone('b', 0, 4, -2, 0),
+    ] })
+    const [source, a, b] = ids(sk, 'source', 'a', 'b')
+    for (const localSource of [false, true]) for (const localTarget of [false, true]) {
+      const pose = createPose(sk)
+      setLocal(pose, source!, CH_ROT, Math.PI / 2)
+      setLocal(pose, source!, CH_X, 2)
+      setLocal(pose, source!, CH_Y, 3)
+      updateWorld(pose)
+      const original = [a!, b!].map((bone) => ({ localY: pose.local[bone * POSE_STRIDE + CH_Y]!, worldY: pose.world[bone * 6 + 5]! }))
+      // Official FromX: local x + offsetX; world: a*offsetX + b*offsetY + worldX.
+      const sourceValue = localSource ? 2 + 0.4 : 2 - 0.7
+      const mapped = 0.5 + (sourceValue - 0.2) * 1.5
+      const mix = -0.4
+      createConstraintSolver([{ id: 'mapped', kind: 'transform', bone: a!, bones: [a!, b!], sourceBone: source!,
+        weight: 0.8, enabled: true, order: 0, localSource, localTarget, mixRotate: 0, mixX: 0, mixY: -0.5,
+        offsets: [0, 0.4, 0.7, 0, 0, 0], properties: [{ kind: 'x', offset: 0.2, to: [
+          { kind: 'y', offset: 0.5, max: 10, scale: 1.5 },
+        ] }],
+      }]).solve(pose, 0)
+      updateWorld(pose)
+      for (const [index, bone] of [a!, b!].entries()) {
+        const prior = original[index]!
+        const expected = localTarget ? prior.localY + (mapped - prior.localY) * mix : prior.worldY + (mapped - prior.worldY) * mix
+        expect((localTarget ? pose.local[bone * POSE_STRIDE + CH_Y] : pose.world[bone * 6 + 5])!).toBeCloseTo(expected, 5)
+      }
+    }
+  })
+
+  it('4.3 world To rotation, scale and shear use matrix-column semantics with additive and clamp', () => {
+    const sk = compileSkeleton({ name: 'matrix', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0), mkBone('source', 0, 2, 0, 0), mkBone('target', 0, 0, 0, 0),
+    ] })
+    const [source, target] = ids(sk, 'source', 'target')
+    const pose = createPose(sk)
+    setLocal(pose, source!, CH_X, 2)
+    createConstraintSolver([{ id: 'world', kind: 'transform', bone: target!, sourceBone: source!,
+      weight: 1, enabled: true, order: 0, localSource: true, localTarget: false,
+      additive: true, clamp: true, mixRotate: 0.5, mixX: 0, mixY: 0, mixScaleX: -0.25, mixScaleY: 0.5, mixShearY: 0.5,
+      properties: [{ kind: 'x', offset: 0, to: [
+        { kind: 'rotate', offset: Math.PI / 2, max: Math.PI / 2, scale: 1 },
+        { kind: 'scaleX', offset: 3, max: 3, scale: 1 },
+        { kind: 'scaleY', offset: 3, max: 3, scale: 1 },
+        { kind: 'shearY', offset: Math.PI / 2, max: Math.PI / 2, scale: 1 },
+      ] }],
+    }]).solve(pose, 0)
+    updateWorld(pose)
+    const o = target! * 6
+    // Official ToRotate turns columns by pi/4; ToScaleX factor 0.5, ToScaleY factor 2;
+    // ToShearY then turns the Y column by pi/4 while preserving its length.
+    expect(pose.world[o]!).toBeCloseTo(Math.SQRT1_2 * 0.5, 5)
+    expect(pose.world[o + 1]!).toBeCloseTo(Math.SQRT1_2 * 0.5, 5)
+    expect(pose.world[o + 2]!).toBeCloseTo(-2, 5)
+    expect(pose.world[o + 3]!).toBeCloseTo(0, 5)
+  })
+
+  it('world ToShearY factors into angular shear without changing shearX', () => {
+    const sk = compileSkeleton({ name: 'angular-shear', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0), mkBone('source', 0, 0, 0, 0), mkBone('target', 0, 0, 0, 0),
+    ] })
+    const [source, target] = ids(sk, 'source', 'target')
+    const pose = createPose(sk)
+    setLocal(pose, target!, CH_SHX, 0.2)
+    createConstraintSolver([{ id: 'shear', kind: 'transform', bone: target!, sourceBone: source!,
+      weight: 1, enabled: true, order: 0, localSource: true, localTarget: false,
+      mixRotate: 0, mixX: 0, mixY: 0, mixScaleX: 0, mixScaleY: 0, mixShearY: 1,
+      properties: [{ kind: 'x', offset: 0, to: [
+        { kind: 'shearY', offset: 0.5, max: 1, scale: 1 },
+      ] }],
+    }]).solve(pose, 0)
+    updateWorld(pose)
+    const o = target! * 6
+    expect(pose.local[target! * POSE_STRIDE + CH_SHX]!).toBeCloseTo(0.2, 6)
+    expect(pose.local[target! * POSE_STRIDE + CH_SHY]!).toBeCloseTo(0.7, 5)
+    expect(pose.world[o]!).toBeCloseTo(Math.cos(0.2), 5)
+    expect(pose.world[o + 1]!).toBeCloseTo(Math.sin(0.2), 5)
+    expect(pose.world[o + 2]!).toBeCloseTo(-Math.sin(0.7), 5)
+    expect(pose.world[o + 3]!).toBeCloseTo(Math.cos(0.7), 5)
+  })
+
+  it('4.3 world mapping survives rotated nonuniform parent and zero world X scale', () => {
+    const sk = compileSkeleton({ name: 'parent', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0), mkBone('source', 0, 2, 3, 0), mkBone('target', 0, 1, -2, 0),
+    ] })
+    const [root, source, target] = ids(sk, 'root', 'source', 'target')
+    const pose = createPose(sk)
+    setLocal(pose, root!, CH_ROT, Math.PI / 2)
+    setLocal(pose, root!, 3, 2)
+    setLocal(pose, root!, 4, 3)
+    updateWorld(pose)
+    const sourceX = pose.world[source! * 6 + 4]!
+    createConstraintSolver([{ id: 'world', kind: 'transform', bone: target!, sourceBone: source!,
+      weight: 1, enabled: true, order: 0, localSource: false, localTarget: false,
+      mixRotate: 0, mixX: 1, mixY: 0, mixScaleX: 1,
+      properties: [
+        { kind: 'x', offset: 0, to: [{ kind: 'x', offset: 0, max: 0, scale: 1 }] },
+        { kind: 'scaleX', offset: 0, to: [{ kind: 'scaleX', offset: 0, max: 0, scale: 0 }] },
+      ],
+    }]).solve(pose, 0)
+    updateWorld(pose)
+    expect(pose.world[target! * 6 + 4]!).toBeCloseTo(sourceX, 5)
+    expect(pose.world[target! * 6]!).toBeCloseTo(0, 5)
+    expect(pose.world[target! * 6 + 1]!).toBeCloseTo(0, 5)
+    expect(pose.local[target! * POSE_STRIDE + 3]).toBe(0)
+  })
+
+  it('4.3 local ToRotate interpolates raw angles, including a branch crossing', () => {
+    const sk = armSkeleton()
+    const [upper, lower] = ids(sk, 'upper', 'lower')
+    const pose = createPose(sk)
+    setLocal(pose, upper!, CH_ROT, 3)
+    setLocal(pose, lower!, CH_ROT, -3)
+    createConstraintSolver([{ id: 'local', kind: 'transform', bone: lower!, sourceBone: upper!,
+      weight: 1, enabled: true, order: 0, localSource: true, localTarget: true,
+      mixRotate: 0.5, properties: [{ kind: 'rotate', offset: 0, to: [
+        { kind: 'rotate', offset: 0, max: 0, scale: 1 },
+      ] }],
+    }]).solve(pose, 0)
+    expect(getRotation(pose, lower!)).toBeCloseTo(0, 6)
+  })
+
+  it('legacy absolute-world zero mixes leave world matrices untouched', () => {
+    const sk = armSkeleton()
+    const [upper, lower] = ids(sk, 'upper', 'lower')
+    const pose = createPose(sk)
+    setLocal(pose, upper!, CH_ROT, 0.3)
+    updateWorld(pose)
+    const before = Array.from(pose.world)
+    createConstraintSolver([{ id: 'noop', kind: 'transform', bone: lower!, sourceBone: upper!,
+      weight: 1, enabled: true, order: 0, local: false, relative: false,
+      mixRotate: 0, mixX: 0, mixY: 0, mixScaleX: 0, mixScaleY: 0, mixShearY: 0,
+    }]).solve(pose, 0)
+    expect(Array.from(pose.world)).toEqual(before)
+  })
+
+  it('legacy absolute-world translation uses target local offsets and signed mixes', () => {
+    const sk = compileSkeleton({ name: 'world-offset', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0), mkBone('source', 0, 2, 3, 0), mkBone('target', 0, 1, -2, 0),
+    ] })
+    const [root, source, target] = ids(sk, 'root', 'source', 'target')
+    const pose = createPose(sk)
+    setLocal(pose, root!, CH_ROT, Math.PI / 2)
+    updateWorld(pose)
+    const sourceOffset = source! * 6
+    const targetOffset = target! * 6
+    const goalX = pose.world[sourceOffset]! * 0.4 + pose.world[sourceOffset + 2]! * -0.2
+      + pose.world[sourceOffset + 4]!
+    const goalY = pose.world[sourceOffset + 1]! * 0.4 + pose.world[sourceOffset + 3]! * -0.2
+      + pose.world[sourceOffset + 5]!
+    const beforeX = pose.world[targetOffset + 4]!
+    const beforeY = pose.world[targetOffset + 5]!
+    createConstraintSolver([{ id: 'world-signed', kind: 'transform', bone: target!, sourceBone: source!,
+      weight: 1, enabled: true, order: 0, local: false, relative: false,
+      offsetX: 0.4, offsetY: -0.2, mixRotate: 0, mixX: -1, mixY: -0.5,
+    }]).solve(pose, 0)
+    updateWorld(pose)
+    expect(pose.world[targetOffset + 4]).toBeCloseTo(beforeX - (goalX - beforeX), 6)
+    expect(pose.world[targetOffset + 5]).toBeCloseTo(beforeY - (goalY - beforeY) * 0.5, 6)
+  })
+
+  it('transform 负 mix 按有符号比例远离目标', () => {
+    const sk = armSkeleton()
+    const [upper, lower] = ids(sk, 'upper', 'lower')
+    const make = () => {
+      const pose = createPose(sk)
+      setLocal(pose, upper!, CH_X, 0.7)
+      return pose
+    }
+    const base: TransformConstraint = {
+      id: 'signed', kind: 'transform', bone: lower!, sourceBone: upper!,
+      weight: 1, enabled: true, order: 0, mixRotate: 0, mixX: 1, mixY: 0,
+    }
+    const positive = make()
+    const negative = make()
+    const setupX = negative.local[lower! * POSE_STRIDE + CH_X]!
+    createConstraintSolver([base]).solve(positive, 1 / 60)
+    createConstraintSolver([{ ...base, mixX: -0.5 }]).solve(negative, 1 / 60)
+    const targetX = positive.local[lower! * POSE_STRIDE + CH_X]!
+    expect(negative.local[lower! * POSE_STRIDE + CH_X]).toBeCloseTo(setupX - (targetX - setupX) * 0.5, 6)
+  })
+
   it('weight 在偏移空间最短弧混合，0.5 得到中点', () => {
     const sk = armSkeleton()
     const [upper, lower] = ids(sk, 'upper', 'lower')
@@ -213,6 +418,30 @@ describe('core2d constraint solver', () => {
     expect(() => solver.solve(armPose(sk), 1 / 60)).toThrow(/cycle/)
     // 目标骨在链外，正常。
     expect(() => createConstraintSolver([ikOf({ bone: lower!, targetBone: ids(sk, 'target')[0]! })])).not.toThrow()
+  })
+
+  it('Spine one-bone IK aims in parent space and applies mix to local rotation', () => {
+    const sk = armSkeleton()
+    const [upper, target] = ids(sk, 'upper', 'target')
+    const full = armPose(sk)
+    const half = armPose(sk)
+    solveIk(full, ikOf({ bone: upper!, targetBone: target!, chainLength: 1, spine: true }))
+    solveIk(half, ikOf({ bone: upper!, targetBone: target!, chainLength: 1, spine: true, mix: 0.5 }))
+    const aim = Math.atan2(0.8, 1.2)
+    expect(getRotation(full, upper!)).toBeCloseTo(aim, 6)
+    expect(getRotation(half, upper!)).toBeCloseTo(aim / 2, 6)
+  })
+
+  it('Spine two-bone IK follows bend direction with exact parent-space angles', () => {
+    const sk = armSkeleton()
+    const [upper, lower, target] = ids(sk, 'upper', 'lower', 'target')
+    const pose = armPose(sk)
+    solveIk(pose, ikOf({ bone: lower!, targetBone: target!, spine: true, bendSign: -1 }))
+    const knee = -Math.acos((1.2 * 1.2 + 0.8 * 0.8 - 2) / 2)
+    const shoulder = Math.atan2(0.8, 1.2) - Math.atan2(Math.sin(knee), 1 + Math.cos(knee))
+    expect(getRotation(pose, upper!)).toBeCloseTo(shoulder, 5)
+    expect(getRotation(pose, lower!)).toBeCloseTo(knee, 5)
+    expect(tipResidual(pose, lower!, target!)).toBeLessThan(1e-5)
   })
 
   it('IK analytic：可达目标精确命中，只写链上骨的旋转通道', () => {
@@ -432,6 +661,38 @@ describe('core2d secondary physics', () => {
     stepPhysics(pose, chain, state, 0)
     expect(Array.from(state.positions)).toEqual(snapshot)
     for (const v of state.positions) expect(Number.isFinite(v)).toBe(true)
+  })
+})
+
+describe('Spine weighted path constraint', () => {
+  it('samples a constant-speed cubic, preserves applied local channels, and scales the chain', () => {
+    const sk = compileSkeleton({ name: 'path', profile: 'full2d', bones: [
+      mkBone('root', -1, 0, 0, 0),
+      mkBone('first', 0, 0, 0.4, 0.5),
+      mkBone('second', 1, 0.5, 0, 0.5),
+    ] })
+    const pose = createPose(sk)
+    updateWorld(pose)
+    const [root, first, second] = ids(sk, 'root', 'first', 'second')
+    const before = Array.from(pose.local)
+    const vertices = [-1, 0, 0, 0, 1 / 3, 0, 2 / 3, 0, 1, 0, 2, 0]
+    const constraint: PathConstraint = {
+      id: 'curve', kind: 'path', bone: second!, bones: [first!, second!], targetBone: root!,
+      enabled: true, order: 0, weight: 1, mix: 1, points: new Float32Array([0, 0, 1, 0]),
+      mixRotate: 1, mixX: 1, mixY: 1, spacing: 0.5,
+      positionMode: 'percent', spacingMode: 'percent', rotateMode: 'chainScale',
+      spinePath: { closed: false, constantSpeed: true, lengths: new Float32Array([1]),
+        vertices: Array.from({ length: 6 }, (_, i) => [{ bone: root!, x: vertices[i * 2]!, y: vertices[i * 2 + 1]!, weight: 1 }]) },
+    }
+    createConstraintSolver([constraint]).solve(pose, 0)
+    expect(Array.from(pose.local)).toEqual(before)
+    expect(pose.world[first! * 6 + 4]).toBeCloseTo(0, 6)
+    expect(pose.world[first! * 6 + 5]).toBeCloseTo(0, 6)
+    expect(pose.world[second! * 6 + 4]).toBeCloseTo(0.5, 6)
+    expect(pose.world[first! * 6]).toBeCloseTo(1, 6)
+    expect(pose.world[second! * 6]).toBeCloseTo(1, 6)
+    updateWorld(pose)
+    expect(pose.world[second! * 6 + 4]).toBeCloseTo(0.5, 6)
   })
 })
 

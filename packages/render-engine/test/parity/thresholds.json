@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "semantic": { "worldPosition": 0.0001, "angleRadians": 0.000001, "color": 0.00392156862745098 },
+  "sameRasterizer": { "maxLsb": 1, "meanLsb": 0.01 },
+  "canvasDiagnostic": { "meanLsbExclusive": 0.5, "maxLsbExclusive": 3 }
+}

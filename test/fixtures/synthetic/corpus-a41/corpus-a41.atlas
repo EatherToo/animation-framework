@@ -1,0 +1,22 @@
+first.png
+size: 128,128
+filter: Linear,Linear
+repeat: xy
+pma: false
+pulse01
+  bounds: 4,8,20,14
+  offsets: 2,1,24,18
+pulse02
+  bounds: 30,8,18,16
+  offsets: 3,1,24,18
+mesh
+  bounds: 52,8,24,20
+
+second.png
+size: 64,64
+filter: Nearest,Nearest
+repeat: none
+pma: true
+trimmed
+  bounds: 5,7,18,12
+  offsets: 7,5,40,32

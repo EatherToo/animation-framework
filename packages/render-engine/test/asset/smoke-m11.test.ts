@@ -90,9 +90,10 @@ describe('M11 smoke: 6 骨 + clipping + atlas 全链路', () => {
     expect(mask.endSlotId).toBe('clipEnd')
     expect(asset.slots.some((s) => s.id === mask.startSlotId)).toBe(true)
     expect(asset.slots.some((s) => s.id === mask.endSlotId)).toBe(true)
-    expect(asset.slots.find((s) => s.id === 'clipStart')!.mask).toBe(mask.id)
+    expect(asset.slots.find((s) => s.id === 'clipStart')!.mask).toBeNull()
     const clip = asset.skins.get('default')!.attachments.get('bodyMask')!
     expect(clip.kind).toBe('clipping')
+    if (clip.kind === 'clipping') expect(clip.endSlotId).toBe('clipEnd')
   })
 
   it('createPose → updateWorld → sampleAnimation 后姿态有效', () => {

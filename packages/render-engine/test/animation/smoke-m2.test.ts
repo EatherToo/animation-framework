@@ -57,7 +57,7 @@ function walkClip(): AnimationClip {
   return { name: 'walk', duration: 1, timelines }
 }
 
-type Run = { locals: Float32Array; worlds: Float32Array; events: string[]; loopCount: number }
+type Run = { locals: Float32Array; worlds: Float64Array; events: string[]; loopCount: number }
 
 function run120(): Run {
   const sk = compileSkeleton({ name: 'humanoid', profile: 'simple2d', bones: humanoid() })

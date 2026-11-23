@@ -20,9 +20,29 @@ export type AtlasImage = {
 /** 图集页定义；options.pages 可补齐文本里缺失的页尺寸/图像。 */
 export type AtlasPageDef = {
   readonly index: number
+  /** 导入器生成的页必有名称；旧调用方手工创建的页可以省略。 */
+  readonly name?: string
   readonly width: number
   readonly height: number
+  readonly format?: string
+  readonly minFilter?: AtlasFilter
+  readonly magFilter?: AtlasFilter
+  readonly uWrap?: AtlasWrap
+  readonly vWrap?: AtlasWrap
+  readonly pma?: boolean
   readonly image?: AtlasImage
+}
+
+export type AtlasFilter = 'Nearest' | 'Linear' | 'MipMap' | 'MipMapNearestNearest' |
+  'MipMapLinearNearest' | 'MipMapNearestLinear' | 'MipMapLinearLinear'
+export type AtlasWrap = 'ClampToEdge' | 'Repeat'
+
+/** Ninepatch inset order follows the Spine atlas format. */
+export type AtlasNinePatchInsets = {
+  readonly left: number
+  readonly right: number
+  readonly top: number
+  readonly bottom: number
 }
 
 /** 单个 region：页内像素矩形 + 附件局部 UV → 页 UV 的仿射。 */
@@ -40,6 +60,10 @@ export type AtlasRegion = {
     readonly sourceWidth: number
     readonly sourceHeight: number
   }
+  /** Ninepatch splits measured from original image edges. */
+  readonly split?: AtlasNinePatchInsets
+  /** Ninepatch content padding measured from original image edges. */
+  readonly pad?: AtlasNinePatchInsets
   readonly maxMip: number
 }
 
@@ -50,6 +74,7 @@ export type AtlasData = {
   readonly hash: string
   readonly pages: readonly AtlasPageDef[]
   readonly regions: ReadonlyMap<string, AtlasRegion>
+  /** @deprecated 页级 PMA 请读取 pages[n].pma；此字段只反映首页以兼容旧调用方。 */
   readonly pma: boolean
   readonly colorSpace: 'srgb'
   readonly padding: number
@@ -58,7 +83,8 @@ export type AtlasData = {
 }
 
 export type AtlasImportOptions = {
-  readonly pages?: readonly AtlasPageDef[]
+  /** 旧 API 允许只给 index/width/height；带 name 时按页名绑定图片。 */
+  readonly pages?: readonly (Pick<AtlasPageDef, 'index' | 'width' | 'height'> & Partial<AtlasPageDef>)[]
   readonly padding?: number
   readonly bleed?: number
 }
@@ -68,7 +94,16 @@ type AtlasError = Error & { code: string }
 const MAX_PAGES = 4
 const HALF_TEXEL = 0.5
 const HEADER_KEYS = new Set(['size', 'format', 'filter', 'repeat', 'pma', 'scale'])
-const REGION_KEYS = new Set(['bounds', 'offsets', 'orig', 'offset', 'rotate', 'pad', 'split', 'index'])
+const REGION_KEYS = new Set(['bounds', 'xy', 'size', 'offsets', 'orig', 'offset', 'rotate', 'pad', 'split', 'index'])
+const FILTERS = new Set<AtlasFilter>([
+  'Nearest', 'Linear', 'MipMap', 'MipMapNearestNearest', 'MipMapLinearNearest',
+  'MipMapNearestLinear', 'MipMapLinearLinear',
+])
+
+function parseFilter(value: string): AtlasFilter {
+  if (!FILTERS.has(value as AtlasFilter)) fail('E_ATLAS_FILTER', `不支持的 filter：${value}`)
+  return value as AtlasFilter
+}
 
 /** 统一错误出口：message 带 code，同时挂到 error.code 便于调用方分支。 */
 function fail(code: string, message: string): never {
@@ -92,6 +127,15 @@ function numberList(value: string, code: string, what: string): number[] {
   const out = parts.map((part) => Number(part))
   if (out.length === 0 || out.some((n) => !Number.isFinite(n))) fail(code, `${what} 不是合法数字列表`)
   return out
+}
+
+function parseInsets(value: string | undefined, name: string, key: string): AtlasNinePatchInsets | undefined {
+  if (value === undefined) return undefined
+  const values = numberList(value, 'E_ATLAS_REGION', `region ${name}.${key}`)
+  if (values.length !== 4 || values.some((n) => !Number.isInteger(n))) {
+    fail('E_ATLAS_REGION', `region ${name}.${key} 需要四个整数 (left,right,top,bottom)`)
+  }
+  return Object.freeze({ left: values[0]!, right: values[1]!, top: values[2]!, bottom: values[3]! })
 }
 
 /** rotate 只接受 0/90/180/270；Spine 的 true 等价 90。 */
@@ -181,8 +225,13 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
 
   const pages: AtlasPageDef[] = []
   const regions = new Map<string, AtlasRegion>()
+  const namedPages = new Map<string, NonNullable<AtlasImportOptions['pages']>[number]>()
+  for (const supplied of options?.pages ?? []) {
+    if (supplied.name === undefined) continue
+    if (namedPages.has(supplied.name)) fail('E_ATLAS_PAGE', `重复的图片页名：${supplied.name}`)
+    namedPages.set(supplied.name, supplied)
+  }
   let cursor = 0
-  let pagePma = false
 
   const skipBlank = (): void => {
     while (cursor < lines.length && lines[cursor]!.trim() === '') cursor += 1
@@ -198,6 +247,12 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
     let imageName: string | null = null
     let width: number | null = null
     let height: number | null = null
+    let format: string | undefined
+    let minFilter: AtlasFilter = 'Nearest'
+    let magFilter: AtlasFilter = 'Nearest'
+    let uWrap: AtlasWrap = 'ClampToEdge'
+    let vWrap: AtlasWrap = 'ClampToEdge'
+    let pagePma = false
 
     // 页头：第一行通常是图片路径；其后是 size/format/filter/repeat/pma。
     while (cursor < lines.length) {
@@ -214,7 +269,20 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
       }
       // 官方 atlas 用 tab 缩进 size/filter 等页头字段；不能把缩进当区域行跳过。
       if (!HEADER_KEYS.has(field.key)) break
-      if (field.key === 'pma') pagePma = field.value.trim().toLowerCase() === 'true'
+      if (field.key === 'pma') pagePma = field.value === 'true'
+      if (field.key === 'format') format = field.value
+      if (field.key === 'filter') {
+        const filters = field.value.split(',').map((value) => value.trim())
+        if (filters.length !== 2) fail('E_ATLAS_FILTER', 'filter 需要 min,mag')
+        minFilter = parseFilter(filters[0]!)
+        magFilter = parseFilter(filters[1]!)
+      }
+      if (field.key === 'repeat') {
+        const repeat = field.value.toLowerCase()
+        if (!['none', 'x', 'y', 'xy'].includes(repeat)) fail('E_ATLAS_REPEAT', `不支持的 repeat：${field.value}`)
+        uWrap = repeat.includes('x') ? 'Repeat' : 'ClampToEdge'
+        vWrap = repeat.includes('y') ? 'Repeat' : 'ClampToEdge'
+      }
       if (field.key === 'size') {
         const values = numberList(field.value, 'E_ATLAS_SIZE', 'size')
         if (values.length < 2) fail('E_ATLAS_SIZE', 'size 需要 width,height')
@@ -224,7 +292,12 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
       cursor += 1
     }
 
-    const provided = options?.pages?.find((page) => page.index === pageIndex) ?? options?.pages?.[pageIndex]
+    const provided = (imageName === null ? undefined : namedPages.get(imageName)) ??
+      options?.pages?.find((page) => page.name === undefined && page.index === pageIndex) ??
+      (options?.pages?.[pageIndex]?.name === undefined ? options?.pages?.[pageIndex] : undefined)
+    if (namedPages.size > 0 && provided === undefined && imageName !== null) {
+      fail('E_TEXTURE_MISSING', `图集页 ${pageIndex}（${imageName}）没有对应的命名图片页`)
+    }
     const pageWidth = width ?? provided?.width
     const pageHeight = height ?? provided?.height
     if (pageWidth === undefined || pageHeight === undefined || pageWidth <= 0 || pageHeight <= 0) {
@@ -232,8 +305,11 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
     }
     const page: AtlasPageDef = {
       index: pageIndex,
+      name: imageName ?? provided?.name ?? `page-${pageIndex}`,
       width: Math.floor(pageWidth),
       height: Math.floor(pageHeight),
+      ...(format !== undefined ? { format } : {}),
+      minFilter, magFilter, uWrap, vWrap, pma: pagePma,
       ...(provided?.image !== undefined ? { image: provided.image } : {}),
     }
     pages.push(Object.freeze(page))
@@ -263,9 +339,16 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
       }
 
       const boundsRaw = fields.get('bounds')
-      if (boundsRaw === undefined) fail('E_ATLAS_REGION', `region ${name} 缺少 bounds`)
-      const bounds = numberList(boundsRaw, 'E_ATLAS_REGION', `region ${name}.bounds`)
-      if (bounds.length < 4) fail('E_ATLAS_REGION', `region ${name}.bounds 需要 x,y,width,height`)
+      const xyRaw = fields.get('xy')
+      const sizeRaw = fields.get('size')
+      if (boundsRaw === undefined && (xyRaw === undefined || sizeRaw === undefined)) {
+        fail('E_ATLAS_REGION', `region ${name} 缺少 bounds 或 xy/size`)
+      }
+      const bounds = boundsRaw === undefined
+        ? [...numberList(xyRaw!, 'E_ATLAS_REGION', `region ${name}.xy`),
+          ...numberList(sizeRaw!, 'E_ATLAS_REGION', `region ${name}.size`)]
+        : numberList(boundsRaw, 'E_ATLAS_REGION', `region ${name}.bounds`)
+      if (bounds.length !== 4) fail('E_ATLAS_REGION', `region ${name} 需要 x,y,width,height`)
       const x = bounds[0]!
       const y = bounds[1]!
       const regionWidth = bounds[2]!
@@ -305,6 +388,9 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
       }
 
       const rotate = parseRotate(fields.get('rotate'))
+      const split = parseInsets(fields.get('split'), name, 'split')
+      const pad = parseInsets(fields.get('pad'), name, 'pad')
+      if (pad !== undefined && split === undefined) fail('E_ATLAS_REGION', `region ${name}.pad 需要 split`)
       if (regions.has(name)) fail('E_ATLAS_REGION', `region ${name} 重名`)
       const region: AtlasRegion = {
         id: name,
@@ -315,6 +401,8 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
         height: regionHeight,
         uvMatrix: uvMatrixOf(x, y, regionWidth, regionHeight, rotate, page.width, page.height, offsetX, offsetY, sourceWidth, sourceHeight),
         trim: Object.freeze({ offsetX, offsetY, sourceWidth, sourceHeight }),
+        ...(split !== undefined ? { split } : {}),
+        ...(pad !== undefined ? { pad } : {}),
         maxMip: maxMipOf(regionWidth, regionHeight, page.width, page.height),
       }
       regions.set(name, Object.freeze(region))
@@ -325,10 +413,10 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
   if (pages.length > MAX_PAGES) fail('E_ATLAS_PAGES', `图集页数超过 ${MAX_PAGES}`)
 
   const signature = [
-    ...pages.map((page) => `p${page.index}:${page.width}x${page.height}:${page.image?.width ?? 0}x${page.image?.height ?? 0}`),
+    ...pages.map((page) => `p${page.index}:${page.name}:${page.width}x${page.height}:${page.image?.width ?? 0}x${page.image?.height ?? 0}:${page.format ?? ''}:${page.minFilter},${page.magFilter}:${page.uWrap},${page.vWrap}:${page.pma}`),
     ...[...regions.values()]
       .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-      .map((r) => `${r.id}@${r.page}:${r.x},${r.y},${r.width},${r.height}:${r.trim.offsetX},${r.trim.offsetY},${r.trim.sourceWidth},${r.trim.sourceHeight}:${Array.from(r.uvMatrix).join(',')}`),
+      .map((r) => `${r.id}@${r.page}:${r.x},${r.y},${r.width},${r.height}:${r.trim.offsetX},${r.trim.offsetY},${r.trim.sourceWidth},${r.trim.sourceHeight}:${Array.from(r.uvMatrix).join(',')}:split=${r.split === undefined ? '' : Object.values(r.split).join(',')}:pad=${r.pad === undefined ? '' : Object.values(r.pad).join(',')}`),
   ].join('|')
 
   const atlas: AtlasData = {
@@ -337,7 +425,7 @@ export function importSpineAtlas(text: string, options?: AtlasImportOptions): At
     hash: fnv1a(signature),
     pages: Object.freeze(pages),
     regions,
-    pma: pagePma,
+    pma: pages[0]!.pma ?? false,
     colorSpace: 'srgb',
     padding,
     bleed,
@@ -405,7 +493,8 @@ export function packAtlas(
     shelfHeight = Math.max(shelfHeight, h)
   }
   const pages: AtlasPageDef[] = Array.from({ length: page + 1 }, (_, index) => ({
-    index, width: pageSize, height: pageSize,
+    index, name: `page-${index}`, width: pageSize, height: pageSize,
+    minFilter: 'Linear', magFilter: 'Linear', uWrap: 'ClampToEdge', vWrap: 'ClampToEdge', pma: true,
   }))
   const signature = [...packed.values()]
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))

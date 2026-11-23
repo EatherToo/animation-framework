@@ -72,6 +72,14 @@ afterEach(() => {
 })
 
 describe('Curve：多段 Bezier / stepped / 非法降级', () => {
+  it('对齐官方九点 Float32 曲线采样，而非连续三次反解', () => {
+    const endTime = 0.2666667
+    const endValue = 152.4395
+    const keys = [scalar(0, 0, [0.028903656 / endTime, 84.97473 / endValue,
+      0.1091842 / endTime, 155.92613 / endValue]), scalar(endTime, endValue)]
+    expect(sampleScalar(keys, 0.25)).toBeCloseTo(152.02176472, 4)
+  })
+
   it('多段 Bezier 第 2 段使用第 2 组控制点', () => {
     const identity: readonly number[] = [1 / 3, 1 / 3, 2 / 3, 2 / 3]
     const second: readonly number[] = [0.2, 0.9, 0.8, 0.9]
@@ -99,9 +107,11 @@ describe('Curve：多段 Bezier / stepped / 非法降级', () => {
     expect(sampleScalar(stepped, 0.5)).toBe(8)
   })
 
-  it('x 非单调的 Bezier 降级为 linear 并发出 W_CURVE 诊断', () => {
+  it('控制点顺序交错仍可采样，非有限 Bezier 降级并发出 W_CURVE', () => {
+    const crossing: readonly number[] = [0.8, 0.1, 0.2, 0.9]
+    expect(Number.isFinite(sampleScalar([{ time: 0, value: 0, curve: crossing }, { time: 1, value: 10 }], 0.4))).toBe(true)
     setCurveDiagnosticSink((d) => diagnostics.push(d))
-    const bad: readonly number[] = [0.8, 0.1, 0.2, 0.9]
+    const bad: readonly number[] = [0.8, Number.NaN, 0.2, 0.9]
     const keys: ScalarKey[] = [{ time: 0, value: 0, curve: bad }, { time: 1, value: 10 }]
     expect(sampleScalar(keys, 0.5)).toBeCloseTo(5, 6)
     expect(diagnostics.some((d) => d.code === 'W_CURVE')).toBe(true)
@@ -144,7 +154,7 @@ describe('颜色：六个通道只改目标通道', () => {
       { kind: 'color', slot: 2, channel: 'rgba', keys: [light(0, 0, 1, 0.25)] },
       {
         kind: 'color', slot: 3, channel: 'rgb2',
-        keys: [{ time: 0, light: { r: 1, g: 1, b: 1, a: 1 }, dark: { r: 1, g: 1, b: 0, a: 1 } }],
+        keys: [{ time: 0, light: { r: 0.25, g: 0.5, b: 0.75, a: 0.1 }, dark: { r: 1, g: 1, b: 0, a: 1 } }],
       },
       {
         kind: 'color', slot: 3, channel: 'alpha2',
@@ -159,8 +169,8 @@ describe('颜色：六个通道只改目标通道', () => {
     expect(slots.slots[2]!.color.g).toBe(0)
     expect(slots.slots[2]!.color.b).toBe(1)
     expect(slots.slots[2]!.color.a).toBe(0.25)
-    // rgb2/alpha2 只改 dark，不污染 light。
-    expect(slots.slots[3]!.color).toEqual({ r: 1, g: 1, b: 1, a: 1 })
+    // rgb2 更新 light/dark RGB，alpha2 只更新 dark alpha。
+    expect(slots.slots[3]!.color).toEqual({ r: 0.25, g: 0.5, b: 0.75, a: 1 })
     expect(result.colorDark.get(3)).toEqual({ r: 1, g: 1, b: 0, a: 0.25 })
   })
 
@@ -180,6 +190,26 @@ describe('颜色：六个通道只改目标通道', () => {
     sampleAnimation([createTrack(c, { loop: false })], pose, slots, 0.5)
     expect(slots.slots[0]!.color.a).toBeCloseTo(0.5, 6)
     expect(slots.slots[0]!.color.r).toBe(1)
+  })
+
+  it('RGBA2 分量使用各自的 Bezier 曲线', () => {
+    const pose = createPose(skeleton())
+    const slots = makeSlots(1)
+    const slow = [0.25, 0, 0.75, 0] as const
+    const fast = [0.25, 1, 0.75, 1] as const
+    const c = clip('color-components', [{
+      kind: 'color', slot: 0, channel: 'rgba2', keys: [
+        { time: 0, light: { r: 0, g: 0, b: 0, a: 0 }, dark: { r: 0, g: 0, b: 0, a: 1 },
+          curves: [slow, fast, slow, fast, fast, slow, fast] },
+        { time: 1, light: { r: 1, g: 1, b: 1, a: 1 }, dark: { r: 1, g: 1, b: 1, a: 1 } },
+      ],
+    }])
+    const sampled = sampleAnimation([createTrack(c, { loop: false })], pose, slots, 0.5)
+    expect(slots.slots[0]!.color.r).toBeCloseTo(0.125, 3)
+    expect(slots.slots[0]!.color.g).toBeCloseTo(0.875, 3)
+    expect(slots.slots[0]!.color.a).toBeCloseTo(0.875, 3)
+    expect(sampled.colorDark.get(0)!.r).toBeCloseTo(0.875, 3)
+    expect(sampled.colorDark.get(0)!.g).toBeCloseTo(0.125, 3)
   })
 })
 
@@ -335,7 +365,7 @@ describe('AnimationState：PlayOptions 与 crossfade', () => {
     expect(b.alpha).toBe(0)
     state.update(0.5)
     expect(b.alpha).toBeCloseTo(0.5, 6)
-    expect(getLocal(pose, 0, CH_ROT)).toBeCloseTo(1, 6)
+    expect(getLocal(pose, 0, CH_ROT)).toBeCloseTo(1.25, 6)
     state.update(0.5)
     expect(b.alpha).toBeCloseTo(1, 6)
   })
@@ -353,6 +383,8 @@ describe('AnimationState：PlayOptions 与 crossfade', () => {
     state.update(0.5)
     expect(t.time).toBeCloseTo(0.5, 6)
     state.update(0.5)
+    expect(state.tracks[0]!.clip.name).toBe('A')
+    state.update(0)
     expect(t.clip.name).toBe('B')
     expect(state.tracks[0]!.clip.name).toBe('B')
   })

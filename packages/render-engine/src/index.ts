@@ -6,6 +6,7 @@
 export * from './core/math'
 export * from './core/skeleton'
 export * from './core/pose'
+export * from './core/bounds'
 export * from './slot/slot'
 export * from './mesh/mesh'
 export * from './animation/animation'
