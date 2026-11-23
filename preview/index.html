@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>渲染引擎 · Core2D 预览</title>
+    <title>Spine · Render Engine Preview</title>
     <style>
       :root {
         color-scheme: dark;
@@ -48,6 +48,18 @@
         background: #121722;
         color: #c8d4e4;
         font: 11.5px/1.5 ui-monospace, Menlo, Consolas, monospace;
+      }
+      .field { display: grid; gap: 6px; margin-top: 14px; color: var(--dim); }
+      .field select, .field input { width: 100%; box-sizing: border-box; }
+      select { min-height: 34px; padding: 4px 8px; background: #232d3c; color: var(--text); border: 1px solid var(--line); border-radius: 4px; }
+      output { color: var(--text); }
+      .commands { display: flex; gap: 8px; margin-top: 16px; }
+      .commands button { flex: 1; }
+      [hidden] { display: none !important; }
+      @media (max-width: 680px) {
+        body { flex-direction: column; }
+        #stage { min-height: 55vh; }
+        aside { box-sizing: border-box; width: 100%; max-height: 45vh; border-left: 0; border-top: 1px solid var(--line); padding: 12px 16px; }
       }
       .joint {
         display: grid;
@@ -104,21 +116,28 @@
       <pre id="error" class="error" hidden></pre>
     </div>
     <aside id="pose">
-      <h1>Render Engine · Core2D</h1>
-      <p class="note">新引擎 API 预览：createHumanoid('simple2d') 生成 18 骨人形，逐骨构建 world 空间 region packet，默认采样程序化图集纹理，经 viewProjection2D 投影后由 CPU / WebGL2 后端绘制。</p>
+      <h1>Spine Preview</h1>
+      <label class="field">场景
+        <select id="sample">
+          <option value="spineboy">Spineboy</option>
+          <option value="raptor">Raptor</option>
+          <option value="stretchyman">Stretchyman</option>
+          <option value="core2d">Core2D 人形</option>
+        </select>
+      </label>
       <div id="runtimeInfo" class="info">初始化中…</div>
-      <h2>骨骼旋转叠加（度）</h2>
-      <div id="composerControls"></div>
-      <button id="reset" class="reset" type="button">重置姿态 / 清零滑杆</button>
-      <h2>URL 参数</h2>
-      <pre class="help">?mode=cpu|webgl   渲染后端，默认 cpu
-?pose=tpose|walk|raise   姿态，默认 tpose
-?speed=1.0   walk 播放速度
-?texture=1|0   图集纹理 / flat 色块，默认 1
-?mask=0|1   左臂 stencil mask，默认 0
-
-walk 用 sampleAnimation 驱动 rotate/translate
-时间轴，滑杆作为叠加旋转增量。</pre>
+      <div id="spineControls">
+        <label class="field">动画<select id="animation"></select></label>
+        <label class="field">后端<select id="backend"><option value="cpu">CPU</option><option value="webgl">WebGL2</option></select></label>
+        <label class="field">速度 <output id="speedValue">1×</output><input id="speed" type="range" min="0" max="2" step="0.1" value="1"></label>
+        <div class="commands"><button id="playPause" type="button">暂停</button><button id="restart" type="button">重新播放</button></div>
+        <p><a href="/pose.html">打开 Spineboy 姿态编辑</a></p>
+      </div>
+      <div id="coreControls" hidden>
+        <h2>骨骼旋转叠加（度）</h2>
+        <div id="composerControls"></div>
+        <button id="reset" class="reset" type="button">重置姿态 / 清零滑杆</button>
+      </div>
     </aside>
     <script src="./main.js"></script>
   </body>

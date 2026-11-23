@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@animation-framework/render-engine": ["../packages/render-engine/src/index.ts"],
+      "@animation-framework/render-engine/*": ["../packages/render-engine/src/*"]
+    }
+  },
+  "include": ["./*.ts"]
+}

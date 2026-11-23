@@ -7,9 +7,14 @@
     "@animation-framework/render-engine": "workspace:*"
   },
   "scripts": {
-    "build:engine": "pnpm -C .. build",
+    "build:engine": "pnpm --filter @animation-framework/render-engine run build",
     "bundle": "node build.mjs",
     "build": "pnpm run build:engine && pnpm run bundle",
-    "serve": "python3 -m http.server 5173"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "serve": "node server.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
   }
 }

@@ -1,6 +1,7 @@
 /** 预览入口：只使用 @animation-framework/render-engine 的新 API。 */
 
 import { CpuBackend, WebGL2Backend, type RenderFrame } from '@animation-framework/render-engine'
+import { loadSpineScene, type SpineSample } from './spine-scene'
 import {
   BONE_LABEL,
   SLIDER_BONES,
@@ -130,6 +131,8 @@ function webglFrame(frame: RenderFrame): RenderFrame {
 }
 
 function boot(): void {
+  required<HTMLElement>('#coreControls').hidden = false
+  required<HTMLElement>('#spineControls').hidden = true
   const scene: Scene = createScene(speed)
   const offsets: Partial<Record<SliderBone, number>> = {}
 
@@ -244,8 +247,98 @@ function boot(): void {
   requestAnimationFrame(tick)
 }
 
-try {
-  boot()
-} catch (err) {
-  showError(err)
+async function bootSpine(sample: SpineSample): Promise<void> {
+  const scene = await loadSpineScene(sample)
+  if (scene === null) throw new Error(`找不到 ${sample} 示例文件。请在仓库根目录运行 pnpm fetch:spine-samples，再运行 pnpm --dir preview run build。`)
+  window.addEventListener('pagehide', () => scene.dispose(), { once: true })
+  const animation = required<HTMLSelectElement>('#animation')
+  for (const name of ['(setup)', ...scene.animations]) {
+    const option = document.createElement('option')
+    option.value = name === '(setup)' ? '' : name
+    option.textContent = name
+    animation.append(option)
+  }
+  const initialAnimation = scene.animations.includes('walk') ? 'walk' : scene.animations[0] ?? ''
+  animation.value = initialAnimation
+  scene.setAnimation(initialAnimation || null)
+  animation.addEventListener('change', () => scene.setAnimation(animation.value || null))
+  const speedControl = required<HTMLInputElement>('#speed')
+  const speedValue = required<HTMLOutputElement>('#speedValue')
+  speedControl.addEventListener('input', () => { speedValue.textContent = `${speedControl.value}×` })
+  let paused = false
+  const playPause = required<HTMLButtonElement>('#playPause')
+  playPause.addEventListener('click', () => {
+    paused = !paused
+    playPause.textContent = paused ? '播放' : '暂停'
+  })
+  required<HTMLButtonElement>('#restart').addEventListener('click', () => scene.reset())
+
+  const ctx2d = mode === 'cpu' ? view.getContext('2d', { alpha: false }) : null
+  const gl = mode === 'webgl' ? view.getContext('webgl2', { alpha: false, antialias: true, stencil: true }) : null
+  if (mode === 'cpu' && ctx2d === null) throw new Error('无法获取 2D 上下文')
+  if (mode === 'webgl' && gl === null) throw new Error('当前浏览器/环境不支持 WebGL2')
+  let program: WebGLProgram | null = null
+  let resolutionLocation: WebGLUniformLocation | null = null
+  let textureLocation: WebGLUniformLocation | null = null
+  if (gl !== null) {
+    program = createProgram(gl)
+    resolutionLocation = gl.getUniformLocation(program, 'uResolution')
+    textureLocation = gl.getUniformLocation(program, 'uTexture')
+    const vao = gl.createVertexArray()
+    if (vao !== null) gl.bindVertexArray(vao)
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+  }
+  const backend = gl !== null ? new WebGL2Backend(gl, program!) : new CpuBackend({ width: 1, height: 1, background: BG })
+  let preparedAssets: RenderFrame['assets'] | undefined
+  let last = 0
+  const tick = (now: number): void => {
+    try {
+      const dt = last === 0 ? 0 : Math.min(0.05, (now - last) / 1000)
+      last = now
+      resizeCanvas()
+      const width = view.width, height = view.height
+      const frame = scene.frame(width, height, paused ? 0 : dt * Number(speedControl.value))
+      if (frame.assets !== undefined && frame.assets !== preparedAssets) {
+        backend.prepare?.(frame.assets)
+        preparedAssets = frame.assets
+      }
+      if (ctx2d !== null) {
+        backend.draw(frame)
+        ctx2d.putImageData(new ImageData(new Uint8ClampedArray(backend.readPixels()), width, height), 0, 0)
+      } else if (gl !== null && program !== null) {
+        gl.viewport(0, 0, width, height)
+        gl.clearColor(BG[0] / 255, BG[1] / 255, BG[2] / 255, 1)
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT)
+        gl.useProgram(program)
+        gl.uniform2f(resolutionLocation, width, height)
+        gl.uniform1i(textureLocation, 0)
+        backend.draw(webglFrame(frame))
+      }
+      runtimeInfo.textContent = `${sample} · ${animation.value || 'setup'} · ${mode} · ` +
+        `${frame.packets.length} packets · ${backend.stats.drawCalls} draw calls`
+      requestAnimationFrame(tick)
+    } catch (error) { showError(error) }
+  }
+  requestAnimationFrame(tick)
+}
+
+const sampleSelect = required<HTMLSelectElement>('#sample')
+const sampleParam = params.get('sample')
+const selectedSample = sampleParam === 'core2d' || sampleParam === 'raptor' ||
+  sampleParam === 'stretchyman' ? sampleParam : 'spineboy'
+const backendSelect = required<HTMLSelectElement>('#backend')
+sampleSelect.value = selectedSample
+backendSelect.value = mode
+function navigate(key: string, value: string): void {
+  const url = new URL(location.href)
+  url.searchParams.set(key, value)
+  location.assign(url.href)
+}
+sampleSelect.addEventListener('change', () => navigate('sample', sampleSelect.value))
+backendSelect.addEventListener('change', () => navigate('mode', backendSelect.value))
+if (selectedSample === 'core2d') {
+  try { boot() } catch (error) { showError(error) }
+} else {
+  bootSpine(selectedSample).catch(showError)
 }

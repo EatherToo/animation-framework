@@ -13,6 +13,7 @@ const fixture = resolve(root, 'test/fixtures/synthetic/corpus-a41')
 const frames = [
   { dt: 0, x: 0 }, { dt: 0.15, x: 12 }, { dt: 0.15, x: 25 },
   { dt: 0.15, x: 39 }, { dt: 0.15, x: 53 }, { dt: 0.15, x: 66 },
+  { dt: 0.15, x: 80 },
 ]
 const oracle = `
 const { createRequire } = require('node:module')
