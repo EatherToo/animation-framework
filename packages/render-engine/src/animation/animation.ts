@@ -174,6 +174,8 @@ export type ScalarTimeline = TimelineBase & {
     | 'ik' | 'transform' | 'path' | 'physics' | 'slider'
     | 'sequence'
   readonly keys: readonly ScalarKey[]
+  /** Spine rotation keys retain authored angular direction instead of shortest-arc unwrapping. */
+  readonly rawRotation?: boolean
 }
 
 export type ConstraintFrameTimeline = Omit<TimelineBase, 'channel'> & {
@@ -1434,7 +1436,7 @@ export function sampleAnimation(
           accs.set(id, acc)
           continue
         }
-        acc.rot = blend(acc.rot, setup, sampleAngle(tl.keys, applyTime), alpha, additive, false)
+        acc.rot = blend(acc.rot, setup, tl.rawRotation ? sampleScalar(tl.keys, applyTime) : sampleAngle(tl.keys, applyTime), alpha, additive, false)
         accs.set(id, acc)
         wrote = true
         continue

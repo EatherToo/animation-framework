@@ -1589,7 +1589,7 @@
             accs.set(id, acc);
             continue;
           }
-          acc.rot = blend(acc.rot, setup, sampleAngle(tl.keys, applyTime), alpha, additive, false);
+          acc.rot = blend(acc.rot, setup, tl.rawRotation ? sampleScalar(tl.keys, applyTime) : sampleAngle(tl.keys, applyTime), alpha, additive, false);
           accs.set(id, acc);
           wrote = true;
           continue;
@@ -2611,6 +2611,10 @@
     };
   }
   function writeMappedWorld(pose, bone, world) {
+    if (pose.skeleton.inherit[bone] === "noRotationOrReflection") {
+      setWorldOverride(pose, bone, world);
+      return;
+    }
     const parent = pose.skeleton.parent[bone];
     const local = createAffine();
     if (parent < 0) local.set(world);
@@ -6660,7 +6664,7 @@ void main() {
             const curve = spineBoneCurve(k, next, 0, value, nextValue, DEG);
             return { time, value, ...curve === void 0 ? {} : { curve } };
           });
-          timelines.push({ kind: "rotate", path: boneName, keys: keys2 });
+          timelines.push({ kind: "rotate", path: boneName, keys: keys2, rawRotation: true });
         }
         if (arr(ch.translate).length > 0) {
           for (const axis of ["x", "y"]) {
@@ -8734,6 +8738,29 @@ void main() {
       this.rootDisplacementY = 0;
       const step = (h) => {
         if (this.animationState !== null) {
+          if (this.animationState.tracks.some((track) => track.clip.timelines.length > 0)) {
+            const bones = /* @__PURE__ */ new Set();
+            for (const constraint of this.asset.constraints ?? []) {
+              if (constraint.kind === "transform" || constraint.kind === "path") {
+                for (const bone of constraint.bones ?? [constraint.bone]) bones.add(bone);
+              } else if (constraint.kind === "ik") {
+                let bone = constraint.bone;
+                for (let i = 0; i < constraint.chainLength && bone >= 0; i++) {
+                  bones.add(bone);
+                  bone = pose.skeleton.parent[bone];
+                }
+              }
+            }
+            for (const bone of bones) {
+              const offset = bone * POSE_STRIDE;
+              pose.local.set(pose.skeleton.setupLocal.subarray(offset, offset + POSE_STRIDE), offset);
+              pose.overrideActive[bone] = 0;
+            }
+            if (bones.size > 0) {
+              markAllDirty(pose);
+              pose.version += 1;
+            }
+          }
           this.lastAnimation = this.animationState.update(h);
           if (this.lastAnimation.drawOrder !== void 0 && this.lastAnimation.drawOrder.length === slotSet.slots.length) {
             slotSet.drawOrder.length = 0;

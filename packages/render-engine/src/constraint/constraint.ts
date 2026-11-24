@@ -1213,6 +1213,12 @@ function transformTargetValues(pose: Pose, c: TransformConstraint): TransformTar
 // Preserve shearX while factoring the constrained matrix into Spine's angular
 // shear channels (the X axis is rotation + shearX, not rotation + atan(shearY)).
 function writeMappedWorld(pose: Pose, bone: number, world: Float64Array): void {
+  // Non-normal inheritance does not use a fixed parent basis: its linear part
+  // depends on the child's rotation. Preserve the constrained world matrix.
+  if (pose.skeleton.inherit[bone] === 'noRotationOrReflection') {
+    setWorldOverride(pose, bone, world)
+    return
+  }
   const parent = pose.skeleton.parent[bone]!
   const local = createAffine()
   if (parent < 0) local.set(world)

@@ -1576,7 +1576,7 @@ function readSpineAnimations(
           const curve = spineBoneCurve(k, next, 0, value, nextValue, DEG)
           return { time, value, ...(curve === undefined ? {} : { curve }) }
         })
-        timelines.push({ kind: 'rotate', path: boneName, keys })
+        timelines.push({ kind: 'rotate', path: boneName, keys, rawRotation: true })
       }
       if (arr(ch.translate).length > 0) {
         for (const axis of ['x', 'y'] as const) {

@@ -987,6 +987,28 @@ export class Engine {
     this.rootDisplacementY = 0
     const step = (h: number): void => {
       if (this.animationState !== null) {
+        // Only non-physical constraints write solved values back into local channels.
+        // Restore their inputs before sampling so unkeyed bones do not feed back each frame.
+        if (this.animationState.tracks.some(track => track.clip.timelines.length > 0)) {
+          const bones = new Set<number>()
+          for (const constraint of this.asset!.constraints ?? []) {
+            if (constraint.kind === 'transform' || constraint.kind === 'path') {
+              for (const bone of constraint.bones ?? [constraint.bone]) bones.add(bone)
+            } else if (constraint.kind === 'ik') {
+              let bone = constraint.bone
+              for (let i = 0; i < constraint.chainLength && bone >= 0; i++) {
+                bones.add(bone)
+                bone = pose.skeleton.parent[bone]!
+              }
+            }
+          }
+          for (const bone of bones) {
+            const offset = bone * POSE_STRIDE
+            pose.local.set(pose.skeleton.setupLocal.subarray(offset, offset + POSE_STRIDE), offset)
+            pose.overrideActive[bone] = 0
+          }
+          if (bones.size > 0) { markAllDirty(pose); pose.version += 1 }
+        }
         this.lastAnimation = this.animationState.update(h)
         if (this.lastAnimation.drawOrder !== undefined && this.lastAnimation.drawOrder.length === slotSet.slots.length) {
           slotSet.drawOrder.length = 0

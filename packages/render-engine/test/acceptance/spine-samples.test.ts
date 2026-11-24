@@ -74,4 +74,34 @@ suite('official Spine sample assets', () => {
       engine.dispose()
     })
   }
+
+  it('spineboy animations keep bone matrices and vertices bounded during playback', () => {
+    const dir = join(ROOT, 'spineboy')
+    const asset = importSpine(JSON.parse(readFileSync(join(dir, 'spineboy-pro.json'), 'utf8')),
+      { atlas: importSpineAtlas(readFileSync(join(dir, 'spineboy.atlas'), 'utf8')), unitScale: 0.01, sourceYDown: false })
+    const engine = new Engine({ backend: 'cpu' })
+    engine.load(asset)
+    try {
+      for (const name of asset.animations.keys()) {
+        engine.load(asset)
+        engine.play(name)
+        for (let frame = 0; frame < 150; frame++) {
+          try { engine.update(1 / 60) } catch (error) {
+            throw new Error(`${name} frame ${frame}: ${String(error)}`)
+          }
+          const invalid = engine.pose.world.findIndex(value => !Number.isFinite(value) || Math.abs(value) > 100)
+          if (invalid >= 0) throw new Error(`${name} frame ${frame}: ${engine.skeleton.bones[Math.floor(invalid / 6)]?.name} world[${invalid}] = ${engine.pose.world[invalid]}`)
+          if (frame === 2 && (name === 'run' || name === 'hoverboard')) {
+            const tip = asset.skeleton.boneIdByName.get('back-foot-tip')!
+            expect(engine.pose.world[tip * 6]).toBeCloseTo(name === 'run' ? -0.0547 : 0.9996, 2)
+          }
+          if (frame % 30 === 0) {
+            for (const packet of engine.render().packets) {
+              expect(Array.from(packet.positions).every(value => Number.isFinite(value) && Math.abs(value) < 100)).toBe(true)
+            }
+          }
+        }
+      }
+    } finally { engine.dispose() }
+  })
 })
