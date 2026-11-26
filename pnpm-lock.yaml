@@ -52,6 +52,16 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/spider-demo:
+    dependencies:
+      '@animation-framework/render-engine':
+        specifier: workspace:*
+        version: link:../render-engine
+    devDependencies:
+      esbuild:
+        specifier: ^0.28.2
+        version: 0.28.2
+
   preview:
     dependencies:
       '@animation-framework/render-engine':

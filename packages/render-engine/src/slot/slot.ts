@@ -119,7 +119,10 @@ export function resolveAttachment(set: SlotSet, slotIndex: number): Attachment |
   const slot = set.slots[slotIndex]
   if (!slot || slot.attachmentId === null) return null
   const skin = set.skins.get(slot.skinId)
-  return skin?.attachments.get(slot.attachmentId) ?? null
+  // Spine attachment names are local to each slot. The unqualified lookup
+  // remains a fallback for native assets that use a flat attachment map.
+  return skin?.attachments.get(`${slot.data.id}\u0000${slot.attachmentId}`)
+    ?? skin?.attachments.get(slot.attachmentId) ?? null
 }
 
 /** region/mesh/weightedMesh 产生渲染几何；其余附件只参与逻辑。 */

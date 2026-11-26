@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chibi Stickers · 关节实验室</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header><a class="brand" href="/">C<span>✳</span></a><div><div class="eyebrow">CHARACTER LAB / 01</div><h1>Chibi Stickers <span>关节实验室</span></h1></div><a class="source" href="https://github.com/EsotericSoftware/spine-runtimes/tree/4.2/examples/chibi-stickers" target="_blank" rel="noreferrer">官方素材 ↗</a></header>
+  <main>
+    <section class="workspace" aria-label="角色预览">
+      <div class="stage-top"><span class="live-dot"></span><span id="character-name">CHIBI STICKERS</span><span class="version">SPINE 4.2</span></div>
+      <div id="stage"><canvas id="character" aria-label="蒙皮渲染"></canvas><canvas id="overlay" aria-label="骨架与网格叠加"></canvas><div id="status" role="status">正在载入官方素材…</div><div class="axis"><span>Y ↑</span><span>└ X →</span></div></div>
+      <div class="stage-bottom"><span>拖动平移 · 滚轮缩放 · 点击骨骼选中关节</span><button id="fit" disabled>适应画布 ⤢</button></div>
+      <div class="layers"><span class="caption">显示图层</span><label><input type="checkbox" id="show-skeleton"><i class="swatch bone"></i>骨架</label><label><input type="checkbox" id="show-skin" checked><i class="swatch skin"></i>蒙皮</label><label><input type="checkbox" id="show-mesh"><i class="swatch mesh"></i>网格</label><span id="stats"></span></div>
+    </section>
+    <aside>
+      <section class="settings"><div class="section-title"><h2>角色与姿态</h2><span>01</span></div><label class="field" for="skin">角色皮肤<select id="skin" disabled></select></label><label class="field" for="animation">动作参考<select id="animation" disabled></select></label><div class="actions"><button id="play" disabled>播放动作</button><button id="reset" disabled>重置姿态 ↺</button></div><p class="hint">调整关节时自动暂停动作，保留当前姿态。角度为相对当前动作姿态的偏移。</p></section>
+      <section class="joint-panel"><div class="section-title"><h2>关节角度</h2><span id="joint-count">02</span></div><input id="search" type="search" placeholder="搜索关节名称…" aria-label="搜索关节"><div id="controls"></div><p id="empty" hidden>没有匹配的关节</p></section>
+    </aside>
+  </main>
+  <footer><span>RENDERED WITH <b>render-engine</b> / WEBGL2</span><span>Artwork © Esoteric Software · <a href="http://en.esotericsoftware.com/spine-examples-chibi-stickers" target="_blank" rel="noreferrer">Chibi Stickers</a></span></footer>
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

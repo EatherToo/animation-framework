@@ -1,0 +1,157 @@
+{
+  "repository": "https://github.com/EsotericSoftware/spine-runtimes",
+  "branch": "4.2",
+  "commit": "5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c",
+  "exportPath": "examples/chibi-stickers/export",
+  "alpha": "straight",
+  "hashAlgorithm": "sha256",
+  "summary": {
+    "spine": "4.2.22",
+    "skins": [
+      "default",
+      "erikari",
+      "harri",
+      "luke",
+      "mario",
+      "misaki",
+      "nate",
+      "sinisa",
+      "soeren",
+      "spineboy"
+    ],
+    "animations": [
+      "emotes/angry",
+      "emotes/burp",
+      "emotes/confused",
+      "emotes/crying",
+      "emotes/dead",
+      "emotes/determined",
+      "emotes/dramatic-stare",
+      "emotes/excited",
+      "emotes/fawning",
+      "emotes/flushed",
+      "emotes/hooray",
+      "emotes/idea",
+      "emotes/just-right",
+      "emotes/laugh",
+      "emotes/love",
+      "emotes/scared",
+      "emotes/see-no-evil",
+      "emotes/shrug",
+      "emotes/sulk",
+      "emotes/sweat",
+      "emotes/thinking",
+      "emotes/tongue-out",
+      "emotes/wave",
+      "movement/idle-back",
+      "movement/idle-front",
+      "movement/idle-left",
+      "movement/idle-right",
+      "movement/trot-back",
+      "movement/trot-front",
+      "movement/trot-left",
+      "movement/trot-right"
+    ],
+    "bones": 44,
+    "slots": 61,
+    "constraints": {
+      "ik": 2,
+      "transform": 1,
+      "path": 0,
+      "physics": 0
+    }
+  },
+  "files": [
+    {
+      "name": "chibi-stickers.atlas",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers.atlas",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers.atlas",
+      "bytes": 8142,
+      "sha256": "10c79bd5631566859b6fee1b2e2f2365fa6e72ab8370bae6c897fc263f32b80a"
+    },
+    {
+      "name": "chibi-stickers.json",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers.json",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers.json",
+      "bytes": 246386,
+      "sha256": "9d4125c494f06dd1032c47d419b3f78c055ac911c1c377e69122700568050cd8"
+    },
+    {
+      "name": "chibi-stickers.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers.png",
+      "bytes": 47373,
+      "sha256": "1c0e9ad98b44f4414cd72c9aa8b7f9deb91851272b220243843383963a138bb7"
+    },
+    {
+      "name": "chibi-stickers_2.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_2.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_2.png",
+      "bytes": 138490,
+      "sha256": "8e0d31a5b7013eee9db1131d1a9f8475a3f2aa06c49e95d8782e13863c272e52"
+    },
+    {
+      "name": "chibi-stickers_3.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_3.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_3.png",
+      "bytes": 50960,
+      "sha256": "a618703c1d33839e802dfe81558d71790eeeafb5cba64d95f7b5781cec26039a"
+    },
+    {
+      "name": "chibi-stickers_4.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_4.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_4.png",
+      "bytes": 100994,
+      "sha256": "13e951f561827099e5599afcccfda1a73be2e816b864cfc1969991b2734b2a48"
+    },
+    {
+      "name": "chibi-stickers_5.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_5.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_5.png",
+      "bytes": 58600,
+      "sha256": "75299d55104ca1a0fb308ea07c6ae306e4b78afa1c3d03cfbaa2e29d3d99df8b"
+    },
+    {
+      "name": "chibi-stickers_6.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_6.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_6.png",
+      "bytes": 87671,
+      "sha256": "5fd38caacba0039ba42d0ec3af578fa09cb2c0c7237b44bf67a0ad1b693b1e4f"
+    },
+    {
+      "name": "chibi-stickers_7.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_7.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_7.png",
+      "bytes": 55118,
+      "sha256": "5cffce4704f54d5fafb07295de6f90d9c733526d7baa36bf91681b93bb63f5c7"
+    },
+    {
+      "name": "chibi-stickers_8.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_8.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_8.png",
+      "bytes": 45347,
+      "sha256": "ea8cacce900119adf7e9868b88a2b113582ccebd46a175112bdefdc6ce18aab6"
+    },
+    {
+      "name": "chibi-stickers_9.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_9.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_9.png",
+      "bytes": 68032,
+      "sha256": "f07948ce1d8feb6e776dbeb1c57c3730247a146db9f145130de049f41b637e89"
+    },
+    {
+      "name": "chibi-stickers_10.png",
+      "sourcePath": "examples/chibi-stickers/export/chibi-stickers_10.png",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/examples/chibi-stickers/export/chibi-stickers_10.png",
+      "bytes": 73010,
+      "sha256": "1b3d499c1f8b9439ae602e220b87559aae12e328cbf280d88598ea663dc7ab39"
+    },
+    {
+      "name": "LICENSE",
+      "sourcePath": "LICENSE",
+      "url": "https://raw.githubusercontent.com/EsotericSoftware/spine-runtimes/5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c/LICENSE",
+      "bytes": 1469,
+      "sha256": "b9d50158f6c23a704d123fd0200cc00633a693ccf9b0aacb15e5d5b9cf6c0d58"
+    }
+  ]
+}

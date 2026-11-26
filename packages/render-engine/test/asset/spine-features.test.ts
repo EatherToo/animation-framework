@@ -76,8 +76,13 @@ function spineFeaturesFixture(): Record<string, unknown> {
           },
         },
         linkSlot: {
+          // Spine linkedmesh 的父附件必须属于同一 slot。
+          linkParent: {
+            type: 'mesh', path: 'body', uvs: [0, 0, 1, 0, 1, 1, 0, 1],
+            triangles: [0, 1, 2, 0, 2, 3], vertices: [0, 0, 10, 0, 10, 10, 0, 10],
+          },
           link: {
-            type: 'linkedmesh', parent: 'bodyMesh', path: 'link',
+            type: 'linkedmesh', parent: 'linkParent', path: 'link',
             vertices: [0, 0, 5, 0, 5, 5, 0, 5],
           },
         },
@@ -193,8 +198,8 @@ describe('M11 Spine: 附件全类型解析', () => {
   })
 
   it('linkedmesh 复用父拓扑与 UV，应用自身 vertices', () => {
-    const link = attachments.get('link')!
-    const parent = attachments.get('bodyMesh')!
+    const link = attachments.get('linkSlot\u0000link')!
+    const parent = attachments.get('linkSlot\u0000linkParent')!
     expect(link.kind).toBe('mesh')
     expect(parent.kind).toBe('mesh')
     if (link.kind === 'mesh' && parent.kind === 'mesh') {

@@ -1,0 +1,2810 @@
+{
+  "version": 1,
+  "sourceCommit": "5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c",
+  "skeleton": "common/skeleton.json",
+  "width": 1024,
+  "height": 1264,
+  "padding": 2,
+  "regions": [
+    {
+      "name": "common/angry-mark",
+      "file": "common/angry-mark.png",
+      "width": 42,
+      "height": 41,
+      "x": 342,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 278,
+        "y": 85,
+        "width": 42,
+        "height": 41,
+        "rotate": 0
+      },
+      "sha256": "010be606bd3a580e844cb07455d0f39f6b1bf63175330ca5bce22d85309bda1e"
+    },
+    {
+      "name": "common/big-purple-fear",
+      "file": "common/big-purple-fear.png",
+      "width": 134,
+      "height": 72,
+      "x": 46,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 2,
+        "y": 54,
+        "width": 134,
+        "height": 72,
+        "rotate": 0
+      },
+      "sha256": "cd2a1b0e56c5f0b1f314c4cdd2f82f61eacfe628b24f1df6f3b9fc6ab774f247"
+    },
+    {
+      "name": "common/big-tear",
+      "file": "common/big-tear.png",
+      "width": 33,
+      "height": 82,
+      "x": 805,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 138,
+        "y": 93,
+        "width": 33,
+        "height": 82,
+        "rotate": 90
+      },
+      "sha256": "79ef08895bab9b91aef192ec3212c29a746d0919c8b1b87f866574c7c8480bf4"
+    },
+    {
+      "name": "common/eye-3",
+      "file": "common/eye-3.png",
+      "width": 15,
+      "height": 26,
+      "x": 725,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 226,
+        "y": 25,
+        "width": 15,
+        "height": 26,
+        "rotate": 0
+      },
+      "sha256": "48f5e81527e2da4288f5b678655f3ec9d2d49172d1e1168095091014fb38b09e"
+    },
+    {
+      "name": "common/eye-closed-happy",
+      "file": "common/eye-closed-happy.png",
+      "width": 25,
+      "height": 9,
+      "x": 279,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 267,
+        "y": 7,
+        "width": 25,
+        "height": 9,
+        "rotate": 90
+      },
+      "sha256": "819613964c924cd8439f6b7bff67620eb71566d5d20494933eac1d1b42e398f9"
+    },
+    {
+      "name": "common/eye-dafault",
+      "file": "common/eye-dafault.png",
+      "width": 22,
+      "height": 21,
+      "x": 2,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 203,
+        "y": 20,
+        "width": 22,
+        "height": 21,
+        "rotate": 90
+      },
+      "sha256": "dd951e93275259a80593ff08150535b3b66f4decac60b22e29c57772371b2a4b"
+    },
+    {
+      "name": "common/eye-equal",
+      "file": "common/eye-equal.png",
+      "width": 25,
+      "height": 15,
+      "x": 730,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 308,
+        "y": 43,
+        "width": 25,
+        "height": 15,
+        "rotate": 0
+      },
+      "sha256": "4470ef6da9f50d2eab3bf56ee298ef25bf1a5a97d014d2fcd0d2fa7d180bf8b5"
+    },
+    {
+      "name": "common/eye-fire",
+      "file": "common/eye-fire.png",
+      "width": 26,
+      "height": 28,
+      "x": 497,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 278,
+        "y": 57,
+        "width": 26,
+        "height": 28,
+        "rotate": 90
+      },
+      "sha256": "83b68adbbe6b4023ab12f4ba92eb77566081c55fe21db9272d6d6c713e70bfe8"
+    },
+    {
+      "name": "common/eye-half-open",
+      "file": "common/eye-half-open.png",
+      "width": 26,
+      "height": 16,
+      "x": 601,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 138,
+        "y": 2,
+        "width": 26,
+        "height": 16,
+        "rotate": 0
+      },
+      "sha256": "37be278e2c0a152abd0a994895f405c7cadae2ba29130adb8065bbfb88d24a3e"
+    },
+    {
+      "name": "common/eye-heart",
+      "file": "common/eye-heart.png",
+      "width": 26,
+      "height": 23,
+      "x": 744,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 308,
+        "y": 60,
+        "width": 26,
+        "height": 23,
+        "rotate": 0
+      },
+      "sha256": "8d9669a3f6f7f22c6a45c5fd2c3d37cc47f6d88519782da04a7b201df91e5f13"
+    },
+    {
+      "name": "common/eye-reverse-v",
+      "file": "common/eye-reverse-v.png",
+      "width": 26,
+      "height": 16,
+      "x": 631,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 166,
+        "y": 2,
+        "width": 26,
+        "height": 16,
+        "rotate": 0
+      },
+      "sha256": "10e667b4a88b3fb738897bdb91d75ed31745c6eb38a2f5d1b2835bc7b0de4d38"
+    },
+    {
+      "name": "common/eye-sideway-v",
+      "file": "common/eye-sideway-v.png",
+      "width": 21,
+      "height": 23,
+      "x": 801,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 336,
+        "y": 60,
+        "width": 21,
+        "height": 23,
+        "rotate": 0
+      },
+      "sha256": "c47768cbd10fa8be2d2c35320fe8a32d4b303be8ba8b554801aead59e57d6b44"
+    },
+    {
+      "name": "common/eye-slant-close",
+      "file": "common/eye-slant-close.png",
+      "width": 23,
+      "height": 16,
+      "x": 661,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 194,
+        "y": 2,
+        "width": 23,
+        "height": 16,
+        "rotate": 0
+      },
+      "sha256": "5a8604626b2beb747d660017d4e34ab7ce0948ffb14349e8b7e23fade272cad6"
+    },
+    {
+      "name": "common/eye-small-dot",
+      "file": "common/eye-small-dot.png",
+      "width": 15,
+      "height": 15,
+      "x": 759,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 119,
+        "y": 2,
+        "width": 15,
+        "height": 15,
+        "rotate": 0
+      },
+      "sha256": "f647d64ba19973838abb7c4eb46050cfddb6ff960a98657fe26e6546ca8101a0"
+    },
+    {
+      "name": "common/eye-sparkle",
+      "file": "common/eye-sparkle.png",
+      "width": 30,
+      "height": 29,
+      "x": 411,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 372,
+        "y": 97,
+        "width": 30,
+        "height": 29,
+        "rotate": 0
+      },
+      "sha256": "1084092c975ed2e6f130aed1505bb3a2b5106f8f46635acfabe9b9ff6ce6e7b9"
+    },
+    {
+      "name": "common/eye-star",
+      "file": "common/eye-star.png",
+      "width": 29,
+      "height": 27,
+      "x": 581,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 404,
+        "y": 99,
+        "width": 29,
+        "height": 27,
+        "rotate": 0
+      },
+      "sha256": "22eb48cb494bf4dabd4719f137cf21377fb8dd821cfb33b289918065cd43413d"
+    },
+    {
+      "name": "common/eye-twirl",
+      "file": "common/eye-twirl.png",
+      "width": 21,
+      "height": 23,
+      "x": 826,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 226,
+        "y": 2,
+        "width": 21,
+        "height": 23,
+        "rotate": 90
+      },
+      "sha256": "3843ee8ad4bdfe93085a5c2fd67a20d9e076d3d398e724e5badc6c4884355b28"
+    },
+    {
+      "name": "common/eye-u",
+      "file": "common/eye-u.png",
+      "width": 24,
+      "height": 17,
+      "x": 553,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 2,
+        "y": 2,
+        "width": 24,
+        "height": 17,
+        "rotate": 0
+      },
+      "sha256": "11c706b973898dac7fb4dbc2ed1b7567d7909486dd02350ff42f9289b4e3e6b5"
+    },
+    {
+      "name": "common/eye-x",
+      "file": "common/eye-x.png",
+      "width": 25,
+      "height": 22,
+      "x": 903,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 176,
+        "y": 20,
+        "width": 25,
+        "height": 22,
+        "rotate": 0
+      },
+      "sha256": "50f5c8951d12c61718ba67c145067c8875a4938849e1cdb91e5fff019d8ef4ea"
+    },
+    {
+      "name": "common/lamp",
+      "file": "common/lamp.png",
+      "width": 47,
+      "height": 65,
+      "x": 136,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 138,
+        "y": 44,
+        "width": 47,
+        "height": 65,
+        "rotate": 90
+      },
+      "sha256": "90c18a89b6234c6b272d4f5630de33657623398586be00a4e406fb2fa9f0464e"
+    },
+    {
+      "name": "common/mouth-3",
+      "file": "common/mouth-3.png",
+      "width": 15,
+      "height": 28,
+      "x": 527,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 89,
+        "y": 2,
+        "width": 15,
+        "height": 28,
+        "rotate": 90
+      },
+      "sha256": "f3a4dfbec4733e1590de58fe85e85f3e791a672a86fbc60f893c2d4e9d38f8fa"
+    },
+    {
+      "name": "common/mouth-bracket",
+      "file": "common/mouth-bracket.png",
+      "width": 34,
+      "height": 11,
+      "x": 159,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 322,
+        "y": 85,
+        "width": 34,
+        "height": 11,
+        "rotate": 0
+      },
+      "sha256": "80214d731f3d0f001c883d31bc0b79aef4a182d830dba2b708df4120d95d4da1"
+    },
+    {
+      "name": "common/mouth-doubt",
+      "file": "common/mouth-doubt.png",
+      "width": 26,
+      "height": 15,
+      "x": 700,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 243,
+        "y": 34,
+        "width": 26,
+        "height": 15,
+        "rotate": 0
+      },
+      "sha256": "8d0c2535db5f9e3cdf12dcc26c518f970f832c89ba18c5484cf0d3e54694f277"
+    },
+    {
+      "name": "common/mouth-fangs",
+      "file": "common/mouth-fangs.png",
+      "width": 39,
+      "height": 14,
+      "x": 778,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 205,
+        "y": 52,
+        "width": 39,
+        "height": 14,
+        "rotate": 90
+      },
+      "sha256": "e6cfd758e707b24e94ae49afa7b34fc231432fc2994ad9acaba007a72a9f686f"
+    },
+    {
+      "name": "common/mouth-line",
+      "file": "common/mouth-line.png",
+      "width": 36,
+      "height": 7,
+      "x": 308,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 435,
+        "y": 96,
+        "width": 36,
+        "height": 7,
+        "rotate": 0
+      },
+      "sha256": "0cb5640680f3bf472f102cbaaec770c3d6e8335d38fb69c43a85776c5e1d4fe1"
+    },
+    {
+      "name": "common/mouth-neutral",
+      "file": "common/mouth-neutral.png",
+      "width": 27,
+      "height": 12,
+      "x": 926,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 245,
+        "y": 51,
+        "width": 27,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "84b14ea32606eddf3aff661374a4a55613ce07f9d3c2ef70674afff42d9524cf"
+    },
+    {
+      "name": "common/mouth-o-tall",
+      "file": "common/mouth-o-tall.png",
+      "width": 22,
+      "height": 33,
+      "x": 147,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 221,
+        "y": 53,
+        "width": 22,
+        "height": 33,
+        "rotate": 0
+      },
+      "sha256": "5d6db633eb5d9d1ab405097b20ca35cc0f848afecea9bd1b11a036a45276cc33"
+    },
+    {
+      "name": "common/mouth-open-smile",
+      "file": "common/mouth-open-smile.png",
+      "width": 36,
+      "height": 22,
+      "x": 863,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 138,
+        "y": 20,
+        "width": 36,
+        "height": 22,
+        "rotate": 0
+      },
+      "sha256": "1fa5782aa4c1a9a0e28ae6a237a639b5ed409783bf26c503cbb16fc25f8dcd37"
+    },
+    {
+      "name": "common/mouth-rectangle",
+      "file": "common/mouth-rectangle.png",
+      "width": 35,
+      "height": 21,
+      "x": 932,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 435,
+        "y": 105,
+        "width": 35,
+        "height": 21,
+        "rotate": 0
+      },
+      "sha256": "84c7cf302e1289758580bc23be131bd78ea50c99c8a6b8cb819cec5274b3dc08"
+    },
+    {
+      "name": "common/mouth-reverse-v",
+      "file": "common/mouth-reverse-v.png",
+      "width": 27,
+      "height": 10,
+      "x": 248,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 473,
+        "y": 95,
+        "width": 27,
+        "height": 10,
+        "rotate": 0
+      },
+      "sha256": "363472ca837fd39aa02825ad94701decd582992f3f21d34d8752262d581e06f0"
+    },
+    {
+      "name": "common/mouth-s",
+      "file": "common/mouth-s.png",
+      "width": 41,
+      "height": 11,
+      "x": 114,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 28,
+        "y": 8,
+        "width": 41,
+        "height": 11,
+        "rotate": 0
+      },
+      "sha256": "f65069a2698c0020eaa5c6af12e7703068e6e0fa24a466dfcb26301d6c08bc6f"
+    },
+    {
+      "name": "common/mouth-smile-little",
+      "file": "common/mouth-smile-little.png",
+      "width": 33,
+      "height": 19,
+      "x": 159,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 117,
+        "y": 19,
+        "width": 33,
+        "height": 19,
+        "rotate": 90
+      },
+      "sha256": "508b0904eda03ae2db79d1dbc7b81e6e0b017d78f01d92a55236c991d2042a51"
+    },
+    {
+      "name": "common/mouth-toungue-sticking-out",
+      "file": "common/mouth-toungue-sticking-out.png",
+      "width": 31,
+      "height": 21,
+      "x": 971,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 245,
+        "y": 65,
+        "width": 31,
+        "height": 21,
+        "rotate": 0
+      },
+      "sha256": "e3960ca62cef7e388bbd92bdc652e12ec5b97e8d6da2424e606c494b8e11a484"
+    },
+    {
+      "name": "common/mouth-u",
+      "file": "common/mouth-u.png",
+      "width": 36,
+      "height": 19,
+      "x": 119,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 472,
+        "y": 107,
+        "width": 36,
+        "height": 19,
+        "rotate": 0
+      },
+      "sha256": "e1608af191988bbfa0079956294e0d5136d800100387379687418d2e473f5c0e"
+    },
+    {
+      "name": "common/mouth-v",
+      "file": "common/mouth-v.png",
+      "width": 27,
+      "height": 14,
+      "x": 821,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 251,
+        "y": 5,
+        "width": 27,
+        "height": 14,
+        "rotate": 90
+      },
+      "sha256": "95439ea5cd5e4cc1314298512607bdfb0e93be5ddb877cf7bc83ac91eb97ba5d"
+    },
+    {
+      "name": "common/mouth-x",
+      "file": "common/mouth-x.png",
+      "width": 21,
+      "height": 20,
+      "x": 28,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 335,
+        "y": 38,
+        "width": 21,
+        "height": 20,
+        "rotate": 0
+      },
+      "sha256": "a442cf6d65978ba72fde865ee703579d3bc12bad2079903ff9e23551bf8b5021"
+    },
+    {
+      "name": "common/purple-fear-lines",
+      "file": "common/purple-fear-lines.png",
+      "width": 48,
+      "height": 28,
+      "x": 445,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 322,
+        "y": 98,
+        "width": 48,
+        "height": 28,
+        "rotate": 0
+      },
+      "sha256": "361959acb0edc3b294a08e1251b58b44971edacdbfddbe354eb43616edc2326a"
+    },
+    {
+      "name": "common/shadow",
+      "file": "common/shadow.png",
+      "width": 113,
+      "height": 31,
+      "x": 173,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 2,
+        "y": 21,
+        "width": 113,
+        "height": 31,
+        "rotate": 0
+      },
+      "sha256": "f6b3d77eac62b653577fef4ecb9886c840ec216c4366af46082559651c3e18b2"
+    },
+    {
+      "name": "common/small-dash",
+      "file": "common/small-dash.png",
+      "width": 9,
+      "height": 20,
+      "x": 53,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 404,
+        "y": 88,
+        "width": 9,
+        "height": 20,
+        "rotate": 90
+      },
+      "sha256": "66c4877619292644b54051eae24060f33e7f65aa7c5cfa4eaa47e2a49af1e4f8"
+    },
+    {
+      "name": "common/small-drop-line",
+      "file": "common/small-drop-line.png",
+      "width": 16,
+      "height": 17,
+      "x": 581,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 71,
+        "y": 2,
+        "width": 16,
+        "height": 17,
+        "rotate": 0
+      },
+      "sha256": "b1740080ec24c5f854b71eb665f760bcf7b10333029ebd0a9a512a8cd57d89fe"
+    },
+    {
+      "name": "common/small-purple-fear",
+      "file": "common/small-purple-fear.png",
+      "width": 54,
+      "height": 38,
+      "x": 646,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 222,
+        "y": 88,
+        "width": 54,
+        "height": 38,
+        "rotate": 0
+      },
+      "sha256": "140feb2674d3292ed3a69e42be6933182cdc34f4d1a2f15a99e1795c7e676907"
+    },
+    {
+      "name": "common/tear",
+      "file": "common/tear.png",
+      "width": 20,
+      "height": 19,
+      "x": 196,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers.png",
+        "x": 274,
+        "y": 36,
+        "width": 20,
+        "height": 19,
+        "rotate": 0
+      },
+      "sha256": "f94c11c310e90f6a95d88051fb24deca7a9a61803201c4ffe64d1407405a8cc1"
+    },
+    {
+      "name": "erikari/arm",
+      "file": "erikari/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 2,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 981,
+        "y": 164,
+        "width": 28,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "d682f71f1aa969c4233f7f579cf074f134820f1eddd3754007ac2659e2c30eea"
+    },
+    {
+      "name": "erikari/arm-shoulder-decoration",
+      "file": "erikari/arm-shoulder-decoration.png",
+      "width": 32,
+      "height": 43,
+      "x": 2,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 790,
+        "y": 149,
+        "width": 32,
+        "height": 43,
+        "rotate": 0
+      },
+      "sha256": "bbb1248b5327a0f2d0f615c5b06a23161b4805c97fd3dd794ef643e343d23b63"
+    },
+    {
+      "name": "erikari/back-hair",
+      "file": "erikari/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 765,
+      "y": 2,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 258,
+        "y": 113,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "edefb9636968b030f125b75ab31702bca64b82f0e0c56b37951afb90d4feabbc"
+    },
+    {
+      "name": "erikari/back-hair-long",
+      "file": "erikari/back-hair-long.png",
+      "width": 220,
+      "height": 254,
+      "x": 2,
+      "y": 2,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 2,
+        "y": 34,
+        "width": 220,
+        "height": 254,
+        "rotate": 90
+      },
+      "sha256": "15748d4224043acb5e5219f694eecd49d6ccc33aed3015de9204649dca43bbfc"
+    },
+    {
+      "name": "erikari/blush",
+      "file": "erikari/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 220,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 981,
+        "y": 133,
+        "width": 29,
+        "height": 18,
+        "rotate": 90
+      },
+      "sha256": "36307c396f32761655645850437a3f433c8e53456001f9ec64e4b6313671562f"
+    },
+    {
+      "name": "erikari/body",
+      "file": "erikari/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 685,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 584,
+        "y": 115,
+        "width": 70,
+        "height": 98,
+        "rotate": 0
+      },
+      "sha256": "bdd1aabaff7ed718de0fad58b5f6cb31e7e3be4ac2ebe9af0afaf8610fd695da"
+    },
+    {
+      "name": "erikari/bracelet",
+      "file": "erikari/bracelet.png",
+      "width": 33,
+      "height": 11,
+      "x": 197,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 1011,
+        "y": 221,
+        "width": 33,
+        "height": 11,
+        "rotate": 90
+      },
+      "sha256": "def41065d54a5ed895cdc30840e0506cc262b15f5babf19769e763e5f67349a6"
+    },
+    {
+      "name": "erikari/collar",
+      "file": "erikari/collar.png",
+      "width": 61,
+      "height": 62,
+      "x": 187,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 390,
+        "y": 48,
+        "width": 61,
+        "height": 62,
+        "rotate": 0
+      },
+      "sha256": "781390bc2139c29107192b4e46ea1c985786f274ece35b3e58514af88ce5d62e"
+    },
+    {
+      "name": "erikari/ear",
+      "file": "erikari/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 38,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 258,
+        "y": 2,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "cfd9a0d39d9887c6a25472631eb50e351139dedae35e1cf8536fe781b7a28f82"
+    },
+    {
+      "name": "erikari/eyebrow",
+      "file": "erikari/eyebrow.png",
+      "width": 20,
+      "height": 12,
+      "x": 90,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 453,
+        "y": 98,
+        "width": 20,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "075aec57ad882696af6cc3a19f0c03ab33405be6fc1d306257e160e3739d7b73"
+    },
+    {
+      "name": "erikari/hair-front",
+      "file": "erikari/hair-front.png",
+      "width": 130,
+      "height": 65,
+      "x": 2,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 258,
+        "y": 46,
+        "width": 130,
+        "height": 65,
+        "rotate": 0
+      },
+      "sha256": "fd4e69aa11dfa3465495e3577a2c3aa1c5bc7ad095f9749bb21b0fa8b89f3a92"
+    },
+    {
+      "name": "erikari/hair-side",
+      "file": "erikari/hair-side.png",
+      "width": 43,
+      "height": 132,
+      "x": 207,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 656,
+        "y": 149,
+        "width": 43,
+        "height": 132,
+        "rotate": 90
+      },
+      "sha256": "71737672b35d0f162cd0afedf04f21d00b6f80cd6edec726c112e108f7f794fb"
+    },
+    {
+      "name": "erikari/hat-border",
+      "file": "erikari/hat-border.png",
+      "width": 254,
+      "height": 39,
+      "x": 388,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 418,
+        "y": 215,
+        "width": 254,
+        "height": 39,
+        "rotate": 0
+      },
+      "sha256": "ac337c58cd65b78aa089f52b4c6170e4d475b7bd4d34182df2f37a6bce602c34"
+    },
+    {
+      "name": "erikari/hat-top",
+      "file": "erikari/hat-top.png",
+      "width": 160,
+      "height": 60,
+      "x": 252,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 674,
+        "y": 194,
+        "width": 160,
+        "height": 60,
+        "rotate": 0
+      },
+      "sha256": "138827af72a4f968885810c14ac8c1f855d9223e7336b81b238f67c416d7831d"
+    },
+    {
+      "name": "erikari/head-base",
+      "file": "erikari/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 254,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 836,
+        "y": 129,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "1af2bf4612f6bcb53575e4cc25de1a80de83d1b3fcebb0c1cd131552e412e374"
+    },
+    {
+      "name": "erikari/leg",
+      "file": "erikari/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 429,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 2,
+        "y": 4,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "3959a43178793b31f575e7196d55fbc0c711c18ea482b1e592a8e51a506b28d9"
+    },
+    {
+      "name": "erikari/leg-decoration",
+      "file": "erikari/leg-decoration.png",
+      "width": 36,
+      "height": 13,
+      "x": 852,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 770,
+        "y": 134,
+        "width": 36,
+        "height": 13,
+        "rotate": 0
+      },
+      "sha256": "c5aa5353c851dff8102c0c26355e4c3e20f7658fdd6731fe2e22696211d4fa34"
+    },
+    {
+      "name": "erikari/skirt",
+      "file": "erikari/skirt.png",
+      "width": 164,
+      "height": 101,
+      "x": 228,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 418,
+        "y": 112,
+        "width": 164,
+        "height": 101,
+        "rotate": 0
+      },
+      "sha256": "d9e837f891efe514b7fd17782241e3e6b1d0b0ae49bc58d7485cc82cc7c68091"
+    },
+    {
+      "name": "erikari/strawberries-decoration",
+      "file": "erikari/strawberries-decoration.png",
+      "width": 112,
+      "height": 56,
+      "x": 686,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_2.png",
+        "x": 656,
+        "y": 91,
+        "width": 112,
+        "height": 56,
+        "rotate": 0
+      },
+      "sha256": "a7af58880cfd05d10ec380205bf20e796bf6fb45c879bbd2882c629de9a10155"
+    },
+    {
+      "name": "harri/arm",
+      "file": "harri/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 34,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 147,
+        "y": 21,
+        "width": 28,
+        "height": 90,
+        "rotate": 90
+      },
+      "sha256": "ceda9973769c9dc4956283240412b493b30c4afdad3664f0ff77ad5c1ca0ee59"
+    },
+    {
+      "name": "harri/back-hair",
+      "file": "harri/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 2,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 2,
+        "y": 107,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "067986846c7131bc9b0fd52ad44b3a90f9e7a9dd9c131534293a7e3a772d87d5"
+    },
+    {
+      "name": "harri/back-hair-long",
+      "file": "harri/back-hair-long.png",
+      "width": 40,
+      "height": 80,
+      "x": 2,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 147,
+        "y": 51,
+        "width": 40,
+        "height": 80,
+        "rotate": 90
+      },
+      "sha256": "53101690132fa55c61a10745e8bdcb2377eace21350a16294dff3368a24550a1"
+    },
+    {
+      "name": "harri/beard",
+      "file": "harri/beard.png",
+      "width": 10,
+      "height": 11,
+      "x": 234,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 2,
+        "y": 2,
+        "width": 10,
+        "height": 11,
+        "rotate": 0
+      },
+      "sha256": "a8a76d3debec80a8948abdf2be6de866829d2ea2639bc78d93e0cea5a81cffe2"
+    },
+    {
+      "name": "harri/blush",
+      "file": "harri/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 253,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 265,
+        "y": 103,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "bffcd76e0a77b7f2991f9255c1c8abf8da06dce5a9d8b717b6006966ccb013a5"
+    },
+    {
+      "name": "harri/body",
+      "file": "harri/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 759,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 307,
+        "y": 94,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "72328b5563e5a09fe9aa69311c3b68b1a4d6f2140255d15f99434d992ae237b8"
+    },
+    {
+      "name": "harri/body-decoration",
+      "file": "harri/body-decoration.png",
+      "width": 70,
+      "height": 67,
+      "x": 592,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 407,
+        "y": 97,
+        "width": 70,
+        "height": 67,
+        "rotate": 0
+      },
+      "sha256": "2a6afec37b5884ad0a8790388ef2f4b25e40d0120be115f4d786b646841f1740"
+    },
+    {
+      "name": "harri/ear",
+      "file": "harri/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 76,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 229,
+        "y": 57,
+        "width": 34,
+        "height": 42,
+        "rotate": 90
+      },
+      "sha256": "05ec5114b9119c76a28b2d4a421dd5b90d12ae3e4d330df6ff7100a13b31aa57"
+    },
+    {
+      "name": "harri/eyebrow",
+      "file": "harri/eyebrow.png",
+      "width": 22,
+      "height": 12,
+      "x": 64,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 494,
+        "y": 226,
+        "width": 22,
+        "height": 12,
+        "rotate": 90
+      },
+      "sha256": "62a693739819be8cfc3987b71608d2a9258e219ddb73e87347030f6ddd3ff50d"
+    },
+    {
+      "name": "harri/hair-front",
+      "file": "harri/hair-front.png",
+      "width": 143,
+      "height": 90,
+      "x": 760,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 2,
+        "y": 15,
+        "width": 143,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "a196d9eaaf5dc7ed2318ff0a507ab00557a708b624034eb9fe73f9ff8e430815"
+    },
+    {
+      "name": "harri/head-base",
+      "file": "harri/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 401,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 162,
+        "y": 123,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "306dd954037a459ee117d0eadce7f6b0616f1ee916c76138de78e83df9b5597e"
+    },
+    {
+      "name": "harri/leg",
+      "file": "harri/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 461,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 162,
+        "y": 93,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "14a695d0177e2591fbc7ffd5c9e5eef9fb2ee425b94f21fbfffab8174c325aaa"
+    },
+    {
+      "name": "harri/sword",
+      "file": "harri/sword.png",
+      "width": 185,
+      "height": 82,
+      "x": 473,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_3.png",
+        "x": 307,
+        "y": 166,
+        "width": 185,
+        "height": 82,
+        "rotate": 0
+      },
+      "sha256": "2aa1c2b302b5a5e3a3001586a00972d2ee8413aaa0b0fda7e0a0c52442f43a98"
+    },
+    {
+      "name": "luke/arm",
+      "file": "luke/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 66,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 930,
+        "y": 224,
+        "width": 28,
+        "height": 90,
+        "rotate": 90
+      },
+      "sha256": "0f3928f83199dbb1b93deef9f3ae3f45c5948e1a5a0431f9e09bf27a976642fc"
+    },
+    {
+      "name": "luke/arm-shoulder-decoration",
+      "file": "luke/arm-shoulder-decoration.png",
+      "width": 31,
+      "height": 27,
+      "x": 546,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 581,
+        "y": 112,
+        "width": 31,
+        "height": 27,
+        "rotate": 90
+      },
+      "sha256": "3c7175a1f99342323ee78244ca6dae69a238ff4ea8533246042d3618f8886063"
+    },
+    {
+      "name": "luke/back-hair",
+      "file": "luke/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 164,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 173,
+        "y": 111,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "db9debbfeff49d4b807d3197a9d0497d3d396ad42a61bcb14a5aa1e594406c08"
+    },
+    {
+      "name": "luke/blush",
+      "file": "luke/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 286,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 151,
+        "y": 68,
+        "width": 29,
+        "height": 18,
+        "rotate": 90
+      },
+      "sha256": "bffcd76e0a77b7f2991f9255c1c8abf8da06dce5a9d8b717b6006966ccb013a5"
+    },
+    {
+      "name": "luke/body",
+      "file": "luke/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 833,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 700,
+        "y": 123,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "86ccdc320da6ba427ecae9252b328b18438b6204e17a880cefa549039d49a155"
+    },
+    {
+      "name": "luke/eyebrow",
+      "file": "luke/eyebrow.png",
+      "width": 27,
+      "height": 12,
+      "x": 957,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 2,
+        "y": 2,
+        "width": 27,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "72da7903eabb0c2846ed66c432700271567c56bfe031634e83ec2f118206fe57"
+    },
+    {
+      "name": "luke/face-cover",
+      "file": "luke/face-cover.png",
+      "width": 169,
+      "height": 153,
+      "x": 420,
+      "y": 2,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 2,
+        "y": 99,
+        "width": 169,
+        "height": 153,
+        "rotate": 0
+      },
+      "sha256": "416067f2ba74ad41bf38a9f1deef84487a90a5f16caec9834e2b521824a4ede1"
+    },
+    {
+      "name": "luke/glasses-shadow",
+      "file": "luke/glasses-shadow.png",
+      "width": 147,
+      "height": 81,
+      "x": 842,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 2,
+        "y": 16,
+        "width": 147,
+        "height": 81,
+        "rotate": 0
+      },
+      "sha256": "2a17505670d374d9927f3d23f06fc65cc0e0b2ff98adfa64bd66d3d08e0e8a5e"
+    },
+    {
+      "name": "luke/hair-decoration",
+      "file": "luke/hair-decoration.png",
+      "width": 130,
+      "height": 107,
+      "x": 2,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 478,
+        "y": 145,
+        "width": 130,
+        "height": 107,
+        "rotate": 0
+      },
+      "sha256": "d59eb5eda73a6b75a237750228e3a0e8669d452eecbfc347f2f33f6089257159"
+    },
+    {
+      "name": "luke/hair-front",
+      "file": "luke/hair-front.png",
+      "width": 122,
+      "height": 57,
+      "x": 560,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 700,
+        "y": 195,
+        "width": 122,
+        "height": 57,
+        "rotate": 0
+      },
+      "sha256": "04b10d7b64f4752a3498d285cbc01ce9b7f1b5d85f083d807e610881305366de"
+    },
+    {
+      "name": "luke/head-base",
+      "file": "luke/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 548,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 333,
+        "y": 127,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "306dd954037a459ee117d0eadce7f6b0616f1ee916c76138de78e83df9b5597e"
+    },
+    {
+      "name": "luke/leg",
+      "file": "luke/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 493,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 478,
+        "y": 115,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "5ee240dcd9274447c008461344fd7608c2cea7fc37fed93a0a30a4586f3a28b9"
+    },
+    {
+      "name": "luke/shield",
+      "file": "luke/shield.png",
+      "width": 88,
+      "height": 104,
+      "x": 136,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 610,
+        "y": 148,
+        "width": 88,
+        "height": 104,
+        "rotate": 0
+      },
+      "sha256": "3e95eb9de883730e0d7354af51ef969b9891803860ee539647e1d41924a35af1"
+    },
+    {
+      "name": "luke/skirt",
+      "file": "luke/skirt.png",
+      "width": 81,
+      "height": 31,
+      "x": 290,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 930,
+        "y": 191,
+        "width": 81,
+        "height": 31,
+        "rotate": 0
+      },
+      "sha256": "1069b02b24a5a64ec8ad334b3a1dd09136313279dbe3f4c8cbed35495f25d25f"
+    },
+    {
+      "name": "luke/sword",
+      "file": "luke/sword.png",
+      "width": 104,
+      "height": 71,
+      "x": 184,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_4.png",
+        "x": 824,
+        "y": 181,
+        "width": 104,
+        "height": 71,
+        "rotate": 0
+      },
+      "sha256": "578bdf1b731b23233428b79d112dc0ac22b7d2b253751ff1c64a4607f9772952"
+    },
+    {
+      "name": "mario/arm",
+      "file": "mario/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 98,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 244,
+        "y": 2,
+        "width": 28,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "cf4e775b1447059290c934d2dee90afed19827755f7c077e87302fc632cf149b"
+    },
+    {
+      "name": "mario/back-hair",
+      "file": "mario/back-hair.png",
+      "width": 168,
+      "height": 148,
+      "x": 593,
+      "y": 2,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 2,
+        "y": 101,
+        "width": 168,
+        "height": 148,
+        "rotate": 0
+      },
+      "sha256": "06ddae800a67263748d7421c2ae9c0f185d00001630103d0acc3760d20abd813"
+    },
+    {
+      "name": "mario/back-hair-long",
+      "file": "mario/back-hair-long.png",
+      "width": 86,
+      "height": 91,
+      "x": 670,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 151,
+        "y": 6,
+        "width": 86,
+        "height": 91,
+        "rotate": 90
+      },
+      "sha256": "3116fd740a89cb10d96c4292788ee678477c410fa4631c448f6ac2cbf0847dfd"
+    },
+    {
+      "name": "mario/beard",
+      "file": "mario/beard.png",
+      "width": 147,
+      "height": 93,
+      "x": 372,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 2,
+        "y": 6,
+        "width": 147,
+        "height": 93,
+        "rotate": 0
+      },
+      "sha256": "16153c3d18f8a4bb422d62097d3f2953bbca57ffa45a51f8fc9c766e8e011c60"
+    },
+    {
+      "name": "mario/blush",
+      "file": "mario/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 319,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 492,
+        "y": 220,
+        "width": 29,
+        "height": 18,
+        "rotate": 90
+      },
+      "sha256": "e5bb409a07606d24f01964caf8aeaec80724e931997f3d02e3e1fc56c51321c5"
+    },
+    {
+      "name": "mario/body",
+      "file": "mario/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 907,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 317,
+        "y": 111,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "77cf1a688ded21aed9fada9390141d82182b3b896fb09283685a0882e2c8c344"
+    },
+    {
+      "name": "mario/ear",
+      "file": "mario/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 114,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 456,
+        "y": 207,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "291e5bc111e81ba92218039c7ed35186efe726407d1cda5d371dea7f69960058"
+    },
+    {
+      "name": "mario/eyebrow",
+      "file": "mario/eyebrow.png",
+      "width": 32,
+      "height": 17,
+      "x": 517,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 417,
+        "y": 164,
+        "width": 32,
+        "height": 17,
+        "rotate": 0
+      },
+      "sha256": "fd6ca5b4e027417e9f42d049d351ef9c438e23c65894d0fef70a208c4570fadf"
+    },
+    {
+      "name": "mario/hair-front",
+      "file": "mario/hair-front.png",
+      "width": 137,
+      "height": 66,
+      "x": 666,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 317,
+        "y": 183,
+        "width": 137,
+        "height": 66,
+        "rotate": 0
+      },
+      "sha256": "6ac49cfe337eb3dd3e954813f3c485e206ac63aa57e78792099436a54a7df31e"
+    },
+    {
+      "name": "mario/head-base",
+      "file": "mario/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 695,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 172,
+        "y": 124,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "d8145248e74a0314cd5d6eae2bdbbd10c16efe7eedc9ceffb28ab407a6ad97c9"
+    },
+    {
+      "name": "mario/leg",
+      "file": "mario/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 525,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_5.png",
+        "x": 172,
+        "y": 94,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "6c1f18a7273e995513769b45ab58509b867b6e275fe5a46bf4f756fd1409ee12"
+    },
+    {
+      "name": "misaki/arm",
+      "file": "misaki/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 130,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 609,
+        "y": 95,
+        "width": 28,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "a48d293a80aae7ec7c6ac2cf18d1935c6aa2f12fe195202f1fa4bad68b8948e2"
+    },
+    {
+      "name": "misaki/back-hair",
+      "file": "misaki/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 326,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 194,
+        "y": 105,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "ab5ea28834370864a8240530478d82f74c087db5e4d298159a7f7994f6e600b1"
+    },
+    {
+      "name": "misaki/back-hair-long",
+      "file": "misaki/back-hair-long.png",
+      "width": 190,
+      "height": 195,
+      "x": 226,
+      "y": 2,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 2,
+        "y": 51,
+        "width": 190,
+        "height": 195,
+        "rotate": 0
+      },
+      "sha256": "39d5fbca00168133dc1a1dddedca658d76565dac00d2990b5b535e809f759517"
+    },
+    {
+      "name": "misaki/belt",
+      "file": "misaki/belt.png",
+      "width": 76,
+      "height": 26,
+      "x": 645,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 741,
+        "y": 190,
+        "width": 76,
+        "height": 26,
+        "rotate": 0
+      },
+      "sha256": "8e6a4d941d855fc2d4769e13d8d810db4ab11d1390feadf1c5903939e64b03b6"
+    },
+    {
+      "name": "misaki/blush",
+      "file": "misaki/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 352,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 844,
+        "y": 228,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "733b9c5ca1325e14d16e6cba0760c699e6d39adb2e9271b783fb728def977be5"
+    },
+    {
+      "name": "misaki/body",
+      "file": "misaki/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 2,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 641,
+        "y": 176,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "aa943c371b298736820d923f4435d5fbf8e508fdcde4d697715b8b85f2ad4a97"
+    },
+    {
+      "name": "misaki/ear",
+      "file": "misaki/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 152,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 144,
+        "y": 7,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "42ccb4986e245edaa3d07b310c67b9d6b3874b885796b3fbcfbb54f6c099245d"
+    },
+    {
+      "name": "misaki/eyebrow",
+      "file": "misaki/eyebrow.png",
+      "width": 30,
+      "height": 12,
+      "x": 892,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 194,
+        "y": 54,
+        "width": 30,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "c792f553e68001bae96143d86b5d694ae91c7de6f9dab9540d3c6ccf4e275a58"
+    },
+    {
+      "name": "misaki/glasses",
+      "file": "misaki/glasses.png",
+      "width": 141,
+      "height": 35,
+      "x": 860,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 194,
+        "y": 68,
+        "width": 141,
+        "height": 35,
+        "rotate": 0
+      },
+      "sha256": "923772b81812aecf089a9480e3f9406dde638005fed0d5461525ff1f0a304a8f"
+    },
+    {
+      "name": "misaki/glasses-side",
+      "file": "misaki/glasses-side.png",
+      "width": 8,
+      "height": 23,
+      "x": 851,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 354,
+        "y": 111,
+        "width": 8,
+        "height": 23,
+        "rotate": 90
+      },
+      "sha256": "3337135865ea150bb6db75e57917bf12283bf066631b59185d16be0d12833078"
+    },
+    {
+      "name": "misaki/hair-front",
+      "file": "misaki/hair-front.png",
+      "width": 140,
+      "height": 59,
+      "x": 416,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 499,
+        "y": 187,
+        "width": 140,
+        "height": 59,
+        "rotate": 0
+      },
+      "sha256": "e725256530ebbca95aa78cec681fb8025244d18d7379b7293727bdaeb76ded59"
+    },
+    {
+      "name": "misaki/hair-side",
+      "file": "misaki/hair-side.png",
+      "width": 47,
+      "height": 140,
+      "x": 156,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 2,
+        "y": 2,
+        "width": 47,
+        "height": 140,
+        "rotate": 90
+      },
+      "sha256": "2bb7a20e756757078106fb84f2a1199d1f6971d095d011a4bdf8f4d35a558792"
+    },
+    {
+      "name": "misaki/head-base",
+      "file": "misaki/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 842,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 354,
+        "y": 121,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "ce8c75bb5882e113d5c8618403ba6f888bd3503a82b7fd365d02fde489e3e612"
+    },
+    {
+      "name": "misaki/leg",
+      "file": "misaki/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 557,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 741,
+        "y": 218,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "e38937ee15e99baa26c6375c945907dfa8bdd1e4c62b279b2ca7d5d5cb9f2ce7"
+    },
+    {
+      "name": "misaki/skirt",
+      "file": "misaki/skirt.png",
+      "width": 108,
+      "height": 90,
+      "x": 907,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_6.png",
+        "x": 499,
+        "y": 95,
+        "width": 108,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "1a28b36f1a786d1562be1049a669366aec7986cf2c6d340bb4533804efb12157"
+    },
+    {
+      "name": "nate/arm",
+      "file": "nate/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 162,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 151,
+        "y": 65,
+        "width": 28,
+        "height": 90,
+        "rotate": 90
+      },
+      "sha256": "379f30edb10069b5115942662249f7e3bfead2339a0e735a7e4486dbb7a66ded"
+    },
+    {
+      "name": "nate/back-hair",
+      "file": "nate/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 488,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 2,
+        "y": 109,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "3354361623e3f3d257624a39ec3bc847fd0002736a47ce99ca88d2ac1c7de625"
+    },
+    {
+      "name": "nate/beard",
+      "file": "nate/beard.png",
+      "width": 147,
+      "height": 68,
+      "x": 292,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 2,
+        "y": 39,
+        "width": 147,
+        "height": 68,
+        "rotate": 0
+      },
+      "sha256": "80b743e3e4373b10bd93937720f5c47888e32c3bb868958b7ed9b444ef4678e7"
+    },
+    {
+      "name": "nate/blush",
+      "file": "nate/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 385,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 407,
+        "y": 165,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "bffcd76e0a77b7f2991f9255c1c8abf8da06dce5a9d8b717b6006966ccb013a5"
+    },
+    {
+      "name": "nate/body",
+      "file": "nate/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 76,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 307,
+        "y": 113,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "38a98a8281af75a94c62a3be4be1dab9139d5ec3943d109875aa242ffed7bf7d"
+    },
+    {
+      "name": "nate/ear",
+      "file": "nate/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 190,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 451,
+        "y": 208,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "1d1b57d8861d2ff0768afd41f942f8ec81047f88a0c8a90517abbd33f732a4ad"
+    },
+    {
+      "name": "nate/eyebrow",
+      "file": "nate/eyebrow.png",
+      "width": 27,
+      "height": 12,
+      "x": 988,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 265,
+        "y": 111,
+        "width": 27,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "72da7903eabb0c2846ed66c432700271567c56bfe031634e83ec2f118206fe57"
+    },
+    {
+      "name": "nate/glasses",
+      "file": "nate/glasses.png",
+      "width": 141,
+      "height": 35,
+      "x": 2,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 2,
+        "y": 2,
+        "width": 141,
+        "height": 35,
+        "rotate": 0
+      },
+      "sha256": "e957635331c84ab755b8417742c7e55eca08a7b9d0106e11b898ebadd559b42e"
+    },
+    {
+      "name": "nate/glasses-side",
+      "file": "nate/glasses-side.png",
+      "width": 8,
+      "height": 16,
+      "x": 688,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 151,
+        "y": 47,
+        "width": 8,
+        "height": 16,
+        "rotate": 0
+      },
+      "sha256": "95969cf6e116d9322bc7cbdd89d58865b408f1f727d0cf7209704f2c52d27e19"
+    },
+    {
+      "name": "nate/hair-front",
+      "file": "nate/hair-front.png",
+      "width": 142,
+      "height": 65,
+      "x": 807,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 307,
+        "y": 185,
+        "width": 142,
+        "height": 65,
+        "rotate": 0
+      },
+      "sha256": "a1695280c348dcb5825cde4b9b49c5dbc09718a2ec8d71aac5378a64759e2284"
+    },
+    {
+      "name": "nate/head-base",
+      "file": "nate/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 2,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 162,
+        "y": 125,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "89104349a211df731b0c9c1a900258c7e7017f1d776d912d2c64e3e9531eea7d"
+    },
+    {
+      "name": "nate/leg",
+      "file": "nate/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 589,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_7.png",
+        "x": 162,
+        "y": 95,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "72b6df0dacf68aa59c0f0352d2a53d682dd1327c8821257d5169ee358d2d908d"
+    },
+    {
+      "name": "sinisa/arm",
+      "file": "sinisa/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 194,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 147,
+        "y": 52,
+        "width": 28,
+        "height": 90,
+        "rotate": 90
+      },
+      "sha256": "bfc575bd1ed76fefdee7fb0e61fcb331e850dc2e75ec3d71c18b3206dc5b69ec"
+    },
+    {
+      "name": "sinisa/back-hair",
+      "file": "sinisa/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 650,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 2,
+        "y": 96,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "ee84331661b7b4a6932e9756efd5216d2cebd58e56e6b6af5314d167caa2e540"
+    },
+    {
+      "name": "sinisa/beard",
+      "file": "sinisa/beard.png",
+      "width": 139,
+      "height": 45,
+      "x": 848,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 307,
+        "y": 192,
+        "width": 139,
+        "height": 45,
+        "rotate": 0
+      },
+      "sha256": "4d0965a82d582e5f05230aa8a57f5d0b3f4aa05483c7af5d3af8b0853ca9abbb"
+    },
+    {
+      "name": "sinisa/blush",
+      "file": "sinisa/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 418,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 147,
+        "y": 32,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "1138c69e07ed3ef7d80ca22840b5c470df958cebe110af710ac3018db0965b3d"
+    },
+    {
+      "name": "sinisa/body",
+      "file": "sinisa/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 150,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 307,
+        "y": 120,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "e6e49cec866fe45c613fc696d5d97385582a36e0be9387aa5bbc7f52b43bc126"
+    },
+    {
+      "name": "sinisa/body-decoration",
+      "file": "sinisa/body-decoration.png",
+      "width": 27,
+      "height": 27,
+      "x": 614,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 265,
+        "y": 83,
+        "width": 27,
+        "height": 27,
+        "rotate": 0
+      },
+      "sha256": "3806aa0fa86efaef2c0c7189573fee9ffa42feebbeec2287630468b27c3e80ec"
+    },
+    {
+      "name": "sinisa/ear",
+      "file": "sinisa/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 228,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 448,
+        "y": 195,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "d6ec29cddd4faca902b69bdc874ba6e68ee783510dbdd0bd3ecaf8aa038d003e"
+    },
+    {
+      "name": "sinisa/eyebrow",
+      "file": "sinisa/eyebrow.png",
+      "width": 38,
+      "height": 19,
+      "x": 77,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 407,
+        "y": 171,
+        "width": 38,
+        "height": 19,
+        "rotate": 0
+      },
+      "sha256": "75a46205a237f700b7571b6430f9174e71916cd646e399c8541fe0633df230e1"
+    },
+    {
+      "name": "sinisa/hair-front",
+      "file": "sinisa/hair-front.png",
+      "width": 143,
+      "height": 92,
+      "x": 523,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 2,
+        "y": 2,
+        "width": 143,
+        "height": 92,
+        "rotate": 0
+      },
+      "sha256": "7b90aaf22a3e9c08df033ad0855763a4d39826a53e62b525391082471343c9ed"
+    },
+    {
+      "name": "sinisa/head-base",
+      "file": "sinisa/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 149,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 162,
+        "y": 112,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "a3daefd6d3fedd0ed60b3021b35cd695fb6f499794a613520320633b2c8f64a5"
+    },
+    {
+      "name": "sinisa/leg",
+      "file": "sinisa/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 621,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_8.png",
+        "x": 162,
+        "y": 82,
+        "width": 28,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "e1d7904053f1c1ef60e8bf5e5d0eb02fa266cb507d1e4149db18b369fde3aab9"
+    },
+    {
+      "name": "soeren/arm",
+      "file": "soeren/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 226,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 254,
+        "y": 47,
+        "width": 28,
+        "height": 90,
+        "rotate": 0
+      },
+      "sha256": "7d51e87f71909d7ce1b1d6927a3b74db8857179aacf13258c5f04c058d4e5a05"
+    },
+    {
+      "name": "soeren/back-hair",
+      "file": "soeren/back-hair.png",
+      "width": 150,
+      "height": 141,
+      "x": 2,
+      "y": 405,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 2,
+        "y": 111,
+        "width": 150,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "b69f7e4ab24d9a5f744dbc676e20ce1b27f5d02ac18c4ad4894cb70ada2d10b2"
+    },
+    {
+      "name": "soeren/beard",
+      "file": "soeren/beard.png",
+      "width": 145,
+      "height": 68,
+      "x": 443,
+      "y": 986,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 2,
+        "y": 41,
+        "width": 145,
+        "height": 68,
+        "rotate": 0
+      },
+      "sha256": "cb498001d9d04f4a7e4207c16cf8f152bbf7d1b5ad7e568da5a2f2a44dc1010d"
+    },
+    {
+      "name": "soeren/blush",
+      "file": "soeren/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 451,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 284,
+        "y": 119,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "9c6628e1a7d8669b6853be3dd8a6ad2efe197e9ec855e6e7da627dee26c4e8d8"
+    },
+    {
+      "name": "soeren/body",
+      "file": "soeren/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 224,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 154,
+        "y": 67,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "9444c7cf683a98267a63fae5f5411da49409b58127ef705ce2da2258c6b174d5"
+    },
+    {
+      "name": "soeren/ear",
+      "file": "soeren/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 266,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 200,
+        "y": 23,
+        "width": 34,
+        "height": 42,
+        "rotate": 0
+      },
+      "sha256": "05ec5114b9119c76a28b2d4a421dd5b90d12ae3e4d330df6ff7100a13b31aa57"
+    },
+    {
+      "name": "soeren/eyebrow",
+      "file": "soeren/eyebrow.png",
+      "width": 27,
+      "height": 12,
+      "x": 2,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 460,
+        "y": 137,
+        "width": 27,
+        "height": 12,
+        "rotate": 0
+      },
+      "sha256": "6c9af1e2266e97bfe86bf7d1341f0623cf8be77d9855c891df78904212a8c7b5"
+    },
+    {
+      "name": "soeren/glasses",
+      "file": "soeren/glasses.png",
+      "width": 152,
+      "height": 37,
+      "x": 704,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 2,
+        "y": 2,
+        "width": 152,
+        "height": 37,
+        "rotate": 0
+      },
+      "sha256": "69ebc5c6224912461e3ff056330371735c600695b903142e1fd9a3474c974ecc"
+    },
+    {
+      "name": "soeren/glasses-side",
+      "file": "soeren/glasses-side.png",
+      "width": 7,
+      "height": 20,
+      "x": 66,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 490,
+        "y": 245,
+        "width": 7,
+        "height": 20,
+        "rotate": 90
+      },
+      "sha256": "d3c6cb80086f59338fe3a21aca8d71e79dd6c0b3435f8a74577ac23fae2eb5f0"
+    },
+    {
+      "name": "soeren/glove",
+      "file": "soeren/glove.png",
+      "width": 42,
+      "height": 53,
+      "x": 802,
+      "y": 1070,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 156,
+        "y": 12,
+        "width": 42,
+        "height": 53,
+        "rotate": 0
+      },
+      "sha256": "f825e30b9136294981133688fcf454c731716931c0a7ec4946d9b529656d39a7"
+    },
+    {
+      "name": "soeren/hair-front",
+      "file": "soeren/hair-front.png",
+      "width": 159,
+      "height": 113,
+      "x": 739,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 154,
+        "y": 139,
+        "width": 159,
+        "height": 113,
+        "rotate": 0
+      },
+      "sha256": "4a71b9a73591d77a9b814311f5e0402cc9ecf01eef7d0b98b3715a1cd4a84f4a"
+    },
+    {
+      "name": "soeren/head-base",
+      "file": "soeren/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 296,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 315,
+        "y": 127,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "306dd954037a459ee117d0eadce7f6b0616f1ee916c76138de78e83df9b5597e"
+    },
+    {
+      "name": "soeren/leg",
+      "file": "soeren/leg.png",
+      "width": 28,
+      "height": 101,
+      "x": 653,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_9.png",
+        "x": 460,
+        "y": 151,
+        "width": 28,
+        "height": 101,
+        "rotate": 0
+      },
+      "sha256": "54387b80c87b50401913e5538516fa20721290f336f794257c87d3a26080079f"
+    },
+    {
+      "name": "spineboy/arm",
+      "file": "spineboy/arm.png",
+      "width": 28,
+      "height": 90,
+      "x": 258,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 407,
+        "y": 97,
+        "width": 28,
+        "height": 90,
+        "rotate": 90
+      },
+      "sha256": "ca61d00fca7d4b746eac31a7a88920b86a533f172a7c6fed7d9bbaa5c50e8075"
+    },
+    {
+      "name": "spineboy/arm-decoration",
+      "file": "spineboy/arm-decoration.png",
+      "width": 32,
+      "height": 29,
+      "x": 375,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 307,
+        "y": 127,
+        "width": 32,
+        "height": 29,
+        "rotate": 0
+      },
+      "sha256": "9cd09e2d1e1e995aaa835edbe814a7da7d48f417407b3e7a00ff59aa3648bc3f"
+    },
+    {
+      "name": "spineboy/arm-shoulder-decoration",
+      "file": "spineboy/arm-shoulder-decoration.png",
+      "width": 23,
+      "height": 23,
+      "x": 774,
+      "y": 1186,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 451,
+        "y": 72,
+        "width": 23,
+        "height": 23,
+        "rotate": 0
+      },
+      "sha256": "44f63c2a44532700154ae575c6b762dcc98da3590b94e3d53a7a4407a4efe95e"
+    },
+    {
+      "name": "spineboy/back-hair",
+      "file": "spineboy/back-hair.png",
+      "width": 158,
+      "height": 141,
+      "x": 812,
+      "y": 260,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 2,
+        "y": 106,
+        "width": 158,
+        "height": 141,
+        "rotate": 0
+      },
+      "sha256": "e9e2839553511639054c5ea69a865a736f81a509ba242082909f64750c00c494"
+    },
+    {
+      "name": "spineboy/blush",
+      "file": "spineboy/blush.png",
+      "width": 29,
+      "height": 18,
+      "x": 484,
+      "y": 1225,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 2,
+        "y": 2,
+        "width": 29,
+        "height": 18,
+        "rotate": 0
+      },
+      "sha256": "bffcd76e0a77b7f2991f9255c1c8abf8da06dce5a9d8b717b6006966ccb013a5"
+    },
+    {
+      "name": "spineboy/body",
+      "file": "spineboy/body.png",
+      "width": 70,
+      "height": 98,
+      "x": 298,
+      "y": 790,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 307,
+        "y": 55,
+        "width": 70,
+        "height": 98,
+        "rotate": 90
+      },
+      "sha256": "4f9989173dc638e90f255f34593db06ff19dc14c9756091c68267192d5bae1ca"
+    },
+    {
+      "name": "spineboy/ear",
+      "file": "spineboy/ear.png",
+      "width": 34,
+      "height": 42,
+      "x": 304,
+      "y": 1139,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 407,
+        "y": 61,
+        "width": 34,
+        "height": 42,
+        "rotate": 90
+      },
+      "sha256": "05ec5114b9119c76a28b2d4a421dd5b90d12ae3e4d330df6ff7100a13b31aa57"
+    },
+    {
+      "name": "spineboy/eyebrow",
+      "file": "spineboy/eyebrow.png",
+      "width": 27,
+      "height": 12,
+      "x": 33,
+      "y": 1250,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 143,
+        "y": 77,
+        "width": 27,
+        "height": 12,
+        "rotate": 90
+      },
+      "sha256": "72da7903eabb0c2846ed66c432700271567c56bfe031634e83ec2f118206fe57"
+    },
+    {
+      "name": "spineboy/glasses",
+      "file": "spineboy/glasses.png",
+      "width": 179,
+      "height": 89,
+      "x": 290,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 162,
+        "y": 158,
+        "width": 179,
+        "height": 89,
+        "rotate": 0
+      },
+      "sha256": "6e610e1601842c78c42ef4d710caceec1f0b34c8a8cbb270651a2e1d99852549"
+    },
+    {
+      "name": "spineboy/glasses-shadow",
+      "file": "spineboy/glasses-shadow.png",
+      "width": 139,
+      "height": 82,
+      "x": 662,
+      "y": 892,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 2,
+        "y": 22,
+        "width": 139,
+        "height": 82,
+        "rotate": 0
+      },
+      "sha256": "3dfda3b9d27bd3d2875efe53fa7614118d33670b2faff3d297c70a857ff49de2"
+    },
+    {
+      "name": "spineboy/hair-front",
+      "file": "spineboy/hair-front.png",
+      "width": 145,
+      "height": 120,
+      "x": 590,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 343,
+        "y": 127,
+        "width": 145,
+        "height": 120,
+        "rotate": 0
+      },
+      "sha256": "64d65199e33e0a460ab596316b62ecfbb0768c51bc95e2969fb6b6a9cbcc7e16"
+    },
+    {
+      "name": "spineboy/head-base",
+      "file": "spineboy/head-base.png",
+      "width": 143,
+      "height": 125,
+      "x": 443,
+      "y": 550,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 162,
+        "y": 31,
+        "width": 143,
+        "height": 125,
+        "rotate": 0
+      },
+      "sha256": "306dd954037a459ee117d0eadce7f6b0616f1ee916c76138de78e83df9b5597e"
+    },
+    {
+      "name": "spineboy/leg",
+      "file": "spineboy/leg.png",
+      "width": 29,
+      "height": 101,
+      "x": 396,
+      "y": 679,
+      "source": {
+        "page": "chibi-stickers_10.png",
+        "x": 307,
+        "y": 24,
+        "width": 29,
+        "height": 101,
+        "rotate": 90
+      },
+      "sha256": "8bd8143906b2dd8cb31aaeecc8c7dd54f68f07b03132ce141e7d58578068fe39"
+    }
+  ],
+  "groups": {
+    "common": 42,
+    "erikari": 19,
+    "harri": 13,
+    "luke": 15,
+    "mario": 11,
+    "misaki": 15,
+    "nate": 12,
+    "sinisa": 11,
+    "soeren": 13,
+    "spineboy": 13
+  }
+}

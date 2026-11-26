@@ -621,7 +621,7 @@ function readWeightedMesh(
     kind: 'weightedMesh',
     id: mesh.id,
     mesh,
-    region: regionRefOf(ctx, atlasKeyOf(raw.path, mesh.id, ctx, `${path}.path`), null),
+    region: regionRefOf(ctx, atlasKeyOf(raw.path ?? raw.name ?? name, name, ctx, `${path}.path`), null),
     color: WHITE,
   }
 }
@@ -652,8 +652,9 @@ function buildAttachment(
     ? (typeof rawObj.type === 'string' ? rawObj.type : 'region')
     : (typeof rawObj.type === 'string' && rawObj.type === 'mesh' ? 'mesh' : 'region')
   // sequence 是 Spine 4.3 的帧序列附件；读入帧 region 列表，缺帧时仍按 region 降级。
-  const sequence = kindHint === 'spine' ? parseSequence(rawObj, name, ctx, path, atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)) : undefined
-  const atlasKey = atlasKeyOf(rawObj.path ?? name, name, ctx, `${path}.path`)
+  const texturePath = rawObj.path ?? (kindHint === 'spine' ? rawObj.name : undefined) ?? name
+  const atlasKey = atlasKeyOf(texturePath, name, ctx, `${path}.path`)
+  const sequence = kindHint === 'spine' ? parseSequence(rawObj, name, ctx, path, atlasKey) : undefined
   const region = { atlasKey, uvs: null as Float32Array | null }
   if (type === 'mesh' || type === 'weightedmesh') {
     const vertices = arr(rawObj.vertices)
@@ -733,13 +734,12 @@ function buildAttachment(
 
 /**
  * linkedmesh：复用父 mesh 的拓扑/UV/权重，应用自己的 vertices 与可选 uvs。
- * 父必须是同一 skin 内已解析的 mesh/weightedMesh；否则返回 null 由调用方降级。
+ * 父由调用方按 skin + slot + parent 解析；不可用时返回 null 由调用方降级。
  */
 function buildLinkedMesh(
   raw: Record<string, unknown>,
   name: string,
   parent: Attachment | undefined,
-  slotBone: number,
   ctx: Ctx,
   path: string,
 ): Attachment | null {
@@ -755,7 +755,7 @@ function buildLinkedMesh(
   const uvs = rawUvs.length === positions.length
     ? Float32Array.from(rawUvs)
     : new Float32Array(parentMesh.uvs)
-  const atlasKey = atlasKeyOf(raw.path, name, ctx, `${path}.path`)
+  const atlasKey = atlasKeyOf(raw.path ?? raw.name ?? name, name, ctx, `${path}.path`)
   const color = parseHexColor(raw.color, ctx, `${path}.color`)
 
   if (parent.kind === 'weightedMesh') {
@@ -2244,6 +2244,9 @@ export function importSpine(
   const builtSlots: BuiltSlot[] = slots.map((s) => ({ name: s.id, attachment: s.attachment }))
 
   const skins = new Map<string, SkinData>()
+  const linkedMeshes: {
+    skin: string; slot: string; name: string; raw: Record<string, unknown>; path: string
+  }[] = []
   for (const [i, rawSkin] of arr(doc.skins).entries()) {
     const s = obj(rawSkin)
     if (s === null) continue
@@ -2257,49 +2260,57 @@ export function importSpine(
       slot,
       group: obj(obj(s.attachments)?.[slot.name]),
     }))
-    // 两遍：先普通附件，再 linkedmesh，保证父拓扑已存在。
-    for (const linkedPass of [false, true]) {
-      for (const { slot, group } of groups) {
-        if (group === null) continue
-        for (const [attName, rawAtt] of Object.entries(group)) {
-          const attObj = obj(rawAtt)
-          const isLinked = attObj?.type === 'linkedmesh'
-          if (isLinked !== linkedPass) continue
-          // Spine 允许同名附件存在于不同 slot；真正的 key 是 slot 限定的。
-          const attachmentKey = `${slot.name}\u0000${attName}`
-          if (attachments.has(attachmentKey)) {
-            add(ctx, 'error', 'E_DUPLICATE_NAME', `skins[${i}].attachments.${slot.name}.${attName}`, '附件重名，已跳过', 'skip', attName)
-            continue
-          }
-          const path = `skins[${i}].attachments.${slot.name}.${attName}`
-          const bone = slotBoneId(slots, slot)
-          let built: Attachment | null
-          if (isLinked && attObj !== null) {
-            built = buildLinkedMesh(attObj, attName, attachments.get(String(attObj.parent ?? '')), bone, ctx, path)
-            if (built === null) {
-              add(ctx, 'warning', 'W_ATTACHMENT_UNSUPPORTED', path, 'linkedmesh 父拓扑不存在，退化为 region', 'fallback', attObj.parent)
-              built = {
-                kind: 'region',
-                id: attName,
-                region: regionRefOf(ctx, atlasKeyOf(attObj.path, attName, ctx, `${path}.path`), null),
-                color: WHITE,
-              }
-            }
-          } else {
-            built = buildAttachment(rawAtt, attName, 'spine', bone, srcToId, ctx, path)
-          }
-          if (built === null) continue
-          if (built.kind === 'clipping' && attObj !== null) {
-            addClippingMask(ctx, slots, slot.name, attName, attObj, built.polygon)
-            const mask = ctx.masks.find((item) => item.id === `${slots.findIndex((s) => s.id === slot.name)}:${attName}`)
-            if (mask !== undefined) built = { ...built, endSlotId: mask.endSlotId }
-          }
-          attachments.set(attachmentKey, built)
-          if (!attachments.has(attName)) attachments.set(attName, built)
+    for (const { slot, group } of groups) {
+      if (group === null) continue
+      for (const [attName, rawAtt] of Object.entries(group)) {
+        const attObj = obj(rawAtt)
+        const path = `skins[${i}].attachments.${slot.name}.${attName}`
+        if (attObj?.type === 'linkedmesh') {
+          linkedMeshes.push({ skin: name, slot: slot.name, name: attName, raw: attObj, path })
+          continue
         }
+        // Spine 允许同名附件存在于不同 slot；真正的 key 是 slot 限定的。
+        const attachmentKey = `${slot.name}\u0000${attName}`
+        let built = buildAttachment(rawAtt, attName, 'spine', slotBoneId(slots, slot), srcToId, ctx, path)
+        if (built === null) continue
+        if (built.kind === 'clipping' && attObj !== null) {
+          addClippingMask(ctx, slots, slot.name, attName, attObj, built.polygon)
+          const mask = ctx.masks.find((item) => item.id === `${slots.findIndex((s) => s.id === slot.name)}:${attName}`)
+          if (mask !== undefined) built = { ...built, endSlotId: mask.endSlotId }
+        }
+        attachments.set(attachmentKey, built)
+        if (!attachments.has(attName)) attachments.set(attName, built)
       }
     }
     skins.set(name, { id: name, attachments })
+  }
+  // 所有 skin 的普通附件就绪后再解析引用；多轮允许 linkedmesh 链且不依赖源顺序。
+  let pending = linkedMeshes
+  while (pending.length > 0) {
+    const unresolved: typeof linkedMeshes = []
+    for (const link of pending) {
+      const parentSkin = typeof link.raw.skin === 'string' ? link.raw.skin : link.skin
+      const parent = skins.get(parentSkin)?.attachments.get(`${link.slot}\u0000${String(link.raw.parent ?? '')}`)
+      const built = buildLinkedMesh(link.raw, link.name, parent, ctx, link.path)
+      if (built === null) {
+        unresolved.push(link)
+        continue
+      }
+      const attachments = skins.get(link.skin)!.attachments as Map<string, Attachment>
+      attachments.set(`${link.slot}\u0000${link.name}`, built)
+      if (!attachments.has(link.name)) attachments.set(link.name, built)
+    }
+    if (unresolved.length === pending.length) {
+      // 缺父引用或成环时稳定降级，不从其它 slot 的同名别名借用网格。
+      for (const link of unresolved) {
+        const built = buildAttachment(link.raw, link.name, 'spine', slotBoneId(slots, { name: link.slot }), srcToId, ctx, link.path)!
+        const attachments = skins.get(link.skin)!.attachments as Map<string, Attachment>
+        attachments.set(`${link.slot}\u0000${link.name}`, built)
+        if (!attachments.has(link.name)) attachments.set(link.name, built)
+      }
+      break
+    }
+    pending = unresolved
   }
   // 只负责校验/报告默认皮肤；运行时由 createSlotSet 选用。
   pickDefaultSkin(skins, options?.defaultSkin, ctx)

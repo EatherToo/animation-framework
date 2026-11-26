@@ -38,6 +38,27 @@ describe('core2d slot / attachment / skin', () => {
     expect(() => setSkin(set, 'missing')).toThrow()
   })
 
+  it('resolves identical attachment names within their own slot before legacy aliases', () => {
+    const left = region('arm'), right = region('arm'), leftRaised = region('raised'), rightRaised = region('raised')
+    const limbSlots = slots.map((slot, index) => ({ ...slot,
+      id: index === 0 ? 'arm-left' : 'arm-right', attachment: 'arm',
+    }))
+    const skin: SkinData = { id: 'default', attachments: new Map([
+      ['arm', left], ['raised', leftRaised],
+      ['arm-left\u0000arm', left], ['arm-right\u0000arm', right],
+      ['arm-left\u0000raised', leftRaised], ['arm-right\u0000raised', rightRaised],
+    ]) }
+    const set = createSlotSet(limbSlots, new Map([['default', skin]]), 'default')
+    expect(resolveAttachment(set, 0)).toBe(left)
+    expect(resolveAttachment(set, 1)).toBe(right)
+    setSlotAttachment(set, 0, 'raised')
+    setSlotAttachment(set, 1, 'raised')
+    expect(resolveAttachment(set, 0)).toBe(leftRaised)
+    expect(resolveAttachment(set, 1)).toBe(rightRaised)
+    setSlotAttachment(set, 1, null)
+    expect(resolveAttachment(set, 1)).toBeNull()
+  })
+
   it('supports per-slot attachment overrides and null attachments', () => {
     const set = createSlotSet(slots, skins(), 'default')
     setSlotAttachment(set, 0, 'head')
